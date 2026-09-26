@@ -962,6 +962,8 @@ Also confirm the *sender* address Fleet uses (Task 6) is a verified identity or 
 
 Requires the break-glass admin from Task 3 Step 8 (used below to create the API-only user). Layout verified against the templates `fleetctl new` ships in Fleet v4.92.0 (an earlier draft used the pre-4.7x `teams/` directory and a single top-level `default.yml` with `policies:`/`queries:` keys — neither matches the current scaffold).
 
+**This second repo is public too** (same portfolio reasoning as the infra repo), and it is locked down the same way (Task 15 Step 5). It is the higher-stakes of the two: its CI holds a Fleet API token with the `gitops` role, which can change Fleet's configuration — including scripts and software that run on every enrolled device. So the model is: **no secret value is ever written into a file** (every secret is a `$VARIABLE` that the workflow fills in from GitHub Actions secrets); only you can push or merge; fork PRs get no secrets and their workflows wait for your approval; and the apply job runs only on `main`. Step 5 has a pre-publish review before the first push, because history can't be un-published.
+
 **Files (new repo, `fleet-homelab-gitops`, not this one) — all created by the scaffold, then edited:**
 - Modify: `default.yml` (repo root — the scaffold puts it at the root, not under a subdirectory)
 - Modify: `fleets/workstations.yml` (the scaffold's directory is `fleets/`, formerly `teams/`)
@@ -970,7 +972,10 @@ Requires the break-glass admin from Task 3 Step 8 (used below to create the API-
 - [ ] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.0, else stop; see Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
 
 ```bash
-mkdir -p ~/fleet-homelab-gitops && cd ~/fleet-homelab-gitops
+mkdir -p ~/Dev/fleet-homelab-gitops && cd ~/Dev/fleet-homelab-gitops   # ~/Dev, not ~/Documents: iCloud corrupts git repos and .terraform caches
+git init -q -b main
+git config user.name "Chris Durham"
+git config user.email "<id>+<login>@users.noreply.github.com"   # the GitHub noreply address; commits are GPG-signed (global commit.gpgsign) and that address is a UID on the key
 fleetctl new --org-name "Homelab" --dir . --force
 rm fleets/personal-mobile-devices.yml   # not needed for this homelab (no BYOD mobile fleet)
 ```
@@ -1022,12 +1027,22 @@ fleetctl user create --name "GitOps CI" --global-role gitops --api-only
 
 Verified in Fleet v4.92.0: `--api-only` needs no email/password/`--username` (there is no `--username` flag; an earlier draft used one and would have failed), and **prints the API token once** — press a key when prompted and copy it immediately into your password manager. The `gitops` role is only valid for API-only users. Do not use `fleetctl login` here: that would need a password user and produces a short-lived session token (default 5 days) that would silently break the workflow.
 
-- [ ] **Step 5: Push to a new GitHub repo.** `gh` is not logged in on this machine yet (checked): run `gh auth status || gh auth login` first (HTTPS + browser).
+- [ ] **Step 5: Public-readiness gate, then publish the repo as PUBLIC and lock it down.** `gh` must be logged in (`gh auth status`). **Creating a public repo is effectively irreversible — confirm immediately before the `gh repo create`.**
+
+**Review before the first commit** (this is the part that is specific to a GitOps repo):
+1. **`platforms/` configuration profiles.** Read every file. Profiles can embed Wi-Fi passwords, certificates, or server addresses. Delete or genericise anything that isn't safe to publish (the scaffold's defaults are generic, but check).
+2. **No literal secrets, IDs or addresses.** Every value that isn't public must be a `$VARIABLE` (enroll secrets, `$FLEET_ENTRA_METADATA_URL` — that URL embeds your Entra tenant and app IDs). `git grep -niE 'secret|token|password|tenant|login\.microsoftonline'` and read each hit; also the email/secret scans from Task 15 Step 1's gate.
+3. **Workflow triggers.** Open `.github/workflows/workflow.yml`. It must **not** use `pull_request_target` (that trigger runs with secrets against untrusted code). The apply job must run only on `push` to `main`, `schedule` and `workflow_dispatch`; `pull_request` may dry-run (fork PRs simply get no secrets, so their dry-run fails harmlessly).
+4. **Pin every `uses:` to a full commit SHA** (with the version as a trailing comment). Step 5's settings turn on `sha_pinning_required`, and an unpinned action fails the run. Note which actions the scaffold uses (`actions/checkout`, plus its local `.github/fleet-gitops/` action) and allow-list only those.
+5. **Add `README.md`** (what it is and that it's a homelab/learning repo, LinkedIn badge like the infra repo's, AI-assistance note), an **MIT `LICENSE`**, and `.github/CODEOWNERS` (`* @<owner>`).
 
 ```bash
-git init && git add -A && git commit -m "Initial Fleet GitOps config"
-gh repo create fleet-homelab-gitops --private --source=. --push
+git add -A && git commit -m "Initial Fleet GitOps config"
+git log --format='%ae %G?'                      # noreply address, signature G
+gh repo create fleet-homelab-gitops --public --source=. --push --description "Fleet GitOps configuration for a homelab (Entra SSO, policies, MDM)"
 ```
+
+**Then lock it down immediately** — the same calls as Task 15 Step 5 (use that block, with `R=repos/<owner>/fleet-homelab-gitops`): fork-PR approval for all outside contributors, read-only workflow token, selected actions only (adjust `patterns_allowed` to the actions the scaffold actually uses — it needs no `aws-actions/*` or `hashicorp/*`) with SHA pinning, secret scanning + push protection, Dependabot alerts, private vulnerability reporting, wiki/projects off, and the `protect-main` ruleset. Add the dry-run job as a required status check on the ruleset once it has run once. Confirm the only collaborator is you and that both commits report `verified=true` (`gh api repos/<owner>/fleet-homelab-gitops/commits/<sha> --jq .commit.verification`).
 
 - [ ] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the three extra variables used in the YAML above would expand to empty strings unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
 
@@ -1043,8 +1058,8 @@ gh repo create fleet-homelab-gitops --private --source=. --push
 
 ```bash
 gh secret set FLEET_URL --body "https://<fleet_subdomain>"
-gh secret set FLEET_API_TOKEN --body "<token from Step 4>"
-gh secret set FLEET_ENTRA_METADATA_URL --body "<metadata URL from Task 10>"
+gh secret set FLEET_API_TOKEN            # prompts — paste the token from Step 4; never put it on the command line or in history
+gh secret set FLEET_ENTRA_METADATA_URL   # prompts — paste the metadata URL from Task 10 (it contains tenant/app IDs; keep it out of files)
 gh secret set FLEET_GLOBAL_ENROLL_SECRET --body "$(openssl rand -hex 16)"
 gh secret set FLEET_WORKSTATIONS_ENROLL_SECRET --body "$(openssl rand -hex 16)"
 git add -A && git commit -m "Pass extra secrets to gitops step" && git push
