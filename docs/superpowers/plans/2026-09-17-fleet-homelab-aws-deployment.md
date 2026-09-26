@@ -1,0 +1,2280 @@
+# Fleet Homelab on AWS Implementation Plan
+
+> Implementation plan. Steps use checkbox (`- [ ]`) syntax for tracking progress.
+
+**Goal:** Stand up a publicly-accessible, Entra-SSO-federated, GitOps-managed Fleet Premium instance in my AWS account (`us-east-1`), matching Fleet's own recommended reference architecture as closely as possible, run intermittently (evenings/weekends) via full teardown/rebuild rather than continuously.
+
+**Architecture:** Terraform calls Fleet's own **root module** directly — one module call provisions the VPC, Aurora MySQL, Redis, an ALB, and an ECS Fargate service together, wiring their connection info and security groups automatically. This is a change from an earlier draft of this plan that called the nested `byo-vpc` module and hand-wrote a separate VPC — that split only existed to support NAT-off/public-subnet Fargate, a configuration this plan no longer uses (NAT is on, Fargate is private, which is the root module's own hardcoded default). Using the root module directly is simpler and closer to Fleet's own reference example. WAF, monitoring, SES, MDM, and Firehose log delivery are added as Fleet's own addon modules. A separate `fleetctl new`-scaffolded repo drives Fleet's application config (SSO, teams, policies) via GitHub Actions GitOps. `up`/`down` scripts fully tear down and rebuild the stack each session, preserving actual Fleet data (not just infrastructure) via an Aurora snapshot and an externalized encryption key. The infra repo itself closes its own GitOps loop too (Tasks 15–16): `up`/`down`/`plan` run via a GitHub Actions workflow assuming an AWS role through OIDC (no long-lived keys in GitHub), triggered on demand rather than on push, and every `.tf` change gets a `terraform plan` posted to its PR before merge — git is the source of truth for infra the same way it is for Fleet's own config, without forcing an apply every time something merges. A Grafana instance on Proxmox (Task 17) rounds this out with a dashboard over both CloudWatch infra metrics and Fleet's own asset data (hosts, policy compliance, vulnerabilities) — the one place a long-lived AWS credential exists in this whole plan, since Grafana runs outside AWS with no OIDC-equivalent federation path available to it.
+
+**Tech Stack:** Terraform >= 1.12.0, AWS provider >= 6.37.0, `fleetdm/fleet-terraform` (root module + addons), `fleetctl`, GitHub Actions (OIDC-federated, no stored AWS credentials).
+
+**Spec:** `docs/superpowers/specs/2026-09-17-fleet-homelab-aws-design.md`
+
+## Global Constraints
+
+- **`fleetctl` is hands-on: I run every `fleetctl` command myself, to learn the tool.** Each step explains what the command does and what output to expect. Steps marked **🎓 You run this** follow this rule; commands that prompt for a password or print a one-time token have to be run by hand regardless. **Installing `fleetctl` is a prerequisite that is deliberately not done up front (Task 3 Step 8a): before any `fleetctl` step, check `which fleetctl && fleetctl --version` and stop if it's missing or not 4.92.0.**
+
+- Region: `us-east-1`.
+- NAT Gateway present (single gateway, module default). Fargate task in a **private** subnet with egress via NAT; Aurora and Redis stay in database/elasticache subnets with no internet route regardless.
+- Database: **Aurora MySQL**, `db.t4g.medium`, `replicas = 1` — in `byo-vpc` this is the **total instance count** (`if index < config.replicas`), so `1` = one writer instance and no reader; `0` would create a cluster with **no instances at all** (verified against the module source; an earlier draft had `0`). Instance identifier is `fleet-homelab-one`, cluster identifier `fleet-homelab`.
+- Redis: `cache.t4g.small`, `cluster_size = 1`, no automatic failover.
+- Fargate: `cpu = 512`, `mem = 4096` (vulnerability scanning stays on — my explicit choice).
+- **No read replicas, no Redis failover, `autoscaling.min_capacity = 1`** — deliberately skipped regardless of cost, since my priority is "if it breaks, I rebuild it," not uptime during an incident. This is a separate axis from the Aurora/Redis-size decisions above.
+- **Only override module defaults where this deployment genuinely needs something different.** An earlier draft of this plan re-specified the module's own default CIDR ranges, AZ layout, and NAT settings verbatim — pure noise. Match Fleet's own example's minimalism: set `name`/`azs` on `vpc`, leave everything else alone unless there's a specific reason not to.
+- AWS-managed KMS keys everywhere (no CMKs) — simplest, avoids extra KMS cost.
+- Fleet module refs are pinned exactly as listed per task — do not float to `main`/latest.
+- Every secret value this stack creates (Aurora password, Fleet server private key, the Windows MDM WSTEP pair) lives in AWS Secrets Manager, **except** the break-glass Fleet admin password, which goes in my personal password manager, never in AWS. Apple MDM's APNs key and SCEP CA are generated and kept by the Fleet server itself (in the database), not in AWS secrets.
+- Terraform state: S3 backend with native locking (`use_lockfile = true` — no DynamoDB table; `dynamodb_table` was deprecated in Terraform 1.11), created once in Task 1 and never destroyed by the `down` script.
+- **Teardown must preserve state, not just be cheap**: the `down` script snapshots Aurora before destroying it, and the Fleet server's encryption key, the software-installers bucket, and the MDM secrets are excluded from teardown entirely — see Task 14.
+
+---
+
+### Task 1: Terraform state backend + provider bootstrap
+
+**Files:**
+- Create: `providers.tf`
+- Create: `backend.tf`
+- Create: `.gitignore`
+
+**Interfaces:**
+- Produces: an S3 bucket every later task's `terraform init` depends on.
+
+- [ ] **Step 1: Create the state bucket via AWS CLI**
+
+No DynamoDB lock table — `dynamodb_table` was deprecated in Terraform 1.11 (late 2024) in favor of S3's own native conditional-write locking (`use_lockfile = true` on the backend, Step 4). Caught and fixed during execution, not planned this way from the start — worth naming since "S3 + DynamoDB for state locking" is still what most Terraform tutorials show.
+
+```bash
+aws s3api create-bucket \
+  --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text) \
+  --region us-east-1
+
+aws s3api put-bucket-versioning \
+  --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text) \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-public-access-block \
+  --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text) \
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+# The provider's default_tags can't reach this bucket (it exists before Terraform does),
+# so it carries the same tags by hand. Everything else in this project is tagged
+# automatically; anything ever created via the CLI must be tagged like this.
+aws s3api put-bucket-tagging \
+  --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text) \
+  --tagging 'TagSet=[{Key=Project,Value=fleet-lab},{Key=ManagedBy,Value=terraform}]'
+```
+
+- [ ] **Step 2: Verify it exists**
+
+Run: `aws s3api head-bucket --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text)`
+Expected: no error.
+
+- [ ] **Step 3: Write `providers.tf`**
+
+```hcl
+terraform {
+  required_version = ">= 1.12.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.37.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+
+  # Applied to every taggable resource, including those inside the Fleet
+  # modules. Find everything with: Tag Editor / Resource Groups on Project=fleet-lab.
+  default_tags {
+    tags = {
+      Project   = "fleet-lab"
+      ManagedBy = "terraform"
+    }
+  }
+}
+
+data "aws_caller_identity" "current" {}
+```
+
+- [ ] **Step 4: Write `backend.tf`** (substitute the real account ID printed by Step 2)
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket       = "fleet-homelab-tfstate-<ACCOUNT_ID>"
+    key          = "fleet-homelab/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
+  }
+}
+```
+
+- [ ] **Step 5: Write `.gitignore`**
+
+```
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
+```
+
+- [ ] **Step 6: Init and verify**
+
+Run: `terraform init`
+Expected: `Successfully configured the backend "s3"!` and `Terraform has been successfully initialized!`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add providers.tf backend.tf .gitignore .terraform.lock.hcl
+git commit -m "Bootstrap Terraform S3 state backend (native locking)"
+```
+
+Includes `.terraform.lock.hcl` — Terraform generates and explicitly recommends committing it on first `init`, to pin provider versions for reproducibility.
+
+---
+
+### Task 2: Route 53 hosted zone + ACM certificate
+
+**Files:**
+- Create: `dns.tf`
+- Create: `variables.tf`
+- Create: `terraform.tfvars` (not committed — in `.gitignore`)
+- Create: `example.tfvars`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `aws_acm_certificate_validation.fleet.certificate_arn`, `aws_route53_zone.fleet.zone_id` — consumed by Task 3 (ALB) and Task 6 (SES).
+
+- [ ] **Step 1: Write `variables.tf`**
+
+```hcl
+variable "fleet_subdomain" {
+  description = "Fully-qualified domain name Fleet will be served on, e.g. fleet.example.com"
+  type        = string
+}
+
+variable "fleet_license_key" {
+  description = "Fleet Premium license key"
+  type        = string
+  sensitive   = true
+}
+
+variable "rds_snapshot_identifier" {
+  description = "Aurora cluster snapshot to restore from on apply. Leave null for a fresh empty database (first-ever apply); set it to restore state after a teardown (see scripts/up.sh)."
+  type        = string
+  default     = null
+}
+```
+
+- [ ] **Step 2: Write `example.tfvars`**
+
+```hcl
+fleet_subdomain   = "fleet.example.com"
+fleet_license_key = "replace-with-real-license-key"
+```
+
+- [ ] **Step 3: Write `terraform.tfvars`** with your real subdomain and license key (not shown here — real values, gitignored).
+
+- [ ] **Step 4: Write `dns.tf`**
+
+```hcl
+resource "aws_route53_zone" "fleet" {
+  name = var.fleet_subdomain
+}
+
+resource "aws_acm_certificate" "fleet" {
+  domain_name       = var.fleet_subdomain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "fleet_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.fleet.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  zone_id = aws_route53_zone.fleet.zone_id
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.record]
+  ttl     = 60
+}
+
+resource "aws_acm_certificate_validation" "fleet" {
+  certificate_arn         = aws_acm_certificate.fleet.arn
+  validation_record_fqdns = [for r in aws_route53_record.fleet_cert_validation : r.fqdn]
+}
+```
+
+- [ ] **Step 5: Apply and get the NS records**
+
+Run: `terraform apply -var-file=terraform.tfvars -target=aws_route53_zone.fleet`
+Then: `aws route53 get-hosted-zone --id $(terraform state show aws_route53_zone.fleet | grep -m1 'zone_id ' | awk '{print $3}' | tr -d '"') --query 'DelegationSet.NameServers'`
+Expected: 4 NS hostnames printed.
+
+- [ ] **Step 6: Delegate the subdomain in Cloudflare — automated (`cloudflare.tf`)**
+
+The zone gets a *new* set of four nameservers every time it is recreated, so the delegation is managed in code instead of by hand. Verified against `cloudflare/cloudflare` v5.26.0's schema: `cloudflare_dns_record` requires `zone_id`, `name`, `type`, `ttl` (plus `content`), and `data "cloudflare_zone"` looks a zone up by `filter = { name = ... }`.
+
+Add to `providers.tf`:
+
+```hcl
+# in required_providers:
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.0"
+    }
+
+# Token scope: Zone > DNS > Edit, on the one zone only.
+provider "cloudflare" {
+  api_token = var.cloudflare_api_token
+}
+```
+
+Add to `variables.tf` (and `example.tfvars`): `cloudflare_api_token` (string, sensitive) and `cloudflare_zone_name` (string, the apex zone, e.g. `example.com`).
+
+`cloudflare.tf`:
+
+```hcl
+data "cloudflare_zone" "parent" {
+  filter = {
+    name = var.cloudflare_zone_name
+  }
+}
+
+resource "cloudflare_dns_record" "fleet_ns" {
+  count   = 4
+  zone_id = data.cloudflare_zone.parent.zone_id
+  name    = var.fleet_subdomain
+  type    = "NS"
+  content = aws_route53_zone.fleet.name_servers[count.index]
+  ttl     = 300
+}
+```
+
+**Create the API token yourself** (Cloudflare dashboard → My Profile → API Tokens → Create Token → "Edit zone DNS" template → Zone Resources: Include → Specific zone → your domain). Never use the global API key. Put the token and zone name in `terraform.tfvars` (gitignored) by editing the file directly, not by pasting the token into a chat. NS records have no proxy toggle, so there is nothing to set there. This delegates only the subdomain; the rest of the domain stays on Cloudflare untouched.
+
+This is a deliberate exception to "no long-lived credentials" (like the Grafana CloudWatch user in Task 17): Cloudflare has no OIDC federation for this. Task 15 stores it as a GitHub secret.
+
+- [ ] **Step 7: Apply the rest and verify cert validation**
+
+Run: `terraform apply -var-file=terraform.tfvars`
+Expected: apply completes; `aws acm describe-certificate --certificate-arn <arn> --query 'Certificate.Status'` returns `"ISSUED"` within a few minutes of the NS delegation propagating (the ACM validation resource waits for it, so a single apply normally covers both; re-run if it times out — DNS propagation is the one step gated by something outside AWS and Terraform).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add dns.tf variables.tf example.tfvars
+git commit -m "Add Route 53 hosted zone and ACM certificate for Fleet subdomain"
+```
+
+---
+
+### Task 3: Fleet application stack — VPC + Aurora + Redis + ALB + Fargate (root module)
+
+This is the milestone task: after this, Fleet is live and publicly reachable. One module call provisions everything — VPC included.
+
+**Files:**
+- Create: `secrets.tf` (the externalized Fleet server private key)
+- Create: `installers.tf` (the externalized software-installers bucket + its IAM policy)
+- Create: `fleet.tf`
+- Create: `outputs.tf`
+
+**Interfaces:**
+- Consumes: `aws_acm_certificate_validation.fleet.certificate_arn`, `aws_route53_zone.fleet.zone_id`, `var.rds_snapshot_identifier`.
+- Produces: `module.fleet.byo-vpc.byo-db.alb.lb_dns_name`, `module.fleet.byo-vpc.byo-db.alb.arn` / `lb_arn_suffix`, `module.fleet.byo-vpc.rds.cluster_members`, `module.fleet.byo-vpc.redis.member_clusters`, `aws_secretsmanager_secret.fleet_server_private_key.arn`, `aws_iam_policy.software_installers.arn` (must stay in `extra_iam_policies` in every later `fleet_config` edit — Tasks 6, 12), output `fleet_url` — consumed by Tasks 4, 5, 6, 8, 12, and `scripts/resume.sh`/`up.sh` in Task 14.
+
+- [ ] **Step 1: Write `secrets.tf` and `installers.tf`** — the two things that hold state and must survive `module.fleet` being destroyed on teardown (see Task 14).
+
+`secrets.tf` — the Fleet server private key. This mirrors what the module would otherwise generate and own itself (verified against `byo-ecs`'s source: `random_password { length = 32, special = true }`). It encrypts sensitive data in the database, so losing it makes a restored snapshot unreadable: `prevent_destroy` guards it against a full `terraform destroy` (the `down` script uses `-target`, so it's unaffected; to genuinely delete it, remove the guard first). An earlier draft had `recovery_window_in_days = 0` (instant, unrecoverable deletion) and a pointless `create_before_destroy` on a fixed secret name — both removed.
+
+```hcl
+resource "random_password" "fleet_server_private_key" {
+  length  = 32
+  special = true
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_secretsmanager_secret" "fleet_server_private_key" {
+  name                    = "fleet-homelab/fleet-server-private-key"
+  recovery_window_in_days = 30
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "fleet_server_private_key" {
+  secret_id     = aws_secretsmanager_secret.fleet_server_private_key.id
+  secret_string = random_password.fleet_server_private_key.result
+}
+```
+
+`installers.tf` — the software-installers bucket. Verified against `byo-ecs`'s source: by default the module creates this bucket *inside* `module.fleet` with `force_destroy = true`, so every `down` would empty and delete it while the restored database still references those installers. With `create_bucket = false` the module also attaches **no** S3 permissions to the task role, so the policy below is what grants them (via `extra_iam_policies`). The name starts with `fleet-homelab-` so Task 15's `fleet-homelab-*` S3 scoping covers it.
+
+```hcl
+resource "aws_s3_bucket" "software_installers" {
+  bucket = "fleet-homelab-software-installers-${data.aws_caller_identity.current.account_id}"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "software_installers" {
+  bucket                  = aws_s3_bucket.software_installers.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "aws_iam_policy_document" "software_installers_bucket" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.software_installers.arn, "${aws_s3_bucket.software_installers.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "software_installers" {
+  bucket = aws_s3_bucket.software_installers.id
+  policy = data.aws_iam_policy_document.software_installers_bucket.json
+}
+
+data "aws_iam_policy_document" "software_installers_task" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:GetObject*", "s3:PutObject*", "s3:ListBucket*", "s3:DeleteObject",
+      "s3:CreateMultipartUpload", "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts", "s3:GetBucketLocation",
+    ]
+    resources = [aws_s3_bucket.software_installers.arn, "${aws_s3_bucket.software_installers.arn}/*"]
+  }
+}
+
+resource "aws_iam_policy" "software_installers" {
+  name   = "fleet-homelab-software-installers"
+  policy = data.aws_iam_policy_document.software_installers_task.json
+}
+```
+
+The same reasoning was checked against the other buckets: the Firehose/S3 log buckets (Task 12) and the state bucket already live outside `module.fleet` and are untouched by `down`.
+
+- [ ] **Step 2: Write `fleet.tf`**
+
+```hcl
+module "fleet" {
+  source = "github.com/fleetdm/fleet-terraform?depth=1&ref=tf-mod-root-v1.31.1"
+
+  certificate_arn = aws_acm_certificate_validation.fleet.certificate_arn
+
+  vpc = {
+    name = "fleet-homelab"
+    azs  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  }
+
+  ecs_cluster = {
+    cluster_name = "fleet-homelab"
+  }
+
+  alb_config = {
+    name         = "fleet-homelab"
+    idle_timeout = 905
+  }
+
+  rds_config = {
+    name           = "fleet-homelab"
+    instance_class = "db.t4g.medium"
+    replicas       = 1
+    db_parameters = {
+      sort_buffer_size = 8388608
+    }
+    snapshot_identifier = var.rds_snapshot_identifier
+
+    # Restore-from-snapshot compatibility: the module defaults are
+    # monitoring_interval = 10 and Performance Insights on, and Fleet's own
+    # byo-vpc/scripts/rds_storage_kms_migration.sh notes that
+    # RestoreDBClusterFromSnapshot rejects both for non-Limitless Aurora.
+    # This stack is restored from a snapshot on every rebuild (Task 14), so
+    # both are off. Not reproduced here — see the note below the code block.
+    monitoring_interval = 0
+    observability = {
+      performance_insights_enabled = false
+    }
+  }
+
+  redis_config = {
+    name          = "fleet-homelab"
+    instance_type = "cache.t4g.small"
+    cluster_size  = 1
+    parameter = [
+      { name = "client-output-buffer-limit-pubsub-hard-limit", value = 0 },
+      { name = "client-output-buffer-limit-pubsub-soft-limit", value = 0 },
+      { name = "client-output-buffer-limit-pubsub-soft-seconds", value = 0 },
+    ]
+  }
+
+  fleet_config = {
+    image = "fleetdm/fleet:v4.92.0"
+    cpu   = 512
+    mem   = 4096
+
+    private_key_secret_arn = aws_secretsmanager_secret.fleet_server_private_key.arn
+
+    software_installers = {
+      create_bucket = false
+      bucket_name   = aws_s3_bucket.software_installers.bucket
+    }
+    extra_iam_policies = [aws_iam_policy.software_installers.arn]
+
+    autoscaling = {
+      min_capacity = 1
+      max_capacity = 2
+    }
+
+    extra_environment_variables = {
+      FLEET_LICENSE_KEY          = var.fleet_license_key
+      FLEET_LOGGING_JSON         = "true"
+      FLEET_MYSQL_MAX_OPEN_CONNS = "10"
+      FLEET_REDIS_MAX_OPEN_CONNS = "50"
+    }
+  }
+}
+
+# Fleet refuses to start until the database schema is migrated, and nothing
+# in the root module runs migrations. This addon scales the service to 0,
+# runs `fleet prepare db` as a one-off Fargate task, then scales back up —
+# and re-triggers whenever the task definition revision changes, so it also
+# covers Fleet image bumps and the first boot after a snapshot restore.
+# Copied from upstream example/main.tf (tf-mod-addon-migrations-v2.3.0).
+module "migrations" {
+  source                   = "github.com/fleetdm/fleet-terraform/addons/migrations?depth=1&ref=tf-mod-addon-migrations-v2.3.0"
+  ecs_cluster              = module.fleet.byo-vpc.byo-db.byo-ecs.service.cluster
+  task_definition          = module.fleet.byo-vpc.byo-db.byo-ecs.task_definition.family
+  task_definition_revision = module.fleet.byo-vpc.byo-db.byo-ecs.task_definition.revision
+  subnets                  = module.fleet.byo-vpc.byo-db.byo-ecs.service.network_configuration[0].subnets
+  security_groups          = module.fleet.byo-vpc.byo-db.byo-ecs.service.network_configuration[0].security_groups
+  ecs_service              = module.fleet.byo-vpc.byo-db.byo-ecs.service.name
+  desired_count            = module.fleet.byo-vpc.byo-db.byo-ecs.appautoscaling_target.min_capacity
+  min_capacity             = module.fleet.byo-vpc.byo-db.byo-ecs.appautoscaling_target.min_capacity
+  max_capacity             = module.fleet.byo-vpc.byo-db.byo-ecs.appautoscaling_target.max_capacity
+
+  depends_on = [
+    module.fleet,
+  ]
+}
+
+# ECS Container Insights writes to this log group and AWS auto-creates it
+# untagged, where it outlives `terraform destroy`. Declaring it here means it
+# gets the default tags and is removed on teardown. (No depends_on needed:
+# metrics only start flowing minutes after the cluster has tasks.)
+resource "aws_cloudwatch_log_group" "container_insights" {
+  name              = "/aws/ecs/containerinsights/fleet-homelab/performance"
+  retention_in_days = 1
+}
+
+resource "aws_route53_record" "fleet_alb" {
+  zone_id = aws_route53_zone.fleet.zone_id
+  name    = var.fleet_subdomain
+  type    = "A"
+
+  alias {
+    name                   = module.fleet.byo-vpc.byo-db.alb.lb_dns_name
+    zone_id                = module.fleet.byo-vpc.byo-db.alb.lb_zone_id
+    evaluate_target_health = true
+  }
+}
+```
+
+Why this is the whole module call, and nothing more: the `vpc` object's own defaults are `cidr = "10.10.0.0/16"`, `private_subnets = ["10.10.1.0/24", "10.10.2.0/24", "10.10.3.0/24"]`, matching `public_subnets`/`database_subnets`/`elasticache_subnets` in the same `10.10.x.0/24` pattern, and `enable_nat_gateway = true` / `single_nat_gateway = true` — every one of these is already exactly what this deployment wants. The only default worth overriding is `azs`, which defaults to `us-east-2a/b/c`. An earlier draft of this task re-typed all of those default values verbatim in a hand-written `vpc.tf` plus a separate `byo-vpc` module call — that split only existed to support a NAT-off, public-subnet Fargate configuration this plan no longer uses. Root's `main.tf` shows `byo-vpc`'s `redis_config.allowed_cidrs` gets set automatically to `module.vpc.private_subnets_cidr_blocks` and `rds_configs[...].subnets`/`redis_config.subnets`/`alb_config.subnets` all get wired from the VPC's own subnet outputs — all boilerplate this plan no longer has to hand-write.
+
+**Path detail, verified against the module source, not guessed**: the root module's own `outputs.tf` exposes `vpc` and `byo-vpc` (the whole nested submodule) — not `alb` directly. `byo-vpc`'s own outputs, in turn, expose `byo-db` (not `alb` directly either) — `byo-db` is where the real `alb` output lives. So the full path from this root config is `module.fleet.byo-vpc.byo-db.alb.*`, used here and in Tasks 4 and 5. The hyphenated `byo-vpc`/`byo-db` attribute access is valid HCL — Fleet's own module source uses this exact pattern internally.
+
+**Re-checked immediately before execution, not left stale from when this plan was first drafted**: the root module ref and Fleet image version above were bumped from `tf-mod-root-v1.31.0`/`fleetdm/fleet:v4.91.1` to the current `tf-mod-root-v1.31.1`/`fleetdm/fleet:v4.92.0` after diffing what changed between those two module tags. That one-patch bump turned out to matter: it moves `alb_config.tls_policy`'s default from `ELBSecurityPolicy-TLS13-1-2-2021-06` to `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09` — a post-quantum-resistant TLS policy AWS added relatively recently — which this deployment gets for free since `alb_config` here never overrides `tls_policy`. `v4.92.0` is Fleet's actual latest stable release (verified against Fleet's own releases page, not assumed), not just "one version newer."
+
+`rds_config.name` and `redis_config.name` are both explicitly set to `"fleet-homelab"` — both default to just `"fleet"` if omitted, which would silently break every later reference to cluster/replication-group identifier `fleet-homelab` (`down.sh` in Task 14; the monitoring addon takes real member IDs from module outputs instead, see Task 5).
+
+**Corrections from an independent review of this task, each checked against upstream source:**
+- **`replicas` is the total instance count, not the reader count.** `replicas = 0` would create an Aurora cluster with no instances. It is `1` here (one writer, no reader — the "no read replicas" decision is unchanged).
+- **Migrations weren't running.** An earlier draft claimed migrations "run on first boot"; Fleet's `serve` exits when the schema is unmigrated, and the root module runs no migration. The `migrations` addon above is what Fleet's own example uses. It shells out to the AWS CLI (`local-exec`), so whatever machine runs `terraform apply` needs `bash` and the AWS CLI installed (the Task 15 runner installs it), and its role needs `ecs:RunTask`/`iam:PassRole`/`application-autoscaling:RegisterScalableTarget`. On a brand-new stack the service crash-loops briefly until the addon finishes — expected; the ECS service has no wait-for-steady-state, so `apply` doesn't hang on it.
+- **`FLEET_SERVER_URL` removed.** It isn't a Fleet server config key (not in `server/config/config.go`); the "Fleet web address" is an app-config setting, entered in the first-run setup wizard and later managed by GitOps (`org_settings.server_settings.server_url`, Task 11), and it's what SES/MDM links are built from.
+- **Software installers live outside the module** (Step 1) so teardown doesn't delete files the restored database still references.
+- **Restore vs monitoring/Performance Insights.** Upstream's own comment says AWS rejects both on `RestoreDBClusterFromSnapshot` for non-Limitless Aurora; I did not reproduce that against AWS. Turning both off is harmless either way (this deployment has no use for them; the monitoring addon uses plain CloudWatch metrics), and if a restore ever complains about them, check these two settings first.
+- **Restore mechanics that Task 14 relies on, verified in `terraform-aws-rds-aurora` v9.16.1:** `snapshot_identifier` is in the cluster's `ignore_changes`, so a later `apply` (including Task 16's plan without the variable) doesn't propose replacing the cluster. The master password is generated inside `module.fleet` and destroyed with it, so each rebuild gets a fresh one wired to the module's own Secrets Manager entry; that the provider applies it to the restored cluster is expected behaviour I did not reproduce — the Task 14 smoke test (Fleet connects after a restore) is the proof.
+- **Transitive version note:** the module's Redis dependency (`cloudposse/elasticache-redis/aws`) is constrained `>= 1.9.1`, so `terraform init` resolves it to the newest release (2.1.0 at the time of writing), and `.terraform.lock.hcl` doesn't pin modules. If `plan` errors on a Redis input, that's the first suspect.
+
+- [ ] **Step 3: Write `outputs.tf`** — `scripts/resume.sh` (Task 14) references `terraform output -raw fleet_url`, so this needs to actually exist.
+
+```hcl
+output "fleet_url" {
+  value = "https://${var.fleet_subdomain}"
+}
+```
+
+- [ ] **Step 4: Init, validate, pre-create the secret, and plan**
+
+**Two-phase apply (required, found by running it).** On a fresh state, a plain `plan` fails with `Invalid count argument` in `byo-ecs/main.tf` (`count = local.private_key_secret_is_module_managed ? 1 : 0`): the module decides whether it manages the private key by checking whether `private_key_secret_arn` is null, and our externalized secret's ARN is unknown until the secret exists. Create the secret chain first:
+
+`terraform apply -var-file=terraform.tfvars -target=aws_secretsmanager_secret_version.fleet_server_private_key`
+Expected: `3 added` (random_password, secret, version). This is only needed once — the secret survives teardown (`prevent_destroy`), so rebuilds skip it.
+
+Then run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
+(`init` is required first — this step adds new modules and the `random`/`null` providers, and `validate` fails with "Module not installed" without it. The same applies to every later task that adds a module or provider.)
+Expected: `Plan: 86 to add, 0 to change, 0 to destroy` (after the secret pre-creation above): a new VPC (12 subnets, one NAT Gateway, one EIP), an Aurora cluster with **1 instance** (`fleet-homelab-one`), a Redis replication group (1 node), the ALB, target group, ECS cluster/service/task definition, the private key secret, the software-installers bucket + policy, and the migrations `null_resource`.
+
+- [ ] **Step 5: Apply**
+
+Run: `terraform apply tfplan`
+Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gateway provisioning dominate, then the migrations addon runs `fleet prepare db` as a one-off task and scales the service back up, adding a few minutes).
+
+- [ ] **Step 6: Verify the ECS service is healthy**
+
+Run: `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].{running:runningCount,desired:desiredCount}'`
+Expected: `{"running": 1, "desired": 1}`
+
+- [ ] **Step 7: Verify Fleet is reachable over HTTPS**
+
+Run: `curl -sI https://<fleet_subdomain>/healthz`
+Expected: `HTTP/2 200`
+
+- [ ] **Step 8a: 🎓 You run this — install `fleetctl` and get oriented. ⛔ GATE: do not start Step 8 until this is done.** Check `which fleetctl && fleetctl --version` first; if it isn't installed at 4.92.0, stop here and install it (it is deliberately not installed earlier). `fleetctl` is Fleet's CLI, the way `aws` is AWS's: a client on your Mac that talks to Fleet's API over HTTPS (it is not installed on AWS or inside the server). Install the same version as the server, then look around before touching the deployment:
+
+```bash
+npm install -g fleetctl@4.92.0     # or run any command as: npx fleetctl@4.92.0 <command>
+fleetctl --version                 # should print 4.92.0
+fleetctl --help                    # the top-level command list: setup, login, get, apply, gitops, user, query, ...
+fleetctl get --help                # what "get" can list (hosts, queries, labels, teams/fleets — the names shift between versions, trust the help output)
+fleetctl config --help             # contexts: like AWS profiles, one per Fleet instance
+```
+
+Nothing here contacts the server yet. It's worth reading the help output — `fleetctl gitops --help` in particular is what Task 11 builds on.
+
+- [ ] **Step 8: 🎓 You run this — initialize Fleet and create the break-glass admin.** A freshly deployed Fleet has no users at all — it sits in setup mode until the first admin is created, and every later task (MDM verification in Task 8, SSO in Tasks 10-11, GitOps, Grafana) needs a working admin login. `fleetctl user create` can't be used for this (it needs an existing authenticated session), so this uses `fleetctl setup`, which is Fleet's first-run bootstrap. Verified against Fleet v4.92.0's `fleetctl setup` source; `--password` is deliberately omitted so it prompts interactively instead of leaving the password in shell history.
+
+```bash
+fleetctl config set --address https://<fleet_subdomain>
+fleetctl setup --email <your real email> --name "Break Glass Admin" --org-name "Homelab"
+```
+
+Expected: `[+] Fleet setup successful and context configured!` — this also logs `fleetctl` in as that user.
+
+What these two commands do: `config set --address` saves the server URL in `~/.fleet/config` under a context named `default` (like an AWS profile); `setup` calls the one API endpoint that works on an empty Fleet, creates the first global admin, prompts you for its password, and stores that user's API token in the same context so later commands are authenticated.
+
+Store the password in your personal password manager (not Secrets Manager — this account has to work even if AWS itself is the problem). This is a one-time action per database: because Aurora is restored from snapshot on every `up` (Task 14), the account survives teardown/rebuild. It only needs redoing after a genuinely fresh database (a `--fresh` `up`). Turning on MFA for this account is deliberately deferred to Task 9, after SSO is proven working.
+
+- [ ] **Step 8b: 🎓 You run this — poke around the live server.** Read-only commands to see what a brand-new Fleet contains and how the CLI shapes its output:
+
+```bash
+fleetctl config get                # which server/context/token you are using (token is masked)
+fleetctl get config                # the server's full config as YAML — the same document GitOps will manage in Task 11
+fleetctl get hosts                 # empty for now: nothing is enrolled yet
+fleetctl get config --yaml | head  # add --yaml or --json to most `get` commands for machine-readable output
+```
+
+What to notice: `get config` shows `org_info`, `server_settings`, `sso_settings` (still disabled) and `mdm` — every setting Tasks 8, 10 and 11 will change, first by hand and later from Git. That's the mental model for GitOps: the YAML you push is this same config document.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add secrets.tf installers.tf fleet.tf outputs.tf .terraform.lock.hcl
+git commit -m "Deploy Fleet (VPC + Aurora + Redis + ALB + Fargate) via the root module"
+```
+
+---
+
+### Task 4: WAF on the ALB
+
+**Files:**
+- Create: `waf.tf`
+
+**Interfaces:**
+- Consumes: `module.fleet.byo-vpc.byo-db.alb.arn`.
+
+- [ ] **Step 1: Write `waf.tf`**
+
+This addon is a different design than an earlier draft of this task assumed — it's an IP/country allow-or-block-list WAF (`allowed_addresses`, `blocked_addresses`, `blocked_countries`), **not** an AWS Managed Rule Group attachment (there's no `managed_rules` input on this addon at all; caught by reading `addons/waf-alb/README.md` directly instead of assuming it worked like a generic WAF module). Since there's no fixed set of IPs to allow from (this will be accessed from home, mobile, and elsewhere), `waf_type = "blocklist"` is the only workable mode here — `"allowlist"` would lock out anywhere not in `allowed_addresses`. Left `blocked_countries` at its default (a pre-curated list of countries associated with high abuse/sanctions exposure) rather than overriding it.
+
+```hcl
+module "waf" {
+  source = "github.com/fleetdm/fleet-terraform//addons/waf-alb?depth=1&ref=tf-mod-addon-waf-alb-v2.1.0"
+
+  name     = "fleet-homelab"
+  lb_arn   = module.fleet.byo-vpc.byo-db.alb.arn
+  waf_type = "blocklist"
+}
+```
+
+- [ ] **Step 2: Init, validate, and plan**
+
+Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
+Expected: plan shows one `aws_wafv2_web_acl` (with a geo-match blocking rule for the default country list) and one `aws_wafv2_web_acl_association`, plus the addon's supporting `aws_wafv2_rule_group`s and `aws_wafv2_ip_set`s (all named `fleet-homelab`).
+
+- [ ] **Step 3: Apply**
+
+Run: `terraform apply tfplan`
+
+- [ ] **Step 4: Verify**
+
+Run: `aws wafv2 list-web-acls --scope REGIONAL --query "WebACLs[?Name=='fleet-homelab']"`
+Expected: one Web ACL returned. (The addon names the ACL from its `name` input, `fleet-homelab` — verified in `addons/waf-alb/main.tf`; an earlier draft filtered on `'fleet'` and would have returned nothing.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add waf.tf .terraform.lock.hcl
+git commit -m "Attach AWS WAF (blocklist mode) to the Fleet ALB"
+```
+
+---
+
+### Task 5: Monitoring addon
+
+**Files:**
+- Create: `monitoring.tf`
+
+**Interfaces:**
+- Consumes: `module.fleet` (the whole module, per the addon's documented pattern of referencing `module.fleet.*` for ALB/ECS/Aurora/Redis ARNs).
+
+- [ ] **Step 1: Apply everything up through Task 4 first if not already applied** (the monitoring addon's `for_each`/`count` values can't be planned until the Fleet module's resources exist — this is a documented constraint of this addon).
+
+Run: `terraform apply -var-file=terraform.tfvars -target=module.fleet -target=module.waf`
+
+- [ ] **Step 2: Write `monitoring.tf`**
+
+```hcl
+module "monitoring" {
+  source = "github.com/fleetdm/fleet-terraform//addons/monitoring?depth=1&ref=tf-mod-addon-monitoring-v1.15.0"
+
+  customer_prefix        = "fleet-homelab"
+  acm_certificate_arn    = aws_acm_certificate.fleet.arn
+  fleet_ecs_service_name = "fleet"
+  mysql_cluster_members  = module.fleet.byo-vpc.rds.cluster_members
+  # The cloudposse Redis module returns a nested list here (same workaround the addon's README uses).
+  redis_cluster_members  = module.fleet.byo-vpc.redis.member_clusters[0]
+
+  albs = [
+    {
+      name                    = "fleet-homelab"
+      arn_suffix              = module.fleet.byo-vpc.byo-db.alb.lb_arn_suffix
+      target_group_name       = module.fleet.byo-vpc.byo-db.alb.target_group_names[0]
+      target_group_arn_suffix = module.fleet.byo-vpc.byo-db.alb.target_group_arn_suffixes[0]
+      ecs_service_name        = "fleet"
+    }
+  ]
+}
+```
+
+This is a correction from an earlier draft of this task, which invented field names (`customer`, `alb`, `ecs`, `rds`, `redis` singular objects) that don't exist on this addon — caught by actually reading `addons/monitoring/README.md`'s input table rather than inferring from the other addons' conventions. The real shape: `albs` is a **list** (one entry per load balancer, with its target group identifiers alongside it), and Aurora/Redis are named via flat `mysql_cluster_members`/`redis_cluster_members` string lists, not nested objects. **The member lists are wired from module outputs, not typed as `"fleet-homelab"`**: the addon builds CloudWatch alarms on the `DBInstanceIdentifier` and `CacheClusterId` dimensions (verified in `addons/monitoring/main.tf`), which are the Aurora *instance* name (`fleet-homelab-one`) and the ElastiCache *member cluster* name — not the cluster/replication-group name an earlier draft passed, which would have produced alarms on metrics that never exist (permanently `INSUFFICIENT_DATA`). The addon's own README shows these exact two output expressions. Two things intentionally left out, both optional with empty defaults: `default_sns_topic_arns`/`sns_topic_arns_map` (no SNS topic wired up, so these alarms exist in CloudWatch but won't page or email anyone — AWS Budgets is this deployment's only active notification channel) and `cron_monitoring` (a separate Lambda that checks Fleet's DB for missed cron runs — needs its own MySQL credentials/VPC/subnet wiring, out of scope for a homelab-scale addition).
+
+- [ ] **Step 3: Init, validate, and plan**
+
+Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
+Expected: plan shows CloudWatch alarms for ALB 5xx, ECS service, Aurora, Redis, and ACM cert expiry.
+
+- [ ] **Step 4: Apply**
+
+Run: `terraform apply tfplan`
+
+- [ ] **Step 5: Verify**
+
+Run: `aws cloudwatch describe-alarms --alarm-name-prefix fleet-homelab --query 'MetricAlarms[].AlarmName'`
+Expected: a non-empty list of alarm names.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add monitoring.tf .terraform.lock.hcl
+git commit -m "Add CloudWatch monitoring addon for ALB/ECS/Aurora/Redis/ACM"
+```
+
+---
+
+### Task 6: SES for outbound mail
+
+**Files:**
+- Create: `ses.tf`
+
+**Interfaces:**
+- Consumes: `aws_route53_zone.fleet.zone_id` (for DKIM/verification records).
+
+- [ ] **Step 1: Write `ses.tf`**
+
+```hcl
+module "ses" {
+  source = "github.com/fleetdm/fleet-terraform//addons/ses?depth=1&ref=tf-mod-addon-ses-v1.5.0"
+
+  domain  = var.fleet_subdomain
+  zone_id = aws_route53_zone.fleet.zone_id
+}
+```
+
+- [ ] **Step 2: Init, validate, plan, apply**
+
+Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+
+- [ ] **Step 3: Verify domain identity is verified, and check for the SES sandbox**
+
+Run: `aws sesv2 get-email-identity --email-identity <fleet_subdomain> --query 'VerifiedForSendingStatus'`
+Expected: `true` (may take a few minutes after DNS records propagate — re-run if `false`).
+
+Then: `aws sesv2 get-account --query 'ProductionAccessEnabled'`. If `false`, the account is in the **SES sandbox** (the default for a new account/region): SES will only deliver to individually *verified recipient* addresses, so Fleet's invite/MFA/password-reset mail to your own inbox will silently fail. Two fixes, either is fine: (a) a one-time `aws sesv2 create-email-identity --email-identity <your email>` and click the link SES emails you — this identity is account-level, not part of this Terraform, so it persists across teardown; or (b) request production access in the SES console (a support-style form, typically about a day). Break-glass MFA (Task 9) depends on this working.
+
+`module.ses` is deliberately **not** torn down by `down.sh` (Task 14): it costs nothing at rest, and re-creating the identity/DKIM records every session would mean re-verification on every `up`. An earlier draft tore it down.
+
+- [ ] **Step 4: Merge the SES addon's outputs into `fleet.tf`'s `fleet_config`.** The SES addon follows the same `fleet_extra_environment_variables` / `fleet_extra_iam_policies` convention as the MDM and logging addons — replace the plain `extra_environment_variables` map in `fleet.tf`'s `fleet_config` block with:
+
+```hcl
+    extra_environment_variables = merge(
+      {
+        FLEET_LICENSE_KEY          = var.fleet_license_key
+        FLEET_LOGGING_JSON         = "true"
+        FLEET_MYSQL_MAX_OPEN_CONNS = "10"
+        FLEET_REDIS_MAX_OPEN_CONNS = "50"
+      },
+      module.ses.fleet_extra_environment_variables
+    )
+    extra_iam_policies = concat(
+      [aws_iam_policy.software_installers.arn],
+      module.ses.fleet_extra_iam_policies
+    )
+```
+
+(`FLEET_SERVER_URL` is gone from this map — it isn't a real Fleet config key, see Task 3. `aws_iam_policy.software_installers` is Task 3's policy; it has to stay in this list or the task loses access to its installers bucket.)
+
+- [ ] **Step 5: Re-apply**
+
+Run: `terraform fmt && terraform validate && terraform apply -var-file=terraform.tfvars`
+(A plain apply, not `-target=module.fleet`: changing `fleet_config` produces a new task-definition revision, and `module.migrations` must be in the same run to re-trigger off it.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add ses.tf fleet.tf .terraform.lock.hcl
+git commit -m "Add SES addon and wire Fleet to send email through it"
+```
+
+---
+
+### Task 7: MDM addon — phase 1 (secret scaffolding)
+
+**Fleet-side background (verified against Fleet v4.92.0 source and the `addons/mdm` module, replacing an earlier draft that assumed Apple's certificates lived in Secrets Manager):** Apple MDM is *not* configured through environment variables/secrets in this setup. Fleet generates its own SCEP CA and APNs private key server-side and stores them, encrypted with `FLEET_SERVER_PRIVATE_KEY`, in the database when you upload the Apple-issued APNs certificate in the Fleet UI (Task 8). Because Aurora is snapshot-restored on every `up` and the private key is externalized (Task 2/3), that configuration survives teardown with no Secrets Manager involvement. The only MDM material that *does* need to be supplied as a secret is the **Windows WSTEP identity certificate/key pair**, which the `addons/mdm` module reads from its `fleet-scep` secret (under Apple-named JSON keys — a quirk of the module) and maps onto `FLEET_MDM_WINDOWS_WSTEP_IDENTITY_CERT_BYTES`/`_KEY_BYTES`.
+
+**Files:**
+- Create: `mdm.tf`
+
+**Interfaces:**
+- Produces: one empty Secrets Manager secret (`fleet-scep`) that Task 8 populates with the Windows WSTEP pair, plus the module outputs `extra_secrets` / `extra_execution_iam_policies` that Task 8 wires into `fleet.tf`.
+
+- [ ] **Step 1: Write `mdm.tf`**
+
+```hcl
+module "mdm" {
+  source = "github.com/fleetdm/fleet-terraform//addons/mdm?depth=1&ref=tf-mod-addon-mdm-v2.2.0"
+
+  apn_secret_name    = null # Apple APNs cert is uploaded in the Fleet UI (Task 8), not via a secret
+  scep_secret_name   = "fleet-scep"
+  abm_secret_name    = null
+  enable_apple_mdm   = false # keeps the Apple env vars out of the task definition
+  enable_windows_mdm = true  # wires fleet-scep -> FLEET_MDM_WINDOWS_WSTEP_IDENTITY_*
+}
+```
+
+- [ ] **Step 2: Validate, plan, apply**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Expected: plan creates one Secrets Manager secret (`fleet-scep`) plus its IAM policy, empty; no APN or ABM secret because both are `null`. (The Fleet task is not touched yet — the secret isn't wired in until Task 8, after it has content. An ECS task whose secret reference points at a missing JSON key fails to start, so the order matters.)
+
+- [ ] **Step 3: Verify**
+
+Run: `aws secretsmanager describe-secret --secret-id fleet-scep --query Name`
+Expected: `"fleet-scep"` prints without error.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add mdm.tf
+git commit -m "Add MDM addon phase 1 (empty WSTEP secret, Windows MDM enabled)"
+```
+
+---
+
+### Task 8: MDM — phase 2 (Windows WSTEP certificate + Apple push certificate)
+
+Two independent halves: Part A (Windows, Terraform + `openssl`) and Part B (Apple, a manual UI runbook). Neither needs to repeat on a rebuild — the `fleet-scep` secret deliberately survives teardown (Task 14 excludes `module.mdm` from `down`'s destroy targets), and Apple's configuration lives in the database that Task 14 snapshots.
+
+**Files:**
+- Modify: `fleet.tf` (add `module.mdm.extra_secrets` / `extra_execution_iam_policies` into `fleet_config`)
+
+**Part A — Windows MDM (WSTEP identity certificate)**
+
+- [ ] **Step 1: Generate the WSTEP certificate and key.** Fleet's own `fleetctl preview` tooling uses an RSA-4096 self-signed CA with a PKCS#1 private key for this, so the same shape is used here (parameters derived from Fleet's source; Fleet's Windows MDM guide itself was not cross-checked — if Windows enrollment fails with a key-parse error, that is the first place to look).
+
+```bash
+mkdir -p ~/fleet-wstep && cd ~/fleet-wstep
+openssl genrsa -out wstep.key 4096
+head -1 wstep.key   # must read: -----BEGIN RSA PRIVATE KEY-----
+```
+
+If it reads `-----BEGIN PRIVATE KEY-----` instead (OpenSSL 3 default is PKCS#8), convert it: `openssl rsa -in wstep.key -traditional -out wstep.key.new && mv wstep.key.new wstep.key`.
+
+```bash
+openssl req -x509 -new -key wstep.key -sha256 -days 3650 -subj "/CN=Fleet WSTEP CA" -out wstep.crt
+```
+
+**Back these two files up in your password manager / encrypted storage.** Fleet uses this pair to escrow BitLocker recovery keys for Windows hosts; replacing it later permanently loses access to keys already escrowed. Do not lose it and do not casually regenerate it.
+
+- [ ] **Step 2: Store the pair in the secret** (jq builds the JSON so the PEM newlines are escaped correctly):
+
+```bash
+jq -n --rawfile c wstep.crt --rawfile k wstep.key \
+  '{FLEET_MDM_APPLE_SCEP_CERT_BYTES: $c, FLEET_MDM_APPLE_SCEP_KEY_BYTES: $k}' > payload.json
+aws secretsmanager put-secret-value --secret-id fleet-scep --secret-string file://payload.json
+shred -u payload.json 2>/dev/null || rm -P payload.json
+```
+
+(The key names say "APPLE_SCEP" because that is what the `addons/mdm` module hard-codes; with `enable_windows_mdm = true` it re-exposes the same two values as the Windows WSTEP variables. Nothing Apple-related is happening here.)
+
+- [ ] **Step 3: Wire MDM's secrets into the Fleet task** — modify `fleet.tf`'s `fleet_config` block (extending, not replacing, Task 6's SES merge if it is already there — merge all module outputs into the same expression):
+
+```hcl
+    extra_secrets                = merge(module.mdm.extra_secrets)
+    extra_execution_iam_policies = concat(module.mdm.extra_execution_iam_policies)
+```
+
+- [ ] **Step 4: Validate, plan, apply**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Expected: the Fleet task definition is replaced and the service redeploys; then `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].{running:runningCount,desired:desiredCount}'` returns running 1 / desired 1 and `curl -sI https://<fleet_subdomain>/healthz` returns `HTTP/2 200`.
+
+Windows MDM itself is switched *on* declaratively in Task 11 (`controls.windows_enabled_and_configured: true` in `default.yml`), not here — this step only supplies the certificate it needs.
+
+**Part B — Apple MDM (APNs push certificate), all through the Fleet UI**
+
+- [ ] **Step 5: 🎓 You run this — generate the APNs CSR.** *(Pre-flight: `fleetctl --version` → 4.92.0 and still logged in — `fleetctl get config` works. Otherwise stop; see Task 3 Step 8a.)* (What it does: asks the Fleet server to create the Apple MDM SCEP CA and APNs key, then writes only the signing request to disk for you to upload to Apple.) With `fleetctl` still logged in from Task 3 Step 8: `fleetctl generate mdm-apple --csr ~/fleet-apns.csr`. Verified against Fleet v4.92.0: this asks *the Fleet server* for the CSR (it generates the SCEP CA and APNs key server-side and keeps them in the database — nothing to store in AWS) and writes only the CSR to disk. Alternatively use Fleet UI > Settings > Integrations > Mobile device management (MDM) > Apple Push Certificates > "Add APNs".
+
+  **Email caveat (verified in Fleet's source, not tested):** the CSR is signed via fleetdm.com using the *logged-in user's email address*, and fleetdm.com can reject the request with "Email domain '@…' is not permitted for APNS certificate signing. Please use a corporate or organization email address." The break-glass admin was created with your personal address; if that gets rejected, do this step while logged in as an SSO/Fleet user whose email is on your own domain (after Task 11 Step 8 — Apple MDM is not needed until you enroll a Mac, so postponing it is fine), or create a temporary admin on a domain-owned address. Which domains fleetdm.com rejects is not known — verify at execution.
+
+- [ ] **Step 6: Manual — get the APNs cert from Apple.** Go to https://identity.apple.com/pushcert/, sign in with a **dedicated Apple Account you'll keep long-term** (the cert must be renewed with the same Apple ID every year — don't tie it to a throwaway), upload the CSR, download the resulting `.pem`.
+
+- [ ] **Step 7: Manual — upload it in Fleet.** Fleet UI > Settings > Integrations > MDM > Apple Push Certificates > upload the `.pem`. Expected: Apple MDM shows "Connected" with a push certificate expiry about one year out. Put the expiry date in your calendar — an expired APNs cert breaks Apple MDM for every enrolled Mac.
+
+- [ ] **Step 8: Verify.** In the Fleet UI, Apple MDM shows connected. Windows MDM will show enabled after Task 11 applies `windows_enabled_and_configured`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add mdm.tf fleet.tf
+git commit -m "Wire MDM WSTEP secret into the Fleet task (Windows MDM)"
+```
+
+---
+
+### Task 9: Harden the break-glass admin (MFA) — run this *after* Task 11 Step 8
+
+**Ordering note:** the break-glass account itself is created in Task 3 Step 8 (`fleetctl setup`), because nothing in Fleet is usable before that. This task is the MFA hardening only, and it is deliberately placed *after* SSO is proven working (Task 11 Step 8) — MFA users cannot use `fleetctl login` (Fleet rejects it for MFA-enabled accounts, verified in source), and email-based MFA depends on SES delivering mail, so turning it on before SSO is a second way in would risk locking yourself out of an unconfigured instance. If you are executing tasks in numeric order, do Tasks 10 and 11 first, then come back here.
+
+**Files:** none (operational).
+
+- [ ] **Step 1: Verify the break-glass login works as a plain password login** (before MFA changes anything).
+
+Run: `curl -s -X POST https://<fleet_subdomain>/api/v1/fleet/login -H 'Content-Type: application/json' -d '{"email":"<email>","password":"<password>"}' | grep -o '"token"'`
+Expected: `"token"` present in the response.
+
+- [ ] **Step 2: Decide whether to enable MFA at all.** This is a real trade-off, not a formality:
+  - **Option A — enable email MFA (recommended if you're willing to keep SES delivery working).** Adds a second factor to the only password-only account.
+  - **Option B — skip MFA and rely on a long random password + the WAF + SSO for daily use.** Simpler and cannot lock you out via email problems; the residual risk is a single-factor admin account on a public URL.
+
+  Either is defensible; A is the plan's default. If you pick B, skip the rest of this task.
+
+- [ ] **Step 3: (Option A) Make SES able to deliver to your address.** This AWS account's SES is in the **sandbox** (`ProductionAccessEnabled=false`, checked live) — in the sandbox SES only delivers to *verified* recipient identities, so MFA emails to an unverified address would silently never arrive. The SES addon (Task 6) is destroyed and recreated on every `down`/`up`, so verify the recipient *outside Terraform* so it persists:
+
+```bash
+aws sesv2 create-email-identity --email-identity <your real email> --tags Key=Project,Value=fleet-lab Key=ManagedBy,Value=terraform   # then click the link in the verification email
+aws sesv2 get-email-identity --email-identity <your real email> --query VerificationStatus   # expect "SUCCESS"
+```
+
+Also confirm the *sender* address Fleet uses (Task 6) is a verified identity or a verified domain — the recipient being verified is not enough. Send a test message before relying on it (e.g. `aws sesv2 send-email` from the sender to the recipient). Requesting SES production access from AWS is the alternative that removes this whole class of problem, at the cost of a support-case round trip.
+
+- [ ] **Step 4: (Option A) Enable MFA on the break-glass user.** Fleet UI > Settings > Users > the break-glass row > Edit > "Require multi-factor authentication" (Premium, email-based, requires SMTP — which Task 6 provides). MFA cannot be enabled on SSO or API-only users, which is fine here. Not verified: whether an account may enable MFA on itself or needs a second admin — check at execution; an SSO-provisioned Fleet Admins user (Task 11 Step 8) can do it for you.
+
+- [ ] **Step 5: (Option A) Test it now, while SSO is still your fallback.** Log out and log in as break-glass; expect an emailed magic link/confirmation. **Recovery notes:** if email breaks later (SES sandbox drift, sender identity gone after a rebuild), this account is locked out and you fall back to SSO; the local account can then only be repaired by another admin editing the user (or, worst case, database access). Also, `fleetctl` can no longer log in as this user — for any future CLI use, get an API token from the UI (My account > Get API token) and run `fleetctl config set --token <token>`. (Task 11's GitOps and Task 17's Grafana use dedicated API-only users, so neither depends on this account.)
+
+- [ ] **Step 6: No commit needed** — operational action, not code. The account and its MFA setting live in the database, so they survive the Aurora snapshot/restore cycle (Task 14). Only the SES *recipient identity* from Step 3 is separate state, and it too persists because it was created outside Terraform.
+
+---
+
+### Task 10: Entra ID SSO — app registration, JIT provisioning, and group-based role mapping
+
+**Files:** none in this repo yet (values feed into Task 11's GitOps repo).
+
+- [ ] **Step 1: Manual — register the Enterprise Application in Entra.** In the Azure portal: Entra ID > Enterprise applications > New application > Create your own application > "Fleet" > register a SAML-based app.
+
+- [ ] **Step 2: Manual — configure SAML basic settings.** Identifier (Entity ID): `https://<fleet_subdomain>`. Reply URL (ACS URL): `https://<fleet_subdomain>/api/v1/fleet/sso/callback` — verified against Fleet's own SSO docs (there's a second, different callback path for MDM end-user auth, `/api/v1/fleet/mdm/sso/callback`, not used here). Sign-on URL: `https://<fleet_subdomain>/login`.
+
+- [ ] **Step 3: Manual — copy the App Federation Metadata URL** from the SAML Certificates section — this is the `metadata_url` value Task 11 needs.
+
+- [ ] **Step 4: Manual — create an Entra security group for Fleet admins**, e.g. "Fleet Admins", and add yourself to it. This is what Step 6 below conditions the role claim on.
+
+- [ ] **Step 5: Manual — assign yourself (and any other Entra users) to the Enterprise Application** under Users and groups, so Entra actually allows SSO login for those accounts. Being in the "Fleet Admins" group doesn't imply being assigned to the app — both are required.
+
+- [ ] **Step 6: Manual — configure the JIT role-mapping claim.** Fleet's JIT-provisioned users get their Fleet role from a custom SAML attribute the IdP sends — verified against Fleet's SSO docs, not assumed. In the Enterprise Application: Single sign-on > Attributes & claims > Add a new claim:
+  - Name: `FLEET_JIT_USER_ROLE_GLOBAL`
+  - Source: default value `observer` (so anyone assigned to the app but not in "Fleet Admins" gets the least-privileged role, not silently full admin)
+  - Add a **condition**: scope = User, group = "Fleet Admins", source = value `admin`
+  - **Clear the "Namespace" field** on the claim (Entra's claim form has an optional Namespace box; if it's filled, Entra emits the attribute name as `<namespace>/FLEET_JIT_USER_ROLE_GLOBAL`). Fleet matches SAML attribute names *exactly* (verified in Fleet's source — no prefix/suffix stripping), so a namespaced name is silently ignored and every JIT user falls back to the default role instead of the one you configured. Unverified here: whether Entra applies a default namespace when you leave the field blank — after your first SSO login (Task 11 Step 8), check the attribute name in the SAML response (browser SAML-tracer extension, or Entra's "Test this application") and confirm it is exactly `FLEET_JIT_USER_ROLE_GLOBAL`, and confirm your Fleet user actually came out as `admin`.
+  
+  Fleet accepts exactly these values for this attribute: `admin`, `maintainer`, `observer`, `observer_plus`, `technician`, or `null`. Don't also set a `FLEET_JIT_USER_ROLE_FLEET_<id>` attribute alongside this one — Fleet errors if both a global and a team-specific role attribute are present at once. (Per-team role mapping via `FLEET_JIT_USER_ROLE_FLEET_<id>` is possible later, but needs the numeric team ID Fleet assigns once the "Workstations" team exists from Task 11 — a chicken-and-egg with this task, so it's a deliberate follow-up, not part of this pass.)
+
+- [ ] **Step 7: Record the three values needed for GitOps**: the Entity ID (`https://<fleet_subdomain>`), the metadata URL from Step 3, and confirmation that `FLEET_JIT_USER_ROLE_GLOBAL` is configured. These go into `default.yml` in Task 11 — no code change in this repo.
+
+---
+
+### Task 11: Fleet GitOps repository
+
+Requires the break-glass admin from Task 3 Step 8 (used below to create the API-only user). Layout verified against the templates `fleetctl new` ships in Fleet v4.92.0 (an earlier draft used the pre-4.7x `teams/` directory and a single top-level `default.yml` with `policies:`/`queries:` keys — neither matches the current scaffold).
+
+**Files (new repo, `fleet-homelab-gitops`, not this one) — all created by the scaffold, then edited:**
+- Modify: `default.yml` (repo root — the scaffold puts it at the root, not under a subdirectory)
+- Modify: `fleets/workstations.yml` (the scaffold's directory is `fleets/`, formerly `teams/`)
+- Modify: `.github/workflows/workflow.yml` (env block)
+
+- [ ] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.0, else stop; see Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
+
+```bash
+mkdir -p ~/fleet-homelab-gitops && cd ~/fleet-homelab-gitops
+fleetctl new --org-name "Homelab" --dir . --force
+rm fleets/personal-mobile-devices.yml   # not needed for this homelab (no BYOD mobile fleet)
+```
+
+`fleetctl new` is non-interactive in v4.92.0 (flags above; `--force` because the directory already exists). It generates `default.yml`, `fleets/workstations.yml` and `fleets/personal-mobile-devices.yml`, `labels/`, `platforms/` (configuration profiles), `.github/workflows/workflow.yml`, and `.github/fleet-gitops/` (the action that runs `fleetctl gitops`). Every `fleets/*.yml` file is applied automatically, and — because `default.yml` contains `org_settings:` — any Fleet in your instance that has *no* matching file is deleted (`--delete-other-fleets`). That is the desired GitOps behavior, but means fleets created in the UI won't survive the next run.
+
+- [ ] **Step 2: Edit `default.yml`.** The scaffold already has `org_settings.org_info.org_name` (set by `--org-name`) and `server_settings.server_url: $FLEET_URL`. Add to `org_settings:` (uncommenting/replacing the scaffold's commented `sso_settings` example, and adding `secrets`):
+
+```yaml
+org_settings:
+  # ...org_info and server_settings from the scaffold stay as they are...
+  sso_settings:
+    enable_sso: true
+    enable_sso_idp_login: true
+    enable_jit_provisioning: true   # Premium
+    idp_name: "Entra ID"
+    entity_id: "https://<fleet_subdomain>"   # literal value; must exactly match Task 10 Step 2
+    metadata_url: "$FLEET_ENTRA_METADATA_URL"
+  secrets:
+    - secret: "$FLEET_GLOBAL_ENROLL_SECRET"
+```
+
+And under `controls:` (the scaffold has this commented out) turn on Windows MDM — this is the switch that makes use of the WSTEP secret from Task 8:
+
+```yaml
+controls:
+  windows_enabled_and_configured: true
+```
+
+Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim configured in Task 10 Step 6 (default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
+
+- [ ] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
+
+```yaml
+name: "💻 Workstations"
+settings:
+  secrets:
+    - secret: "$FLEET_WORKSTATIONS_ENROLL_SECRET"
+# ...controls/reports/policies/software from the scaffold stay as they are...
+```
+
+(Verify the scaffold's default `controls:` for this fleet are what you want before pushing — macOS setup-assistant lines are commented out by default, so nothing will require Apple MDM.)
+
+- [ ] **Step 4: 🎓 You run this — create the GitOps API-only user on Fleet** (what it does: creates a user that has an API token but no password or UI login, with the `gitops` role, which can only apply configuration) (as the break-glass admin; do this *before* enabling MFA on that account in Task 9)
+
+```bash
+fleetctl user create --name "GitOps CI" --global-role gitops --api-only
+```
+
+Verified in Fleet v4.92.0: `--api-only` needs no email/password/`--username` (there is no `--username` flag; an earlier draft used one and would have failed), and **prints the API token once** — press a key when prompted and copy it immediately into your password manager. The `gitops` role is only valid for API-only users. Do not use `fleetctl login` here: that would need a password user and produces a short-lived session token (default 5 days) that would silently break the workflow.
+
+- [ ] **Step 5: Push to a new GitHub repo.** `gh` is not logged in on this machine yet (checked): run `gh auth status || gh auth login` first (HTTPS + browser).
+
+```bash
+git init && git add -A && git commit -m "Initial Fleet GitOps config"
+gh repo create fleet-homelab-gitops --private --source=. --push
+```
+
+- [ ] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the three extra variables used in the YAML above would expand to empty strings unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
+
+```yaml
+        env:
+          FLEET_URL: ${{ secrets.FLEET_URL && secrets.FLEET_URL || 'https://fleet.example.com' }}
+          FLEET_API_TOKEN: ${{ secrets.FLEET_API_TOKEN }}
+          # added:
+          FLEET_ENTRA_METADATA_URL: ${{ secrets.FLEET_ENTRA_METADATA_URL }}
+          FLEET_GLOBAL_ENROLL_SECRET: ${{ secrets.FLEET_GLOBAL_ENROLL_SECRET }}
+          FLEET_WORKSTATIONS_ENROLL_SECRET: ${{ secrets.FLEET_WORKSTATIONS_ENROLL_SECRET }}
+```
+
+```bash
+gh secret set FLEET_URL --body "https://<fleet_subdomain>"
+gh secret set FLEET_API_TOKEN --body "<token from Step 4>"
+gh secret set FLEET_ENTRA_METADATA_URL --body "<metadata URL from Task 10>"
+gh secret set FLEET_GLOBAL_ENROLL_SECRET --body "$(openssl rand -hex 16)"
+gh secret set FLEET_WORKSTATIONS_ENROLL_SECRET --body "$(openssl rand -hex 16)"
+git add -A && git commit -m "Pass extra secrets to gitops step" && git push
+```
+
+- [ ] **Step 7: Run the workflow manually and verify**
+
+Run: `gh workflow run "Apply latest configuration to Fleet" && gh run watch`
+Expected: workflow completes successfully (the scaffold also dry-runs on pull requests, applies on push to `main`, and reconciles nightly); in the Fleet UI, Settings > Organization settings shows "Homelab", Settings > Integrations > SSO shows Entra configured, and Settings > Integrations > MDM shows Windows MDM turned on.
+
+- [ ] **Step 8: Verify SSO login works** by logging out of the break-glass session and signing in via the Entra SSO button at `https://<fleet_subdomain>/login`. Then confirm the new user's role in Settings > Users is `admin` (see the Task 10 Step 6 namespace check if it isn't).
+
+- [ ] **Step 9: Go back and do Task 9** (break-glass MFA hardening) now that SSO is proven as a second way in. Also do the Apple MDM half of Task 8 (Part B) at this point if you didn't already — it is best done once you have an SSO/domain-email user, because of the APNs CSR email-domain restriction described there.
+
+Note for later: because the Aurora snapshot/restore mechanism preserves the database, and this GitOps repo's own state lives in GitHub (not AWS), none of this Task needs repeating after a `down`/`up` cycle — only the nightly cron or a manual `gh workflow run` needs to happen if you want to force a reconciliation after a rebuild.
+
+---
+
+### Task 12: Osquery log destination — Firehose → S3
+
+**Files:**
+- Create: `logging.tf`
+- Modify: `fleet.tf` (merge the addon's outputs into `fleet_config`)
+
+**Interfaces:**
+- Produces: `module.firehose-logging.fleet_extra_environment_variables`, `module.firehose-logging.fleet_extra_iam_policies` — consumed by the `fleet.tf` edit in Step 4 below.
+
+- [ ] **Step 1: Write `logging.tf`**
+
+```hcl
+module "firehose-logging" {
+  source = "github.com/fleetdm/fleet-terraform//addons/logging-destination-firehose?depth=1&ref=tf-mod-addon-logging-destination-firehose-v1.3.0"
+
+  prefix = "fleet-homelab-"
+
+  osquery_results_s3_bucket = {
+    name         = "fleet-homelab-osquery-results"
+    expires_days = 30
+  }
+
+  osquery_status_s3_bucket = {
+    name         = "fleet-homelab-osquery-status"
+    expires_days = 30
+  }
+
+  audit_s3_bucket = {
+    name         = "fleet-homelab-audit"
+    expires_days = 30
+  }
+}
+```
+
+- [ ] **Step 2: Init, validate, and plan**
+
+Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
+Expected: plan shows 3 S3 buckets, 3 Firehose delivery streams, 3 IAM roles/policies — 30-day lifecycle expiration on each bucket.
+
+- [ ] **Step 3: Apply**
+
+Run: `terraform apply tfplan`
+
+- [ ] **Step 4: Wire the addon's outputs into `fleet.tf`, on top of Task 6's SES merge** (don't drop it — extend it):
+
+```hcl
+    extra_environment_variables = merge(
+      {
+        FLEET_LICENSE_KEY          = var.fleet_license_key
+        FLEET_LOGGING_JSON         = "true"
+        FLEET_MYSQL_MAX_OPEN_CONNS = "10"
+        FLEET_REDIS_MAX_OPEN_CONNS = "50"
+      },
+      module.ses.fleet_extra_environment_variables,
+      module.firehose-logging.fleet_extra_environment_variables
+    )
+    extra_iam_policies = concat(
+      [aws_iam_policy.software_installers.arn],
+      module.ses.fleet_extra_iam_policies,
+      module.firehose-logging.fleet_extra_iam_policies
+    )
+```
+
+(Keeps Task 3's `aws_iam_policy.software_installers` in the list — dropping it would cut the task's access to its installers bucket. Task 8 also merges `extra_secrets`/`extra_execution_iam_policies` into this same block; those are different keys and don't conflict.)
+
+- [ ] **Step 5: Validate, plan, apply**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Expected: ECS service redeploys with the new environment variables (`FLEET_OSQUERY_STATUS_LOG_PLUGIN=firehose`, `FLEET_OSQUERY_RESULT_LOG_PLUGIN=firehose`, `FLEET_FIREHOSE_REGION`, stream names — these come from the addon's output map, not typed manually).
+
+- [ ] **Step 6: Verify data is landing in S3**
+
+Wait for at least one enrolled host to check in (or trigger a live query), then run:
+`aws s3 ls s3://fleet-homelab-osquery-status/ --recursive | tail -5`
+Expected: at least one object listed within a few minutes of a host checking in.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add logging.tf fleet.tf .terraform.lock.hcl
+git commit -m "Route osquery result/status/audit logs to S3 via Firehose"
+```
+
+---
+
+### Task 13: AWS Budget alert
+
+**Files:**
+- Create: `budget.tf`
+
+**Interfaces:**
+- Consumes: nothing (standalone, account-level resource).
+
+- [ ] **Step 1: Write `budget.tf`**
+
+```hcl
+resource "aws_budgets_budget" "fleet_homelab" {
+  name         = "fleet-homelab-monthly"
+  budget_type  = "COST"
+  limit_amount = "100"
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  dynamic "notification" {
+    for_each = [20, 40, 60, 80, 100]
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value
+      threshold_type             = "PERCENTAGE"
+      notification_type          = "ACTUAL"
+      subscriber_email_addresses = [var.budget_alert_email]
+    }
+  }
+}
+```
+
+`budget_alert_email` is a sensitive-by-privacy variable (add it to `variables.tf` as `type = string`, to `example.tfvars` as a placeholder, and to the real `terraform.tfvars`; Task 15's workflow supplies it from a `BUDGET_ALERT_EMAIL` repo secret). It stays out of Git because this repo is public.
+
+Given the actual usage pattern (torn down most of the time, averaging ~$12–15/mo per the spec), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
+
+- [ ] **Step 2: Validate and plan**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
+Expected: plan shows one `aws_budgets_budget` with 5 notification blocks.
+
+- [ ] **Step 3: Apply**
+
+Run: `terraform apply tfplan`
+
+- [ ] **Step 4: Verify**
+
+Run: `aws budgets describe-budget --account-id $(aws sts get-caller-identity --query Account --output text) --budget-name fleet-homelab-monthly --query 'Budget.{limit:BudgetLimit,notifications:NotificationsWithSubscribers[].Notification.Threshold}'`
+Expected: `limit` shows `100 USD`; `notifications` lists `[20, 40, 60, 80, 100]`.
+
+- [ ] **Step 5: Check the inbox once.** Whether directly-listed Budgets email recipients need a confirmation click is unclear — an independent review said no, and AWS's own docs and search results conflict on it, so this isn't asserted either way. Look in `the budget alert address` (including spam) for an "AWS Notification - Subscription Confirmation" email and click confirm if one arrives; if none does, nothing further is needed. Budgets emails also don't depend on SES or on the Fleet stack being up.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add budget.tf
+git commit -m "Add AWS Budget alert at 20/40/60/80/100% of \$100/mo"
+```
+
+---
+
+### Task 14: Cost-control scripts
+
+Given the primary usage pattern is intermittent (evenings/weekends), `up.sh`/`down.sh` are the scripts that matter — `idle.sh`/`resume.sh` are included for a same-session pause but only save Fargate+Aurora compute, not the bulk of the bill (see spec).
+
+**Files (in `fleet-homelab-infra`):**
+- Create: `scripts/idle.sh`
+- Create: `scripts/resume.sh`
+- Create: `scripts/up.sh`
+- Create: `scripts/down.sh`
+
+**Interfaces:**
+- Consumes: nothing beyond AWS CLI credentials and this repo's Terraform state.
+
+- [ ] **Step 1: Write `scripts/idle.sh`** — the service has an Application Auto Scaling target with `min_capacity = 1` (Task 3), which pulls a manually-set `desired-count 0` back up to 1. Fleet's own `addons/migrations/migrate.sh` works around exactly this by re-registering the scalable target at 0/0 before scaling down, so this does the same. (The reviewer's claim of this problem was confirmed by that upstream workaround; AWS's enforcement itself wasn't reproduced here.) Side effect: a `terraform apply` while idled re-registers min 1 and wakes the service.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Scaling Fleet ECS service to 0 (autoscaling target first, or it scales straight back up)..."
+aws application-autoscaling register-scalable-target \
+  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+  --resource-id service/fleet-homelab/fleet --min-capacity 0 --max-capacity 0 >/dev/null
+aws ecs update-service --cluster fleet-homelab --service fleet --desired-count 0 >/dev/null
+
+echo "Stopping Aurora cluster..."
+aws rds stop-db-cluster --db-cluster-identifier fleet-homelab >/dev/null
+
+echo "Idled. Redis, ALB, WAF, and NAT Gateway continue billing (they have no stop state)."
+echo "For real savings, use down.sh instead — this only pauses Fargate + Aurora compute."
+```
+
+- [ ] **Step 2: Write `scripts/resume.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Starting Aurora cluster..."
+aws rds start-db-cluster --db-cluster-identifier fleet-homelab >/dev/null
+echo "Waiting for Aurora to become available..."
+INSTANCE_ID=$(aws rds describe-db-instances \
+  --filters "Name=db-cluster-id,Values=fleet-homelab" \
+  --query 'DBInstances[0].DBInstanceIdentifier' --output text)
+aws rds wait db-instance-available --db-instance-identifier "$INSTANCE_ID"
+
+echo "Restoring the autoscaling range (matches fleet.tf: min 1 / max 2) and scaling Fleet to 1..."
+aws application-autoscaling register-scalable-target \
+  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+  --resource-id service/fleet-homelab/fleet --min-capacity 1 --max-capacity 2 >/dev/null
+aws ecs update-service --cluster fleet-homelab --service fleet --desired-count 1 >/dev/null
+echo "Waiting for the service to stabilize..."
+aws ecs wait services-stable --cluster fleet-homelab --services fleet
+
+echo "Resumed. Check https://$(cd "$(dirname "$0")/.." && terraform output -raw fleet_url 2>/dev/null || echo '<your fleet subdomain>')/healthz"
+```
+
+- [ ] **Step 3: Write `scripts/up.sh`** — finds the latest teardown snapshot dynamically via the AWS API rather than a local file. An earlier draft of this task used a gitignored `.last-rds-snapshot` file written by `down.sh` — that breaks the moment either script runs somewhere other than the same persistent local checkout (e.g. a GitHub Actions runner, which starts fresh every run with no memory of a prior one — see Task 15). Querying AWS directly for the most recent snapshot matching this project's naming convention works identically whether run locally or in CI, so there's no reason to prefer the fragile version even for local-only use.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+SNAPSHOT_ARGS=()
+if [ "${1:-}" != "--fresh" ]; then
+  SNAPSHOT_ID=$(aws rds describe-db-cluster-snapshots \
+    --snapshot-type manual \
+    --query "sort_by(DBClusterSnapshots[?starts_with(DBClusterSnapshotIdentifier, 'fleet-homelab-teardown-')], &SnapshotCreateTime)[-1].DBClusterSnapshotIdentifier" \
+    --output text)
+  if [ -n "$SNAPSHOT_ID" ] && [ "$SNAPSHOT_ID" != "None" ]; then
+    echo "Restoring from snapshot: $SNAPSHOT_ID (pass --fresh to skip and start empty)"
+    SNAPSHOT_ARGS=(-var "rds_snapshot_identifier=$SNAPSHOT_ID")
+  else
+    echo "No teardown snapshot found — creating an empty database."
+  fi
+else
+  echo "--fresh passed — creating an empty database."
+fi
+
+# ${arr[@]+"${arr[@]}"} keeps macOS bash 3.2 + `set -u` from erroring on an empty array
+terraform apply -input=false -var-file=terraform.tfvars ${SNAPSHOT_ARGS[@]+"${SNAPSHOT_ARGS[@]}"} -auto-approve
+echo "Up. This can take 15-20 minutes for VPC/NAT/Aurora/ALB/ECS to fully stabilize even after apply returns."
+```
+
+- [ ] **Step 4: Write `scripts/down.sh`** — snapshots Aurora before destroying it, and deliberately leaves `module.mdm`, the private-key secret, the software-installers bucket, `module.ses`, the Firehose/S3 buckets, Route 53/ACM, and the budget alert untouched. `module.fleet` now includes the VPC (it's the root module — see Task 3), so `-target=module.fleet` tears down the VPC, NAT Gateway, Aurora, Redis, ALB, and ECS together; no separate VPC target needed. The confirmation prompt is skippable via a `CONFIRM=destroy` environment variable, so the same script works unattended from Task 15's CI workflow without changing its logic.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "This will destroy the VPC (incl. NAT Gateway), Aurora, Redis, ALB, ECS, WAF,"
+echo "monitoring, and the migrations runner, after snapshotting Aurora first."
+echo "NOT destroyed: Route 53 hosted zone, ACM cert, Terraform state backend,"
+echo "MDM secrets (Apple certs), the Fleet server private key, the software-"
+echo "installers bucket, SES identity, Firehose/S3 log buckets, and the AWS"
+echo "Budget alert."
+
+if [ "${CONFIRM:-}" != "destroy" ]; then
+  read -p "Type 'destroy' to confirm: " confirm
+else
+  confirm="$CONFIRM"
+fi
+if [ "$confirm" != "destroy" ]; then
+  echo "Aborted."
+  exit 1
+fi
+
+SNAPSHOT_ID="fleet-homelab-teardown-$(date +%Y%m%d%H%M%S)"
+echo "Snapshotting Aurora as $SNAPSHOT_ID..."
+aws rds create-db-cluster-snapshot \
+  --db-cluster-identifier fleet-homelab \
+  --db-cluster-snapshot-identifier "$SNAPSHOT_ID" \
+  --tags Key=Project,Value=fleet-lab Key=ManagedBy,Value=terraform >/dev/null
+aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$SNAPSHOT_ID"
+echo "Snapshot complete: $SNAPSHOT_ID"
+
+terraform destroy -input=false -var-file=terraform.tfvars \
+  -target=module.migrations \
+  -target=module.monitoring \
+  -target=module.waf \
+  -target=module.fleet \
+  -auto-approve
+
+echo "Down. Route 53 zone, ACM cert, TF state backend, MDM secrets, private key,"
+echo "installers bucket, SES, log buckets, and budget alert all remain. Run"
+echo "scripts/up.sh to rebuild — it automatically finds and restores from"
+echo "snapshot $SNAPSHOT_ID."
+echo "Each teardown leaves a manual snapshot that bills until deleted. Prune old"
+echo "ones, keeping the newest, e.g.: aws rds describe-db-cluster-snapshots"
+echo "--snapshot-type manual --query 'DBClusterSnapshots[].DBClusterSnapshotIdentifier'"
+echo "then aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <id>."
+```
+
+- [ ] **Step 5: Make them executable and verify**
+
+Run: `chmod +x scripts/*.sh && ls -l scripts/`
+Expected: all four scripts show the executable bit set.
+
+- [ ] **Step 6: Smoke-test `idle.sh` / `resume.sh`** (safe — no data loss, seconds to reverse)
+
+Run: `./scripts/idle.sh` then `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].desiredCount'`
+Expected: `0`
+Run: `./scripts/resume.sh` then re-run the same describe-services command.
+Expected: `1`, and `curl -sI https://<fleet_subdomain>/healthz` returns `HTTP/2 200` again.
+
+- [ ] **Step 7: Smoke-test `down.sh` / `up.sh`** — this is the one worth actually rehearsing, since it's the primary day-to-day pattern. Before running it, note the host count and org name in the Fleet UI so you have something concrete to check afterward.
+
+Run: `./scripts/down.sh` (type `destroy` to confirm), then `./scripts/up.sh`.
+Expected: `up.sh` reports restoring from the snapshot `down.sh` just took; once `terraform apply` finishes and the ECS service stabilizes (`aws ecs wait services-stable --cluster fleet-homelab --services fleet`), log into `https://<fleet_subdomain>` and confirm the org name, host count, and your break-glass/GitOps-CI accounts are all exactly as they were before teardown.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add scripts/
+git commit -m "Add idle/resume and up/down cost-control scripts with Aurora snapshot restore"
+```
+
+---
+
+### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
+
+Up to this task, every `terraform apply`/`plan`/`destroy` — including `up.sh`/`down.sh` — runs from your own machine with your own AWS credentials. This task moves day-to-day `up`/`down`/`plan` to a manually-triggered GitHub Actions workflow, so they're runnable from anywhere (GitHub's UI, the mobile app, `gh workflow run` from any machine) without your laptop present. It's explicitly **not** auto-apply-on-push — you still press the button — because an infra `destroy` is a lot more consequential than a Fleet config sync, and this deployment's whole shape (mostly torn down) doesn't suit "apply whenever something merges" anyway. Local runs remain available for testing (`terraform plan` while iterating on `.tf` files), but shouldn't be the normal way `up`/`down` get triggered going forward.
+
+**This repo is public (a portfolio piece), so the workflow runs on GitHub-hosted runners (`ubuntu-latest`), not a self-hosted one.** GitHub-hosted runners are free and unlimited for public repos, and — the real reason — GitHub explicitly warns against self-hosted runners on public repos: a fork pull request can edit the workflow file and run code on the runner, which here would be a machine on your home network. A GitHub-hosted job is a throwaway VM with no route to your LAN. (An earlier draft of this plan used a Proxmox LXC runner; that was dropped when the repo went public. Proxmox is still used for Grafana in Task 17.) OIDC works the same either way: GitHub mints the token server-side, so nothing about the trust setup depends on where the runner lives.
+
+**Public-repo security model.** Only you have write access, so only you can merge, approve, dispatch workflows, or push branches. Strangers can open PRs from forks, but a fork PR gets no Actions secrets and a read-only token, and (with Step 5's setting) its workflows don't run at all until you approve them. The AWS side is the second lock: the apply role's trust is pinned to `workflow_dispatch` on `main` in this repo's immutable ID, so nothing a fork does can assume it.
+
+**Two roles, not one** (an independent review found the single-role design could grant itself admin): an **apply role** for `up`/`down`/`plan` runs, assumable only by `workflow_dispatch` runs on `main`, and a **read-only plan role** for Task 16's pull-request checks, assumable only from the `pull_request` context. The apply role cannot modify either role or either role's policy (explicit `Deny`), so **any future change to `oidc.tf` gets applied locally as your admin SSO user, not by CI** — a `up` run that finds a pending `oidc.tf` diff will fail with `AccessDenied` on purpose, which is the signal to apply it by hand.
+
+**Files:**
+- Create: `oidc.tf`
+- Create: `.github/workflows/terraform.yml`
+- Create: `.github/CODEOWNERS`
+- Modify: `variables.tf` (three GitHub ID variables)
+
+**Interfaces:**
+- Consumes: `scripts/up.sh`, `scripts/down.sh` (Task 14) — the workflow calls these directly rather than duplicating their logic, so local and CI runs can never drift apart. Also the repo's numeric GitHub owner/repo IDs (Step 2 — this is why the repo gets pushed to GitHub *first* in this task, before `oidc.tf` is even written).
+- Produces: outputs `github_actions_apply_role_arn` and `github_actions_plan_role_arn` — substituted by hand into the two workflow files, same as the account ID in `backend.tf`.
+
+- [ ] **Step 1: Authenticate `gh`, pass the public-readiness gate, then push this repo to GitHub as a PUBLIC repo.** (If the repo was already published earlier in the project, skip to Step 2.) `gh` needs `gh auth login` (HTTPS + browser). The push has to happen before `oidc.tf` is written (see Step 2). **Creating a public repo is an outward-facing, effectively irreversible publish — confirm immediately before running the `gh repo create`.**
+
+**Public-readiness gate — every item must pass before the first push** (history can't be cleanly un-published afterwards):
+1. **Author email.** `git log --format='%ae %ce' | sort -u` must show only the GitHub noreply address (`<id>+<login>@users.noreply.github.com`; the numeric ID comes from `gh api user --jq .id`). If not, back up (`git bundle create ~/fleet-homelab-infra.bundle --all`), rewrite the history (no remote exists yet, so this is safe), and set `git config user.email` to the noreply address.
+2. **No personal email in tracked files or history.** The Task 13 budget-alert address comes from a gitignored variable (`budget_alert_email`), never a literal. Both of these must print nothing: `git grep -niE '[a-z0-9._+-]+@(icloud|gmail|outlook|hotmail|yahoo)\.com'` (files) and `git log --all --oneline -G'[a-z0-9._+-]+@(icloud|gmail|outlook|hotmail|yahoo)\.com'` (history — an address scrubbed from the current files still sits in old commits; if it shows up there, rewrite the history, e.g. `git filter-repo --replace-text`, or squash to a fresh initial commit).
+3. **No secrets, ever.** Scan the full history for the license key and the Cloudflare token (`git log --all -p -S<first 24 chars>`), and confirm `git log --all --name-only` never lists a `*.tfvars` (other than `example.tfvars`), state, plan or key file.
+4. **Read the plan and spec once as a stranger would.** They describe the security design (break-glass admin, SSO, MFA); that's fine to publish, but nothing in them may contain a real credential, internal address or personal detail.
+
+```bash
+gh auth status || gh auth login
+gh repo create fleet-homelab-infra --public --source=. --push
+```
+
+- [ ] **Step 2: Get this repo's immutable numeric owner/repo IDs, and add them as Terraform variables.** Checked during execution, not something the original draft accounted for: **GitHub Actions OIDC tokens for any repository created after July 15, 2026 use an immutable subject-claim format by default** — `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` instead of `repo:OWNER/REPO:...` — verified against GitHub's own changelog. This repo is created today, so it gets the new format with no opt-in. The old `repo:<owner>/fleet-homelab-infra:*` pattern would never match a real token.
+
+```bash
+gh api repos/<owner>/fleet-homelab-infra --jq '{owner_id: .owner.id, repo_id: .id}'
+```
+
+Add to `variables.tf`:
+
+```hcl
+variable "github_owner" {
+  description = "GitHub username/org that owns this repo"
+  type        = string
+}
+
+variable "github_owner_id" {
+  description = "Numeric GitHub owner ID (immutable) -- needed for the post-2026-07-15 immutable OIDC subject-claim format."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID (immutable) -- same reasoning as github_owner_id."
+  type        = string
+}
+```
+
+And the three values to `terraform.tfvars` (gitignored). CI doesn't need them stored anywhere: the workflows read them from the `github` context (`github.repository_owner`, `github.repository_owner_id`, `github.repository_id` — all three verified in GitHub's contexts reference).
+
+- [ ] **Step 3: Write `oidc.tf`.** The standard recipe for federating GitHub Actions to AWS without static keys: a `tls_certificate` data source reads GitHub's OIDC thumbprint (thumbprint validation is still part of the provider resource in 2025–26). The apply role trusts exactly one `sub` (`workflow_dispatch` run on `main` — a dispatch from any other branch carries a different `sub` and is refused); the plan role trusts exactly the `pull_request` `sub`. Both `sub` formats follow GitHub's statement that the branch/PR context "still appears after the repository segment" of the new format; the `pull_request` form is inferred from that sentence and the legacy `repo:ORG/REPO:pull_request` shape, not seen in a real token — see the check in Step 9.
+
+```hcl
+data "tls_certificate" "github_actions" {
+  url = "https://token.actions.githubusercontent.com/.well-known/openid-configuration"
+}
+
+locals {
+  account_id        = data.aws_caller_identity.current.account_id
+  github_sub_prefix = "repo:${var.github_owner}@${var.github_owner_id}/fleet-homelab-infra@${var.github_repo_id}"
+}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.github_actions.certificates[0].sha1_fingerprint]
+}
+
+# ---------- Apply role: up / down / plan, workflow_dispatch on main only ----------
+
+resource "aws_iam_role" "github_actions_apply" {
+  name = "fleet-homelab-github-actions"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github_actions.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "${local.github_sub_prefix}:ref:refs/heads/main"
+        }
+      }
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "github_actions_apply" {
+  # Every AWS service the stack touches, derived from the resource types the
+  # root module + addons actually create (not guessed): VPC/EC2, RDS, ElastiCache,
+  # ECS + Application Auto Scaling (byo-ecs creates aws_appautoscaling_*), ELB,
+  # WAFv2, CloudWatch (+ Logs), SES, Route 53, ACM, Firehose, Budgets.
+  # No Lambda/Events/SNS: only the monitoring addon's unused cron_monitoring path
+  # creates Lambda/Events, and no SNS topic is wired up.
+  statement {
+    sid    = "CoreInfraServices"
+    effect = "Allow"
+    actions = [
+      "ec2:*", "rds:*", "elasticache:*", "ecs:*", "application-autoscaling:*",
+      "elasticloadbalancing:*", "wafv2:*", "cloudwatch:*", "logs:*", "ses:*",
+      "sesv2:*", "route53:*", "acm:*", "firehose:*", "budgets:*",
+      "sts:GetCallerIdentity",
+    ]
+    resources = ["*"]
+  }
+
+  # Secrets Manager: every secret this stack creates is named fleet* (fleet-scep,
+  # fleet-homelab/fleet-server-private-key, fleet-homelab-database-password).
+  statement {
+    sid       = "SecretsManagerFleetOnly"
+    effect    = "Allow"
+    actions   = ["secretsmanager:*"]
+    resources = ["arn:aws:secretsmanager:*:${local.account_id}:secret:fleet*"]
+  }
+
+  statement {
+    sid       = "SecretsManagerList"
+    effect    = "Allow"
+    actions   = ["secretsmanager:ListSecrets"]
+    resources = ["*"]
+  }
+
+  # KMS: this deployment uses AWS-managed keys only (no CMKs), so no key
+  # creation/policy-editing. Use of those keys is allowed only when a stack
+  # service is the caller.
+  statement {
+    sid       = "KmsRead"
+    effect    = "Allow"
+    actions   = ["kms:Describe*", "kms:List*", "kms:Get*"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "KmsUseViaStackServices"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant", "kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*", "kms:ReEncrypt*"]
+    resources = ["*"]
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values = [
+        "rds.*.amazonaws.com", "elasticache.*.amazonaws.com", "secretsmanager.*.amazonaws.com",
+        "s3.*.amazonaws.com", "logs.*.amazonaws.com", "firehose.*.amazonaws.com",
+        "ecs.*.amazonaws.com", "ec2.*.amazonaws.com", "ses.*.amazonaws.com",
+      ]
+    }
+  }
+
+  # S3: this project's own buckets (fleet-homelab-tfstate-*, -osquery-*, -audit) plus the
+  # ECS module's software-installers bucket, which the module names itself with the
+  # default prefix fleet-software-installers- (verified in byo-ecs variables.tf).
+  statement {
+    sid     = "ProjectS3Buckets"
+    effect  = "Allow"
+    actions = ["s3:*"]
+    resources = [
+      "arn:aws:s3:::fleet-homelab-*", "arn:aws:s3:::fleet-homelab-*/*",
+      "arn:aws:s3:::fleet-software-installers-*", "arn:aws:s3:::fleet-software-installers-*/*",
+    ]
+  }
+
+  # IAM read is account-wide (Terraform refresh needs it); IAM *write* is limited to
+  # role/policy names the stack creates: fleet* (byo-ecs's fleet-role / fleet-execution-role,
+  # this project's own names) and terraform-* (the AWS provider's auto-generated name for
+  # resources with no explicit name — the Firehose roles and the SES/MDM policies have none,
+  # verified in the addon source). Unlike a bare "*", this stops the role from touching any
+  # existing role in the account (your SSO admin role, service roles) — e.g. rewriting its
+  # trust policy and assuming it. If a first apply hits AccessDenied on an IAM ARN outside
+  # these patterns, the error names it: widen this locally and re-apply.
+  statement {
+    sid       = "IamRead"
+    effect    = "Allow"
+    actions   = ["iam:Get*", "iam:List*"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "IamManageStackRolesAndPolicies"
+    effect = "Allow"
+    actions = [
+      "iam:CreateRole", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:CreatePolicy", "iam:DeletePolicy",
+      "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:TagPolicy", "iam:UntagPolicy",
+    ]
+    resources = [
+      "arn:aws:iam::${local.account_id}:role/fleet*", "arn:aws:iam::${local.account_id}:role/terraform-*",
+      "arn:aws:iam::${local.account_id}:policy/fleet*", "arn:aws:iam::${local.account_id}:policy/terraform-*",
+    ]
+  }
+
+  # Roles may only be handed to the services that consume them here: ECS tasks
+  # (task + execution roles), Firehose, RDS enhanced monitoring. Verify at execution:
+  # a PassRole AccessDenied naming another service means add it here.
+  statement {
+    sid     = "PassStackRolesToStackServices"
+    effect  = "Allow"
+    actions = ["iam:PassRole"]
+    resources = [
+      "arn:aws:iam::${local.account_id}:role/fleet*", "arn:aws:iam::${local.account_id}:role/terraform-*",
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com", "firehose.amazonaws.com", "monitoring.rds.amazonaws.com"]
+    }
+  }
+
+  statement {
+    sid       = "ServiceLinkedRoles"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::*:role/aws-service-role/*"]
+  }
+
+  # No IAM *user* write actions and no OIDC-provider write actions are granted at all:
+  # Task 17's aws_iam_user/access key and the OIDC provider above are applied locally
+  # by an admin; CI only refreshes them (read-only). A CI role that could PutUserPolicy
+  # on a user it can also mint access keys for would be an admin-in-two-steps.
+
+  # The role cannot change its own (or the plan role's) trust, policies, or boundary.
+  statement {
+    sid     = "DenyChangingCiRolesAndPolicies"
+    effect  = "Deny"
+    actions = [
+      "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy", "iam:UpdateRole", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+      "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion",
+      "iam:DeletePolicy", "iam:TagPolicy", "iam:UntagPolicy",
+    ]
+    resources = [
+      "arn:aws:iam::${local.account_id}:role/fleet-homelab-github-actions*",
+      "arn:aws:iam::${local.account_id}:policy/fleet-homelab-github-actions*",
+    ]
+  }
+
+  # Belt and braces on top of the name scoping: no fully-broad managed policy on any role.
+  statement {
+    sid       = "DenyAttachingBroadManagedPolicies"
+    effect    = "Deny"
+    actions   = ["iam:AttachRolePolicy"]
+    resources = ["*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "iam:PolicyARN"
+      values = [
+        "arn:aws:iam::aws:policy/AdministratorAccess",
+        "arn:aws:iam::aws:policy/PowerUserAccess",
+        "arn:aws:iam::aws:policy/IAMFullAccess",
+      ]
+    }
+  }
+
+  # The role authenticates via OIDC and never needs to assume anything. Same-account
+  # trust policies that name this role's ARN would otherwise grant AssumeRole with no
+  # identity-policy Allow at all, so a role it creates could hand it new powers.
+  statement {
+    sid       = "DenyAssumingOtherRoles"
+    effect    = "Deny"
+    actions   = ["sts:AssumeRole"]
+    resources = ["*"]
+  }
+
+  # Fargate-only stack: nothing it manages launches a raw EC2 instance.
+  statement {
+    sid       = "DenyStandaloneComputeLaunch"
+    effect    = "Deny"
+    actions   = ["ec2:RunInstances"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "github_actions_apply" {
+  name   = "fleet-homelab-github-actions"
+  policy = data.aws_iam_policy_document.github_actions_apply.json
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_apply" {
+  role       = aws_iam_role.github_actions_apply.name
+  policy_arn = aws_iam_policy.github_actions_apply.arn
+}
+
+# ---------- Plan role: read-only, pull_request context only (Task 16) ----------
+
+resource "aws_iam_role" "github_actions_plan" {
+  name = "fleet-homelab-github-actions-plan"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github_actions.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "${local.github_sub_prefix}:pull_request"
+        }
+      }
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "github_actions_plan" {
+  # Describe/List/Get only, for the services the state tracks. Deliberately not the
+  # AWS-managed ReadOnlyAccess policy, which would also allow reading the contents
+  # of every S3 bucket in the account. A plan that hits AccessDenied on a read call
+  # names it: add it here (locally).
+  statement {
+    sid    = "ReadStackServices"
+    effect = "Allow"
+    actions = [
+      "ec2:Describe*", "rds:Describe*", "rds:List*", "elasticache:Describe*", "elasticache:List*",
+      "ecs:Describe*", "ecs:List*", "application-autoscaling:Describe*", "application-autoscaling:List*",
+      "elasticloadbalancing:Describe*", "wafv2:Get*", "wafv2:List*", "wafv2:Describe*",
+      "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*", "logs:Describe*", "logs:ListTagsForResource",
+      "ses:Get*", "ses:List*", "ses:Describe*", "sesv2:Get*", "sesv2:List*", "route53:Get*", "route53:List*",
+      "acm:Describe*", "acm:List*", "firehose:Describe*", "firehose:List*", "budgets:ViewBudget",
+      "iam:Get*", "iam:List*", "kms:Describe*", "kms:List*", "kms:Get*", "sts:GetCallerIdentity", "tag:GetResources",
+    ]
+    resources = ["*"]
+  }
+
+  # Terraform's refresh reads secret_version resources (the private key, the Aurora
+  # password) — unavoidable for a real plan, and the state file it reads holds the same
+  # values in plaintext anyway. Scoped to fleet* secrets only.
+  statement {
+    sid       = "ReadFleetSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy", "secretsmanager:ListSecrets"]
+    resources = ["*"]
+    condition {
+      test     = "StringLike"
+      variable = "secretsmanager:SecretId"
+      values   = ["arn:aws:secretsmanager:*:${local.account_id}:secret:fleet*"]
+    }
+  }
+
+  # Bucket-level reads on project buckets (config only), object reads on the state bucket only —
+  # not the osquery/audit log buckets' contents. The plan runs with -lock=false (Task 16), so
+  # it needs no S3 write at all.
+  statement {
+    sid       = "ReadProjectBucketConfig"
+    effect    = "Allow"
+    actions   = ["s3:Get*", "s3:List*"]
+    resources = ["arn:aws:s3:::fleet-homelab-*", "arn:aws:s3:::fleet-software-installers-*"]
+  }
+
+  statement {
+    sid       = "ReadTerraformState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::fleet-homelab-tfstate-*/*"]
+  }
+}
+
+resource "aws_iam_policy" "github_actions_plan" {
+  name   = "fleet-homelab-github-actions-plan"
+  policy = data.aws_iam_policy_document.github_actions_plan.json
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_plan" {
+  role       = aws_iam_role.github_actions_plan.name
+  policy_arn = aws_iam_policy.github_actions_plan.arn
+}
+
+output "github_actions_apply_role_arn" {
+  value = aws_iam_role.github_actions_apply.arn
+}
+
+output "github_actions_plan_role_arn" {
+  value = aws_iam_role.github_actions_plan.arn
+}
+```
+
+**What this is, stated plainly rather than oversold**: *scoped*, not formally least-privilege. Verified against IAM semantics: an earlier single-role draft (`iam:CreatePolicyVersion`/`PutRolePolicy`/`UpdateAssumeRolePolicy` on `*`, only `AttachRolePolicy` denied) let a compromised token rewrite its own policy — or any role's trust policy, including your SSO admin role — and become admin. What now closes that: IAM write limited to `fleet*`/`terraform-*` names, an explicit deny on changing either CI role or policy, no `sts:AssumeRole`, no IAM-user or OIDC-provider writes, `PassRole` limited to three consuming services, Secrets Manager and S3 scoped by name. **What remains, and can't be closed cheaply**: a compromised apply token can still create a new `fleet*`/`terraform-*` role with any policy and run code as it in an ECS task it also defines — closing that needs a permissions-boundary condition on every role it creates, and Fleet's modules expose no `permissions_boundary` input (grep of the whole repo finds none). It can also read the `fleet*` secrets and the state. The mitigation that fits is the trust policy: only a `workflow_dispatch` on `main` in your own private repo can assume it, and on a free GitHub plan private-repo branch protection isn't available, so anyone who can push to `main` (you) can change what it runs. An optional stronger gate, not built here: a GitHub Environment with a required reviewer, trusting `…:environment:<name>` instead of the `ref:refs/heads/main` subject, costs one approval click per run. Managed-policy size limit is 6,144 non-whitespace characters — this document is well under it, but check if you add to it.
+
+- [ ] **Step 4: Init, plan, and apply locally (as your admin SSO user), then record the ARNs.** This step adds the `tls` provider, so `terraform init` must run again before `validate` (a bare `validate` would fail with "provider not installed"). Regenerate the lock file for the platforms that will use it — you're on macOS, the runner is Linux, and a lock file with only macOS hashes can fail `terraform init` on the runner.
+
+```bash
+terraform init -upgrade=false
+terraform providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64
+terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan
+terraform output github_actions_apply_role_arn
+terraform output github_actions_plan_role_arn
+```
+
+Expected: two ARNs like `arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-actions` and `…-actions-plan` — save both for Step 7 and Task 16.
+
+- [ ] **Step 5: Lock down the public repo.** (Replaces the earlier Proxmox-runner provisioning: with a public repo, the risk to manage is fork PRs and Actions permissions, not a self-hosted machine.) In the repo's Settings — GitHub moves these labels around, so verify each at execution:
+  1. **Actions → General → Fork pull request workflows:** "Require approval for all outside collaborators". Leave "send write tokens" and "send secrets" to fork-PR workflows **off**.
+  2. **Actions → General → Workflow permissions:** "Read repository contents" only, and untick "Allow GitHub Actions to create and approve pull requests". API equivalent (verify the endpoint at execution): `gh api -X PUT repos/<owner>/fleet-homelab-infra/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false`.
+  3. **Actions → General → Actions permissions:** allow GitHub-owned actions plus only the `aws-actions/*` and `hashicorp/*` ones the workflows use; pin those third-party actions to full commit SHAs in the workflow files (Step 7), and add a Dependabot `github-actions` update config so the pins get refreshed.
+  4. **Code security:** enable secret scanning, push protection, Dependabot alerts, and **private vulnerability reporting** (the README points reporters to the Security tab, which only works once this is on) — all free on public repos.
+  5. **Ruleset on `main`** (Settings → Rules → Rulesets): require a pull request before merging with **0 required approvals** (GitHub does not let an author approve their own PR, and it doesn't matter here — only you have write access), require the `plan` status check once Task 16 exists, block force-pushes and deletions; put yourself (repository admin) on the bypass list so you can still push directly.
+  6. **Collaborators:** confirm Settings → Collaborators lists nobody but you. Outsiders can still *open* PRs from forks — that can't be turned off on a public repo as far as verified (GitHub's interaction limits can restrict it to collaborators for up to 6 months; check for any newer "restrict pull requests" setting) — but they can't merge, approve, run unapproved workflows, or read secrets.
+  7. **Optional, not recommended here:** a `production` environment with a required reviewer. Setting `environment:` on a job changes the OIDC `sub` claim to the `...:environment:production` form, so `oidc.tf`'s trust condition would have to change with it.
+
+Verify: `gh api repos/<owner>/fleet-homelab-infra --jq '{visibility, has_issues}'` shows `public`; the settings above read back correctly in the UI. The real proof of the fork-PR controls is a manual test with a second GitHub account (or a throwaway one): fork the repo, open a PR that edits `.github/workflows/`, and confirm the run sits waiting for your approval and that no secrets or AWS role are available to it. Do this once after Step 9.
+
+- [ ] **Step 6: Add `CODEOWNERS` and commit**
+
+```bash
+mkdir -p .github && printf '* @<owner>\n' > .github/CODEOWNERS
+git add .github/CODEOWNERS
+git commit -m "Add CODEOWNERS"
+```
+
+- [ ] **Step 7: Write `.github/workflows/terraform.yml`** — `runs-on: ubuntu-latest` (GitHub-hosted). Action majors verified current at execution (`checkout` v7, `configure-aws-credentials` v6, `setup-terraform` v4) and, per Step 5, pinned to full commit SHAs (keep the tag as a trailing comment). `terraform_version` pinned to the 1.14.8 you run locally. Inputs reach the shell only through `env:`, never spliced into script text. The `terraform.tfvars` step builds the file from repo secrets plus the three GitHub IDs, all read from the `github` context (verified); `printf` writes it with no leading whitespace (an earlier heredoc version indented every line). The hosted VM is discarded after the run, but the file holding the license key is still deleted at the end whether the run succeeded or not (belt and braces).
+
+```yaml
+name: Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to run"
+        required: true
+        type: choice
+        options:
+          - plan
+          - up
+          - down
+      confirm:
+        description: "Required for 'down' — type exactly: destroy"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-actions
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: Write terraform.tfvars
+        env:
+          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
+          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER_ID: ${{ github.repository_owner_id }}
+          GH_REPO_ID: ${{ github.repository_id }}
+        run: |
+          {
+            printf 'fleet_subdomain   = "%s"\n' "$FLEET_SUBDOMAIN"
+            printf 'fleet_license_key = "%s"\n' "$FLEET_LICENSE_KEY"
+            printf 'cloudflare_api_token = "%s"\n' "$CLOUDFLARE_API_TOKEN"
+            printf 'cloudflare_zone_name = "%s"\n' "$CLOUDFLARE_ZONE_NAME"
+            printf 'budget_alert_email = "%s"\n' "$BUDGET_ALERT_EMAIL"
+            printf 'github_owner      = "%s"\n' "$GH_OWNER"
+            printf 'github_owner_id   = "%s"\n' "$GH_OWNER_ID"
+            printf 'github_repo_id    = "%s"\n' "$GH_REPO_ID"
+          } > terraform.tfvars
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: Plan
+        if: inputs.action == 'plan'
+        run: terraform plan -input=false -var-file=terraform.tfvars
+
+      - name: Up
+        if: inputs.action == 'up'
+        run: ./scripts/up.sh
+
+      - name: Down
+        if: inputs.action == 'down'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: ./scripts/down.sh
+
+      - name: Remove terraform.tfvars
+        if: always()
+        run: rm -f terraform.tfvars
+```
+
+Substitute the real apply-role ARN from Step 4 in place of `<ACCOUNT_ID>` (your account is where `backend.tf` already points). `scripts/up.sh` and `scripts/down.sh` also need `-input=false` on their `terraform` calls so a missing variable fails fast instead of hanging on a prompt in CI.
+
+- [ ] **Step 8: Add the five GitHub Actions repo secrets this workflow needs**
+
+```bash
+gh secret set FLEET_SUBDOMAIN --body "<fleet_subdomain>"
+gh secret set FLEET_LICENSE_KEY --body "<your real Fleet Premium license key>"
+gh secret set CLOUDFLARE_ZONE_NAME --body "<apex zone, e.g. example.com>"
+gh secret set CLOUDFLARE_API_TOKEN   # prompts for the value so it never lands in shell history
+gh secret set BUDGET_ALERT_EMAIL     # prompts; this repo is public, so the address must never be committed
+```
+
+- [ ] **Step 9: Verify with a `plan` run**
+
+Run: `gh workflow run Terraform -f action=plan && gh run watch`
+Expected: the run executes on a GitHub-hosted runner and its log shows a `terraform plan` with no unexpected changes (the stack already matches what Tasks 3-14 applied locally).
+
+If `configure-aws-credentials` fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, the `sub` in the trust policy doesn't match what GitHub actually issued — print the real one and compare it to `oidc.tf` character for character (the immutable format and the `pull_request` form in particular were not seen in a real token when this plan was written):
+
+```bash
+# add as a temporary step before configure-aws-credentials (`jq` is preinstalled on ubuntu-latest)
+curl -sH "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
+  | jq -r .value | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .sub
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add oidc.tf variables.tf .terraform.lock.hcl .github/workflows/terraform.yml
+git commit -m "Add GitHub Actions OIDC roles (apply + read-only plan) and workflow_dispatch-triggered up/down/plan"
+```
+
+---
+
+### Task 16: PR-triggered `terraform plan` checks — closing the GitOps loop for infra
+
+The last piece: infra changes should go through a reviewed pull request that shows what would change, the same way the GitOps repo's PRs get a dry-run. This task adds that check without adding auto-apply-on-merge — see Task 15's opening note for why the latter is a bad fit here. The result: propose a `.tf` change → open a PR → CI shows the plan → merge → next time you run `up` (Task 15, on-demand), it deploys exactly what's on `main`. Git is the source of truth throughout; nothing ever applies from an uncommitted local change once this is in place.
+
+This workflow assumes the **read-only plan role** from Task 15, not the apply role: a pull-request workflow runs the workflow file from the PR's own branch, so anything that can assume its role is only as trustworthy as whoever can open a PR. The plan role can read the stack and state but can't change anything. Fork PRs aren't a concern on a private repo with no collaborators — GitHub gives fork-triggered `pull_request` runs no secrets and no OIDC token anyway — but it's worth knowing if the repo is ever made public or gets collaborators.
+
+**Files:**
+- Create: `.github/workflows/terraform-plan.yml`
+
+**Interfaces:**
+- Consumes: `github_actions_plan_role_arn` (Task 15). Runs on GitHub-hosted runners like the apply workflow.
+
+- [ ] **Step 1: Write `.github/workflows/terraform-plan.yml`.** Fixes from an independent review: the plan text used to be interpolated straight into the JavaScript source (`${{ steps.plan.outputs.stdout }}` inside a template literal), so a plan containing a backtick or `${` could inject code — it now travels through an environment variable and is read at runtime as data. `terraform_wrapper: false` means no dependency on a system `node` (the wrapper is what would have exposed `steps.<id>.outputs.stdout`), so output is captured to a file instead. `-lock=false` keeps the read-only role from needing any S3 write access (the lock file is a write) and stops a PR plan from blocking a running `up`; the tradeoff is a plan can occasionally read mid-apply state, which is harmless for a preview.
+
+```yaml
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - '**.tf'
+      - '.terraform.lock.hcl'
+      - '.github/workflows/terraform-plan.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-actions-plan
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: Write terraform.tfvars
+        env:
+          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
+          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER_ID: ${{ github.repository_owner_id }}
+          GH_REPO_ID: ${{ github.repository_id }}
+        run: |
+          {
+            printf 'fleet_subdomain   = "%s"\n' "$FLEET_SUBDOMAIN"
+            printf 'fleet_license_key = "%s"\n' "$FLEET_LICENSE_KEY"
+            printf 'cloudflare_api_token = "%s"\n' "$CLOUDFLARE_API_TOKEN"
+            printf 'cloudflare_zone_name = "%s"\n' "$CLOUDFLARE_ZONE_NAME"
+            printf 'budget_alert_email = "%s"\n' "$BUDGET_ALERT_EMAIL"
+            printf 'github_owner      = "%s"\n' "$GH_OWNER"
+            printf 'github_owner_id   = "%s"\n' "$GH_OWNER_ID"
+            printf 'github_repo_id    = "%s"\n' "$GH_REPO_ID"
+          } > terraform.tfvars
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -no-color -var-file=terraform.tfvars > plan.txt 2>&1
+          code=$?
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          cat plan.txt
+          delim="PLAN_$(openssl rand -hex 8)"
+          { echo "PLAN_OUTPUT<<$delim"; tail -c 60000 plan.txt; echo; echo "$delim"; } >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v9
+        env:
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        with:
+          script: |
+            const body = `#### Terraform Plan (exit code ${process.env.EXITCODE})\n\`\`\`\n${process.env.PLAN_OUTPUT}\n\`\`\``;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body.slice(0, 65000),
+            });
+
+      - name: Fail if plan failed
+        if: steps.plan.outputs.exitcode != '0'
+        run: exit 1
+
+      - name: Remove terraform.tfvars and plan output
+        if: always()
+        run: rm -f terraform.tfvars plan.txt
+```
+
+Substitute the real plan-role ARN from Task 15 Step 4 for `<ACCOUNT_ID>`. The 65000-character slice guards GitHub's comment size limit; `github-script@v9` is ESM-only, so the script above deliberately uses no `require()` — only the injected `github`/`context` objects and `process.env`.
+
+- [ ] **Step 2: Verify with a real PR**
+
+```bash
+git checkout -b test-plan-check
+echo "# plan-check test" >> outputs.tf   # any .tf change triggers the path filter
+git commit -am "Test PR plan check"
+git push -u origin test-plan-check
+gh pr create --title "Test PR plan check" --body "Verifying the plan-on-PR workflow"
+```
+
+Run: `gh pr checks` (or watch in the GitHub UI)
+Expected: the "Terraform Plan" check runs and posts a plan output as a PR comment within a minute or two. An `AccessDenied` in the plan names the read call the plan role is missing — add it to `github_actions_plan` in `oidc.tf` and apply that **locally** (the CI apply role can't change either role). An `AssumeRoleWithWebIdentity` failure means the `pull_request` `sub` didn't match — use the token-inspection snippet in Task 15 Step 9.
+
+- [ ] **Step 3: Clean up the test PR**
+
+```bash
+gh pr close test-plan-check --delete-branch
+git checkout main
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add .github/workflows/terraform-plan.yml
+git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop for infra"
+```
+
+---
+
+### Task 17: Grafana dashboard on Proxmox
+
+Infra health (ALB/ECS/Aurora/Redis, already collected by Task 5's monitoring addon) plus Fleet asset data (host counts, policy compliance, vulnerabilities), visualized rather than just alarmed on. Runs on Proxmox, another LXC container alongside the GitHub Actions runner — no new AWS compute cost, and the dashboard stays reachable even when the Fleet stack itself is torn down, since both data sources it queries (CloudWatch, Fleet's REST API) are public AWS/HTTPS endpoints, not something inside the VPC. This task sets up the plumbing (the container, the two data sources, the credentials each needs); the actual dashboard panels are left for you to build hands-on, since "learn how Grafana works" was the actual goal here, not a pre-built dashboard.
+
+**A deliberate exception to this whole plan's "no long-lived credentials" pattern, stated plainly**: Grafana runs outside AWS with no equivalent to GitHub's OIDC federation available to it, so its CloudWatch data source needs a real, static AWS access key. Mitigated by scoping it to CloudWatch read-only actions alone (Step 3) — it cannot create, modify, or delete anything. (Task 18 adds a second such exception, an Entra client secret, for the same underlying reason — Grafana has no federated identity path into either cloud.)
+
+**Files:**
+- Create: `scripts/proxmox/create-grafana-lxc.sh`
+- Create: `scripts/proxmox/bootstrap-grafana.sh`
+- Create: `grafana-cloudwatch.tf`
+
+**Interfaces:**
+- Consumes: nothing from earlier Terraform state directly — talks to CloudWatch and Fleet's API as an external client, the same way you would from a browser or `curl`.
+- Produces: `aws_iam_access_key.grafana_cloudwatch` (Step 3's sensitive outputs, retrieved in Step 4 and pasted into Grafana's UI in Step 6) and a read-only Fleet API token (created in Step 5, pasted into Grafana's UI in Step 7).
+
+- [ ] **Step 1: Write `scripts/proxmox/create-grafana-lxc.sh`** — run on the Proxmox host to create the container. (Grafana is the only thing on Proxmox now — the CI runner moved to GitHub-hosted in Task 15 when the repo went public.)
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Adjust these for your Proxmox environment (storage pool, template and bridge names are specific to your Proxmox host).
+VMID=901
+HOSTNAME=fleet-homelab-grafana
+TEMPLATE=local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst
+STORAGE=local-lvm
+BRIDGE=vmbr0
+CORES=2
+MEMORY=2048
+DISK_GB=10
+
+pct create "$VMID" "$TEMPLATE" \
+  --hostname "$HOSTNAME" \
+  --cores "$CORES" \
+  --memory "$MEMORY" \
+  --rootfs "${STORAGE}:${DISK_GB}" \
+  --net0 name=eth0,bridge="$BRIDGE",ip=dhcp \
+  --unprivileged 1 \
+  --onboot 1 \
+  --start 1
+
+echo "Container $VMID created and started. Waiting for network..."
+sleep 10
+pct exec "$VMID" -- bash -c "apt update && apt install -y curl gnupg sudo"
+
+echo "LXC $VMID is ready. Push and run the bootstrap script:"
+echo "  pct push $VMID scripts/proxmox/bootstrap-grafana.sh /root/bootstrap-grafana.sh"
+echo "  pct exec $VMID -- bash /root/bootstrap-grafana.sh"
+```
+
+- [ ] **Step 2: Write `scripts/proxmox/bootstrap-grafana.sh`** — installs Grafana OSS from its official apt repository, installs the Infinity plugin (Grafana Labs' own plugin for querying arbitrary REST/JSON APIs — not bundled with OSS core, confirmed via Grafana's own plugin docs, not assumed), and starts it as a systemd service.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Adding the Grafana apt repository..."
+apt update && apt install -y apt-transport-https software-properties-common wget gnupg
+mkdir -p /etc/apt/keyrings
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+  | tee /etc/apt/sources.list.d/grafana.list
+
+echo "Installing Grafana..."
+apt update && apt install -y grafana
+
+echo "Installing the Infinity data source plugin..."
+grafana-cli plugins install yesoreyeram-infinity-datasource
+
+echo "Starting Grafana..."
+systemctl enable --now grafana-server
+
+echo "Grafana is up on port 3000. Check its status: systemctl status grafana-server"
+echo "Reach it at http://<this container's IP>:3000 (default login admin/admin, changes on first login)."
+```
+
+- [ ] **Step 3: Write `grafana-cloudwatch.tf`** — the scoped, read-only IAM user for Grafana's CloudWatch data source.
+
+```hcl
+resource "aws_iam_user" "grafana_cloudwatch" {
+  name = "fleet-homelab-grafana-cloudwatch"
+}
+
+resource "aws_iam_user_policy" "grafana_cloudwatch" {
+  name = "cloudwatch-read-only"
+  user = aws_iam_user.grafana_cloudwatch.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:ListDashboards",
+        "tag:GetResources"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_access_key" "grafana_cloudwatch" {
+  user = aws_iam_user.grafana_cloudwatch.name
+}
+
+output "grafana_cloudwatch_access_key_id" {
+  value = aws_iam_access_key.grafana_cloudwatch.id
+}
+
+output "grafana_cloudwatch_secret_access_key" {
+  value     = aws_iam_access_key.grafana_cloudwatch.secret
+  sensitive = true
+}
+```
+
+Note this is a plain `aws_iam_user`, not a role — deliberately, since it exists specifically to hold the one static credential this plan otherwise avoids. No mutating CloudWatch actions, nothing outside CloudWatch.
+
+- [ ] **Step 4: Validate, plan, apply, and retrieve the key**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Then: `terraform output grafana_cloudwatch_access_key_id && terraform output -raw grafana_cloudwatch_secret_access_key`
+Save both — the secret key only prints in full via `-raw`; treat it the same as any other credential (don't paste it anywhere but Grafana's own data source config in Step 6).
+
+- [ ] **Step 5: 🎓 You run this — *(pre-flight: `fleetctl --version` → 4.92.0 and logged in, else stop; see Task 3 Step 8a)* create a read-only, API-only Fleet user for Grafana and get its API token** (logged in as an admin — the break-glass account before Task 9's MFA, or afterwards an SSO admin with a token from the UI's My account > Get API token via `fleetctl config set --token`)
+
+```bash
+fleetctl user create --name "Grafana" --global-role observer --api-only
+```
+
+Verified against Fleet v4.92.0: `--api-only` needs no email/password (there is no `--username` flag; an earlier draft used one and would have failed), and it **prints the API token once** — copy it immediately. This matters: a token obtained by `fleetctl login` as a normal user is a session token that expires (default 5 days), which would silently break Grafana's Fleet panels; an API-only user's token doesn't expire the same way, and it also doesn't depend on the break-glass account's MFA.
+
+`observer` is the least-privileged role that can still read hosts, policies, and vulnerability data — matches Grafana's actual need (read dashboards' worth of data, nothing else).
+
+- [ ] **Step 6: Configure the CloudWatch data source in Grafana**
+
+In Grafana's UI (`http://<grafana-container-ip>:3000`): Connections > Data sources > Add data source > Amazon CloudWatch. Authentication: "Access & secret key", paste the values from Step 4. Default region: `us-east-1`.
+
+- [ ] **Step 7: Configure the Infinity data source pointed at Fleet's API**
+
+Connections > Data sources > Add data source > Infinity. Under Auth: Bearer Token, paste the token from Step 5. Base URL: `https://<fleet_subdomain>`.
+
+- [ ] **Step 8: Verify both data sources connect**
+
+In the CloudWatch data source's settings page, use "Save & test" — expect a success message. For Infinity, create a test query against `/api/v1/fleet/hosts/count` (Type: JSON, no auth override needed since it's set at the data source level) and confirm it returns a number, not an error.
+
+- [ ] **Step 9: Build the dashboard.** Left open-ended on purpose. A few real, verified starting points to query against:
+  - CloudWatch: the same ALB/ECS/Aurora/Redis metrics Task 5's alarms already watch — request count and 5xx rate, CPU/memory utilization, database connections.
+  - Fleet, via Infinity: `GET /api/v1/fleet/hosts/count` (optionally repeated with `?platforms=darwin`/`windows`/`linux` for a platform breakdown), `GET /api/v1/fleet/global/policies` (each policy object includes `passing_host_count`/`failing_host_count` — verified against Fleet's own API reference), and `GET /api/v1/fleet/charts/cve` for vulnerability trends (Premium feature, available on this license).
+
+- [ ] **Step 10: Build the up/down status board.** The point of this dashboard is being able to see at a glance whether each part of the Fleet stack is up, so build this first, before any of Step 9's performance panels. One "State timeline" or "Stat" panel per component, colored green/red on a threshold:
+  - **Fleet itself** (Infinity → Fleet data source): `GET /healthz` on `https://<fleet_subdomain>`. A successful response is up; an error or timeout is down. This is the only true end-to-end check, since it goes through DNS, WAF, ALB, Fargate, and the database.
+  - **ALB targets** (CloudWatch, namespace `AWS/ApplicationELB`): `HealthyHostCount` (green when >= 1) and `UnHealthyHostCount` (red when > 0), with the `LoadBalancer` and `TargetGroup` dimensions. `HealthyHostCount` is the same metric Task 5's monitoring addon already alarms on (verified in the addon source); `UnHealthyHostCount` is a standard ALB metric, not checked against the addon.
+  - **Fargate** (CloudWatch, namespace `ECS/ContainerInsights`): `RunningTaskCount` for the `fleet` service (dimensions `ClusterName=fleet-homelab`, `ServiceName=fleet`), green when >= 1. Container Insights is enabled by default on the cluster the Fleet module creates (verified in `byo-db/variables.tf`), so this metric should exist without extra setup; confirm the panel returns data on the first run.
+  - **Aurora** (CloudWatch, `AWS/RDS`): `DatabaseConnections` and `CPUUtilization` for the cluster. Aurora has no direct up/down metric, so treat "no data" as down.
+  - **Redis** (CloudWatch, `AWS/ElastiCache`): `CurrConnections` and `EngineCPUUtilization` (both used by the monitoring addon). Same "no data means down" rule.
+  - **Alarm states**, if Grafana's CloudWatch data source can list them: the alarms Task 5 creates. Not verified — check at build time whether it's available, and skip it if not.
+
+  Two limits, worth knowing so the board isn't misread: (1) this stack is torn down most of the time by design, so a fully red board usually means "torn down on purpose", not "broken" — a dashboard cannot tell those apart; read it alongside whether you've run `up`. (2) Grafana only displays status here; it does not notify you. AWS Budgets remains the only alert this deployment sends.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add scripts/proxmox/create-grafana-lxc.sh scripts/proxmox/bootstrap-grafana.sh grafana-cloudwatch.tf
+git commit -m "Add Grafana on Proxmox: CloudWatch + Fleet API data sources"
+```
+
+---
+
+### Task 18: Entra (Microsoft Graph) data source for Grafana
+
+A third Infinity data source instance (same plugin as Task 17's Fleet API connection, different endpoint/auth) — user/sign-in activity, "Fleet Admins" group membership from Task 10, and Entra-registered devices cross-referenced against what's actually enrolled in Fleet. Written as the **Entra-specific instance of a portable pattern**, not an Entra-only design, since Okta is a real possibility later per the spec's IdP-portability note: a dedicated least-privilege service app registered with the IdP, application-level (not delegated) permissions since Grafana is a headless daemon, a client-credentials OAuth2 flow, one Infinity data source per IdP. What changes for Okta later is entirely IdP-specific — a different app-registration mechanism (an Okta API token or OAuth2 service app instead of an Entra App Registration), different endpoints (`/api/v1/users`, `/api/v1/groups/{id}/users`, `/api/v1/logs` in place of Graph's `/users`, `/groups/{id}/members`, `/auditLogs/signIns`) — not a different Grafana-side architecture.
+
+**One piece of this may not work on your tenant, checked and flagged rather than assumed**: sign-in activity via Microsoft Graph (`signInActivity` on user objects, and the `/auditLogs/signIns` endpoint) requires an Entra ID **P1 or P2** license — verified against Microsoft's own docs, and explicitly **not available on Entra ID Free**. Group membership and device listing have no such gate. Check your tenant's licensed SKUs (Entra admin center > Billing > Licenses, or `GET /organization` via Graph) before building the sign-in panel — if it's Free tier, everything else in this task still works, just not that one piece.
+
+**Files:**
+- None in this repo — the App Registration is created in the Azure portal (Entra doesn't have a Terraform-manageable resource in this project's AWS-focused state), and the data source lives entirely in Grafana's own config from Task 17.
+
+**Interfaces:**
+- Consumes: Grafana instance and Infinity plugin from Task 17.
+- Produces: a client ID/secret pasted into Grafana's third data source (Step 4), same pattern as Task 17 Step 4's AWS key.
+
+- [ ] **Step 1: Manual — register a dedicated Entra App Registration for Grafana.** Azure portal: Entra ID > App registrations > New registration. Name it something like "Grafana Graph Reader". This is a **separate** app from Task 10's SAML Enterprise Application — that one handles Fleet SSO logins, this one is Grafana's own service identity for reading tenant data, with a different purpose and different (narrower) permissions.
+
+- [ ] **Step 2: Manual — grant application permissions and admin-consent them.** In the App Registration: API permissions > Add a permission > Microsoft Graph > **Application permissions** (not Delegated — Grafana has no interactive user to authenticate as). Add:
+  - `User.Read.All`
+  - `Group.Read.All`
+  - `Device.Read.All`
+  - `AuditLog.Read.All` (only if your tenant has P1/P2 — see the license note above)
+  - `Directory.Read.All` (Microsoft's own guidance: `AuditLog.Read.All` alone intermittently fails without this too, since resolving tenant licensing info needs it)
+  
+  Click "Grant admin consent for \<tenant\>" — application permissions do nothing until explicitly consented, and since you administer this tenant yourself, you can do this directly.
+
+- [ ] **Step 3: Manual — create a client secret**, Certificates & secrets > New client secret. Record the secret value immediately (shown once), the Application (client) ID, and the Directory (tenant) ID from the app's Overview page.
+
+- [ ] **Step 4: Configure a third Infinity data source in Grafana**, pointed at Microsoft Graph. Connections > Data sources > Add data source > Infinity. Auth: OAuth2 Client Credentials — Client ID, Client Secret, and Token URL `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token` from Step 3, Scope `https://graph.microsoft.com/.default`. Base URL: `https://graph.microsoft.com/v1.0`.
+
+- [ ] **Step 5: Verify the data source connects.** Test query against `GET /groups?$filter=displayName eq 'Fleet Admins'&$select=id,displayName` — confirm it returns the group's `id` (needed for Step 6's membership query) rather than an auth error.
+
+- [ ] **Step 6: Build the panels.** Left open-ended, same as Task 17 Step 9 — a few verified starting points:
+  - Group membership: `GET /groups/{id}/members/microsoft.graph.user?$select=displayName,mail,accountEnabled` using the group ID from Step 5 (the `microsoft.graph.user` type cast is needed for `accountEnabled`/`mail` to be selectable on the members collection).
+  - Devices: `GET /devices?$select=displayName,operatingSystem,operatingSystemVersion,approximateLastSignInDateTime` — cross-reference against Fleet's own host list (Task 17's Fleet data source) for enrollment-gap panels.
+  - Sign-in activity (P1/P2 only): `GET /auditLogs/signIns?$filter=appDisplayName eq 'Fleet'&$top=50`, or `$select=signInActivity` on `/users` for last-sign-in-per-user.
+
+- [ ] **Step 7: No commit needed for the Entra-side setup** (App Registration lives in Azure, not this repo). If you added a written note of the app's client ID/tenant ID anywhere in this repo for reference (not the secret), commit that.
+
+---
+
+## Spec coverage check
+
+- Identity/SSO (Entra + break-glass + JIT provisioning + group-based role mapping): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
+- Device enrollment (Windows/macOS/Linux): Tasks 7-8 (Windows via WSTEP secret + `windows_enabled_and_configured` in Task 11; macOS via APNs cert uploaded in the Fleet UI), Task 11 fleet enroll secret covers Linux via `fleetd`. ✓
+- Infra sizing (root module, NAT on, Aurora `db.t4g.medium` no replica, Redis `t4g.small`, Fargate 512/4096): Task 3. ✓
+- WAF/Monitoring/SES: Tasks 4, 5, 6. ✓
+- DNS/TLS: Task 2. ✓
+- GitOps: Task 11. ✓
+- Osquery log destination (Firehose → S3): Task 12. ✓
+- AWS Budget alert ($100/mo, 20/40/60/80/100% thresholds): Task 13. ✓
+- Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
+- HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
+- Remote (non-laptop) execution of `up`/`down`/`plan` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
+- Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
+- Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources: Task 17. ✓
+- Entra (Microsoft Graph) data source for Grafana, portable to Okta later: Task 18. ✓
+- Two-repo layout: this repo (Tasks 1-9, 12-18) + `fleet-homelab-gitops` (Task 11). ✓
