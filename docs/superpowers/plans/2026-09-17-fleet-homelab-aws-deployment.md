@@ -556,6 +556,8 @@ Expected: `Plan: 86 to add, 0 to change, 0 to destroy` (after the secret pre-cre
 Run: `terraform apply tfplan`
 Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gateway provisioning dominate, then the migrations addon runs `fleet prepare db` as a one-off task and scales the service back up, adding a few minutes).
 
+**Expect one retry (reproduced on two separate builds):** the first `apply` fails near the end with `NoSuchEntity: The role with name fleet-role cannot be found` on `aws_iam_role_policy_attachment.extras[0]` — IAM is eventually consistent and the module attaches our software-installers policy the instant the role is created. Nothing is wrong: the role exists seconds later. Re-run `terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`; it shows **4 to add** (that attachment, the RDS ingress rule, the `fleet_alb` DNS record, and the migrations `null_resource`) and completes, including the ~8-minute migrations run. On a rebuild after `down.sh`, the same retry applies.
+
 - [ ] **Step 6: Verify the ECS service is healthy**
 
 Run: `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].{running:runningCount,desired:desiredCount}'`
