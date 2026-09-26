@@ -1,0 +1,4 @@
+fleet_subdomain      = "fleet.example.com"
+fleet_license_key    = "replace-with-real-license-key"
+cloudflare_api_token = "replace-with-scoped-cloudflare-token"
+cloudflare_zone_name = "example.com"
