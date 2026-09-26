@@ -1780,6 +1780,36 @@ Expected: two ARNs like `arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-act
   6. **Collaborators:** confirm Settings → Collaborators lists nobody but you. Outsiders can still *open* PRs from forks — that can't be turned off on a public repo as far as verified (GitHub's interaction limits can restrict it to collaborators for up to 6 months; check for any newer "restrict pull requests" setting) — but they can't merge, approve, run unapproved workflows, or read secrets.
   7. **Optional, not recommended here:** a `production` environment with a required reviewer. Setting `environment:` on a job changes the OIDC `sub` claim to the `...:environment:production` form, so `oidc.tf`'s trust condition would have to change with it.
 
+**Applied and verified via the API** (the repo was published and locked down in one session; these endpoints and payloads were run and read back, not just written down). `R=repos/<owner>/fleet-homelab-infra`:
+
+```bash
+# 1. approval required for all outside contributors' fork-PR workflows
+gh api -X PUT $R/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors
+# 2. read-only workflow token, Actions can't approve PRs
+gh api -X PUT $R/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
+# 3. only GitHub-owned + aws-actions/* + hashicorp/* actions, and SHA pinning enforced
+gh api -X PUT $R/actions/permissions -F enabled=true -f allowed_actions=selected -F sha_pinning_required=true
+gh api -X PUT $R/actions/permissions/selected-actions -F github_owned_allowed=true -F verified_allowed=false -f 'patterns_allowed[]=aws-actions/*' -f 'patterns_allowed[]=hashicorp/*'
+# 4. secret scanning + push protection, Dependabot alerts, private vulnerability reporting; no wiki/projects
+gh api -X PATCH $R -F 'security_and_analysis[secret_scanning][status]=enabled' -F 'security_and_analysis[secret_scanning_push_protection][status]=enabled'
+gh api -X PUT $R/vulnerability-alerts
+gh api -X PUT $R/private-vulnerability-reporting
+gh api -X PATCH $R -F has_wiki=false -F has_projects=false
+# 5. ruleset on the default branch (JSON below) — POST it with: gh api -X POST $R/rulesets --input ruleset.json
+```
+
+```json
+{ "name": "protect-main", "target": "branch", "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "bypass_actors": [ { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" } ],
+  "rules": [ { "type": "deletion" }, { "type": "non_fast_forward" },
+             { "type": "pull_request", "parameters": { "required_approving_review_count": 0,
+               "dismiss_stale_reviews_on_push": true, "require_code_owner_review": false,
+               "require_last_push_approval": false, "required_review_thread_resolution": false } } ] }
+```
+
+`actor_id: 5` is the built-in repository **Admin** role (that's you, the only collaborator — checked with `gh api $R/collaborators`). **Task 16 adds the `plan` required-status-check rule to this ruleset** once that workflow exists (a required check for a workflow that has never run would block every merge).
+
 Verify: `gh api repos/<owner>/fleet-homelab-infra --jq '{visibility, has_issues}'` shows `public`; the settings above read back correctly in the UI. The real proof of the fork-PR controls is a manual test with a second GitHub account (or a throwaway one): fork the repo, open a PR that edits `.github/workflows/`, and confirm the run sits waiting for your approval and that no secrets or AWS role are available to it. Do this once after Step 9.
 
 - [ ] **Step 6: Add `CODEOWNERS` and commit**
