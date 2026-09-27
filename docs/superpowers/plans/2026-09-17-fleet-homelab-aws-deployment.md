@@ -621,22 +621,58 @@ git commit -m "Deploy Fleet (VPC + Aurora + Redis + ALB + Fargate) via the root 
 
 - [ ] **Step 1: Write `waf.tf`**
 
-This addon is a different design than an earlier draft of this task assumed — it's an IP/country allow-or-block-list WAF (`allowed_addresses`, `blocked_addresses`, `blocked_countries`), **not** an AWS Managed Rule Group attachment (there's no `managed_rules` input on this addon at all; caught by reading `addons/waf-alb/README.md` directly instead of assuming it worked like a generic WAF module). Since there's no fixed set of IPs to allow from (this will be accessed from home, mobile, and elsewhere), `waf_type = "blocklist"` is the only workable mode here — `"allowlist"` would lock out anywhere not in `allowed_addresses`. Left `blocked_countries` at its default (a pre-curated list of countries associated with high abuse/sanctions exposure) rather than overriding it.
+**Built as a custom `aws_wafv2_web_acl`, not Fleet's `waf-alb` addon** — found while executing this task, not planned this way from the start. The addon (`addons/waf-alb`) only supports "block these specific countries/IPs, default-allow the rest" or "allow these specific IPs, default-block the rest" (verified in its `variables.tf`/`main.tf`); there's no "allow only this one country" mode. What the user actually wants — US-only access — doesn't fit either mode well: a blocklist of every non-US country hit a real AWS limit (`geo_match_statement.country_codes` allows at most 50 entries per statement — confirmed by a failed `apply`, not assumed) long before it hit AWS's own `CountryCode` enum of 250 codes, and even if that limit didn't exist, a maintained "block everyone except US" list would silently *allow* any country AWS adds in the future until the list is updated. An allow-only-US rule with a default block action is simpler (one country code, not 249), avoids the limit entirely, and needs no upkeep as AWS adds countries — so this task built that directly instead of forcing it through the addon.
 
 ```hcl
-module "waf" {
-  source = "github.com/fleetdm/fleet-terraform//addons/waf-alb?depth=1&ref=tf-mod-addon-waf-alb-v2.1.0"
+resource "aws_wafv2_web_acl" "fleet_homelab" {
+  name        = "fleet-homelab"
+  description = "Allow US traffic only, block everything else by default"
+  scope       = "REGIONAL"
 
-  name     = "fleet-homelab"
-  lb_arn   = module.fleet.byo-vpc.byo-db.alb.arn
-  waf_type = "blocklist"
+  default_action {
+    block {}
+  }
+
+  rule {
+    name     = "allow-us"
+    priority = 1
+
+    action {
+      allow {}
+    }
+
+    statement {
+      geo_match_statement {
+        country_codes = ["US"]
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "fleet-homelab-allow-us"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "fleet-homelab"
+    sampled_requests_enabled   = true
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "fleet_homelab" {
+  resource_arn = module.fleet.byo-vpc.byo-db.alb.arn
+  web_acl_arn  = aws_wafv2_web_acl.fleet_homelab.arn
 }
 ```
+
+**`description` has an undocumented (in the Terraform provider) character restriction** — AWS rejects `;` (and likely other punctuation outside `[\w+=:#@/\-,.\s]`); found by a failed apply, fixed by dropping the semicolon. **The Web ACL association can fail once with `WAFUnavailableEntityException: AWS WAF couldn't retrieve the resource that you requested`** even though the ACL was just created successfully — transient, found on this exact apply; a re-run of `terraform apply -target=aws_wafv2_web_acl_association.fleet_homelab` (the ACL itself is already in state, so nothing else re-runs) succeeds. If a stricter geo-blocking posture is wanted later (e.g. resuming Fleet's own addon for its narrower blocklist use case, or adding IP-based rules for MDM/webhook callers that might not originate from US IPs), revisit rather than assume this design covers those cases.
 
 - [ ] **Step 2: Init, validate, and plan**
 
 Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
-Expected: plan shows one `aws_wafv2_web_acl` (with a geo-match blocking rule for the default country list) and one `aws_wafv2_web_acl_association`, plus the addon's supporting `aws_wafv2_rule_group`s and `aws_wafv2_ip_set`s (all named `fleet-homelab`).
+Expected: plan shows one `aws_wafv2_web_acl` (with a geo-match blocking rule listing 249 country codes) and one `aws_wafv2_web_acl_association`, plus the addon's supporting `aws_wafv2_rule_group`s and `aws_wafv2_ip_set`s (all named `fleet-homelab`).
 
 - [ ] **Step 3: Apply**
 
@@ -645,13 +681,17 @@ Run: `terraform apply tfplan`
 - [ ] **Step 4: Verify**
 
 Run: `aws wafv2 list-web-acls --scope REGIONAL --query "WebACLs[?Name=='fleet-homelab']"`
-Expected: one Web ACL returned. (The addon names the ACL from its `name` input, `fleet-homelab` — verified in `addons/waf-alb/main.tf`; an earlier draft filtered on `'fleet'` and would have returned nothing.)
+Expected: one Web ACL returned.
+
+Then confirm it's actually associated with the ALB (the association is a separate resource and can fail independently, per the note above — a listed ACL alone doesn't prove it's attached):
+`aws wafv2 get-web-acl-for-resource --resource-arn $(aws elbv2 describe-load-balancers --names fleet-homelab --query 'LoadBalancers[0].LoadBalancerArn' --output text) --query 'WebACL.Name' --output text`
+Expected: `fleet-homelab`. Also re-check `https://<fleet_subdomain>/healthz` still returns 200 from a US location — a mistake in the geo rule would show up as Fleet suddenly unreachable, not as a Terraform error.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add waf.tf .terraform.lock.hcl
-git commit -m "Attach AWS WAF (blocklist mode) to the Fleet ALB"
+git commit -m "Attach a US-only AWS WAF Web ACL to the Fleet ALB"
 ```
 
 ---
