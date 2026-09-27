@@ -1182,17 +1182,19 @@ resource "aws_budgets_budget" "fleet_homelab" {
   time_unit    = "MONTHLY"
 
   dynamic "notification" {
-    for_each = [20, 40, 60, 80, 100]
+    for_each = range(10, 101, 10)   # $10, $20, ... $100 of actual spend
     content {
       comparison_operator        = "GREATER_THAN"
       threshold                  = notification.value
-      threshold_type             = "PERCENTAGE"
+      threshold_type             = "ABSOLUTE_VALUE"
       notification_type          = "ACTUAL"
       subscriber_email_addresses = [var.budget_alert_email]
     }
   }
 }
 ```
+
+**Alerts every $10, not the original 20/40/60/80/100%** — chosen so a forgotten stack is noticed sooner (a running stack costs ~$5.50/day). Ten alerts on one budget was accepted by AWS (verified by applying it; an earlier recollection of a five-per-budget limit was wrong, and the AWS quotas page lists no such limit). **Budget data only refreshes up to about three times a day, 8–12 hours apart** (AWS docs), so this is a "within about a day" alarm, not a real-time one — the real protection is still running `down.sh`. Budgets without actions are free; the "2 free" quota applies to budgets *with* actions. The account also has an older `Monthly Budget` ($1, one forecast alert), which is independent of this one and left alone.
 
 `budget_alert_email` is a sensitive-by-privacy variable (add it to `variables.tf` as `type = string`, to `example.tfvars` as a placeholder, and to the real `terraform.tfvars`; Task 15's workflow supplies it from a `BUDGET_ALERT_EMAIL` repo secret). It stays out of Git because this repo is public.
 
@@ -1201,7 +1203,7 @@ Given the actual usage pattern (torn down most of the time, averaging ~$12–15/
 - [ ] **Step 2: Validate and plan**
 
 Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
-Expected: plan shows one `aws_budgets_budget` with 5 notification blocks.
+Expected: plan shows one `aws_budgets_budget` with 10 notification blocks. If the Fleet stack is torn down at this point, a bare `plan` would also rebuild it — add `-target=aws_budgets_budget.fleet_homelab` to `plan` (this was done when the task was executed while the stack was down).
 
 - [ ] **Step 3: Apply**
 
@@ -1210,15 +1212,15 @@ Run: `terraform apply tfplan`
 - [ ] **Step 4: Verify**
 
 Run: `aws budgets describe-budget --account-id $(aws sts get-caller-identity --query Account --output text) --budget-name fleet-homelab-monthly --query 'Budget.{limit:BudgetLimit,notifications:NotificationsWithSubscribers[].Notification.Threshold}'`
-Expected: `limit` shows `100 USD`; `notifications` lists `[20, 40, 60, 80, 100]`.
+Expected: `limit` shows `100 USD`; `notifications` lists `[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]` (all `ABSOLUTE_VALUE`). Also confirm the address is subscribed: `aws budgets describe-subscribers-for-notification --account-id <acct> --budget-name fleet-homelab-monthly --notification NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=10,ThresholdType=ABSOLUTE_VALUE`.
 
 - [ ] **Step 5: Check the inbox once.** Whether directly-listed Budgets email recipients need a confirmation click is unclear — an independent review said no, and AWS's own docs and search results conflict on it, so this isn't asserted either way. Look in `the budget alert address` (including spam) for an "AWS Notification - Subscription Confirmation" email and click confirm if one arrives; if none does, nothing further is needed. Budgets emails also don't depend on SES or on the Fleet stack being up.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add budget.tf
-git commit -m "Add AWS Budget alert at 20/40/60/80/100% of \$100/mo"
+git add budget.tf variables.tf example.tfvars
+git commit -m "Add AWS Budget: alert every \$10 of actual spend up to \$100/mo"
 ```
 
 ---
