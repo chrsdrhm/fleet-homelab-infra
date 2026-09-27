@@ -190,7 +190,7 @@ Two separate log streams, not one:
 ## Budget alerts
 
 One `aws_budgets_budget` (COST type, monthly), notifying
-the configured budget-alert email address (a gitignored variable, since this repo is public) at 20%, 40%, 60%, 80%, and 100% of a
+the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
 $100/mo target — comfortable headroom above the ~$84–86/mo estimate before
 alerting. First AWS Budget is free (2 free per account).
 

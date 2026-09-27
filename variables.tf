@@ -25,3 +25,8 @@ variable "cloudflare_zone_name" {
   description = "Apex zone in Cloudflare that fleet_subdomain lives under, e.g. example.com"
   type        = string
 }
+
+variable "budget_alert_email" {
+  description = "Address that receives AWS Budget alerts. Kept out of Git (this repo is public); set in terraform.tfvars."
+  type        = string
+}
