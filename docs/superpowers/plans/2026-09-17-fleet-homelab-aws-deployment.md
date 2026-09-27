@@ -521,7 +521,7 @@ Why this is the whole module call, and nothing more: the `vpc` object's own defa
 
 **Re-checked immediately before execution, not left stale from when this plan was first drafted**: the root module ref and Fleet image version above were bumped from `tf-mod-root-v1.31.0`/`fleetdm/fleet:v4.91.1` to the current `tf-mod-root-v1.31.1`/`fleetdm/fleet:v4.92.0` after diffing what changed between those two module tags. That one-patch bump turned out to matter: it moves `alb_config.tls_policy`'s default from `ELBSecurityPolicy-TLS13-1-2-2021-06` to `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09` — a post-quantum-resistant TLS policy AWS added relatively recently — which this deployment gets for free since `alb_config` here never overrides `tls_policy`. `v4.92.0` is Fleet's actual latest stable release (verified against Fleet's own releases page, not assumed), not just "one version newer."
 
-`rds_config.name` and `redis_config.name` are both explicitly set to `"fleet-homelab"` — both default to just `"fleet"` if omitted, which would silently break every later reference to cluster/replication-group identifier `fleet-homelab` (`down.sh` in Task 14; the monitoring addon takes real member IDs from module outputs instead, see Task 5).
+`rds_config.name` and `redis_config.name` are both explicitly set to `"fleet-homelab"` — both default to just `"fleet"` if omitted, which would silently break every later reference to cluster/replication-group identifier `fleet-homelab` (`down.sh` in Task 14 identifies resources by this name directly; Task 17's Grafana alert rules use real member IDs from module outputs instead, so they aren't affected by this name).
 
 **Corrections from an independent review of this task, each checked against upstream source:**
 - **`replicas` is the total instance count, not the reader count.** `replicas = 0` would create an Aurora cluster with no instances. It is `1` here (one writer, no reader — the "no read replicas" decision is unchanged).
@@ -698,63 +698,7 @@ git commit -m "Attach a US-only AWS WAF Web ACL to the Fleet ALB"
 
 ### Task 5: Monitoring addon
 
-**Files:**
-- Create: `monitoring.tf`
-
-**Interfaces:**
-- Consumes: `module.fleet` (the whole module, per the addon's documented pattern of referencing `module.fleet.*` for ALB/ECS/Aurora/Redis ARNs).
-
-- [ ] **Step 1: Apply everything up through Task 4 first if not already applied** (the monitoring addon's `for_each`/`count` values can't be planned until the Fleet module's resources exist — this is a documented constraint of this addon).
-
-Run: `terraform apply -var-file=terraform.tfvars -target=module.fleet -target=module.waf`
-
-- [ ] **Step 2: Write `monitoring.tf`**
-
-```hcl
-module "monitoring" {
-  source = "github.com/fleetdm/fleet-terraform//addons/monitoring?depth=1&ref=tf-mod-addon-monitoring-v1.15.0"
-
-  customer_prefix        = "fleet-homelab"
-  acm_certificate_arn    = aws_acm_certificate.fleet.arn
-  fleet_ecs_service_name = "fleet"
-  mysql_cluster_members  = module.fleet.byo-vpc.rds.cluster_members
-  # The cloudposse Redis module returns a nested list here (same workaround the addon's README uses).
-  redis_cluster_members  = module.fleet.byo-vpc.redis.member_clusters[0]
-
-  albs = [
-    {
-      name                    = "fleet-homelab"
-      arn_suffix              = module.fleet.byo-vpc.byo-db.alb.lb_arn_suffix
-      target_group_name       = module.fleet.byo-vpc.byo-db.alb.target_group_names[0]
-      target_group_arn_suffix = module.fleet.byo-vpc.byo-db.alb.target_group_arn_suffixes[0]
-      ecs_service_name        = "fleet"
-    }
-  ]
-}
-```
-
-This is a correction from an earlier draft of this task, which invented field names (`customer`, `alb`, `ecs`, `rds`, `redis` singular objects) that don't exist on this addon — caught by actually reading `addons/monitoring/README.md`'s input table rather than inferring from the other addons' conventions. The real shape: `albs` is a **list** (one entry per load balancer, with its target group identifiers alongside it), and Aurora/Redis are named via flat `mysql_cluster_members`/`redis_cluster_members` string lists, not nested objects. **The member lists are wired from module outputs, not typed as `"fleet-homelab"`**: the addon builds CloudWatch alarms on the `DBInstanceIdentifier` and `CacheClusterId` dimensions (verified in `addons/monitoring/main.tf`), which are the Aurora *instance* name (`fleet-homelab-one`) and the ElastiCache *member cluster* name — not the cluster/replication-group name an earlier draft passed, which would have produced alarms on metrics that never exist (permanently `INSUFFICIENT_DATA`). The addon's own README shows these exact two output expressions. Two things intentionally left out, both optional with empty defaults: `default_sns_topic_arns`/`sns_topic_arns_map` (no SNS topic wired up, so these alarms exist in CloudWatch but won't page or email anyone — AWS Budgets is this deployment's only active notification channel) and `cron_monitoring` (a separate Lambda that checks Fleet's DB for missed cron runs — needs its own MySQL credentials/VPC/subnet wiring, out of scope for a homelab-scale addition).
-
-- [ ] **Step 3: Init, validate, and plan**
-
-Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
-Expected: plan shows CloudWatch alarms for ALB 5xx, ECS service, Aurora, Redis, and ACM cert expiry.
-
-- [ ] **Step 4: Apply**
-
-Run: `terraform apply tfplan`
-
-- [ ] **Step 5: Verify**
-
-Run: `aws cloudwatch describe-alarms --alarm-name-prefix fleet-homelab --query 'MetricAlarms[].AlarmName'`
-Expected: a non-empty list of alarm names.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add monitoring.tf .terraform.lock.hcl
-git commit -m "Add CloudWatch monitoring addon for ALB/ECS/Aurora/Redis/ACM"
-```
+**Superseded — folded into Task 17, not a separate task to execute.** Originally a standalone CloudWatch-alarms-plus-SNS design. Reconsidered after the user pointed out the overlap with the Grafana dashboard (Task 17): Grafana OSS has its own native alerting (verified against Grafana's own docs — not Enterprise-gated, and CloudWatch is an explicitly supported data source for Grafana-managed alert rules), so a second, separate CloudWatch-alarm system alongside it would be redundant. Task 17 now builds alerting directly on the same CloudWatch queries the dashboard already uses, with email delivered through Task 6's SES domain identity (a dedicated SES-SMTP IAM user, distinct from Fleet's own SES/API sending path). See Task 17 Steps 11-16.
 
 ---
 
@@ -1357,12 +1301,13 @@ echo "Up. This can take 15-20 minutes for VPC/NAT/Aurora/ALB/ECS to fully stabil
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "This will destroy the VPC (incl. NAT Gateway), Aurora, Redis, ALB, ECS, WAF,"
-echo "monitoring, and the migrations runner, after snapshotting Aurora first."
+echo "This will destroy the VPC (incl. NAT Gateway), Aurora, Redis, ALB, ECS, the"
+echo "WAF Web ACL, and the migrations runner, after snapshotting Aurora first."
 echo "NOT destroyed: Route 53 hosted zone, ACM cert, Terraform state backend,"
 echo "MDM secrets (Apple certs), the Fleet server private key, the software-"
-echo "installers bucket, SES identity, Firehose/S3 log buckets, and the AWS"
-echo "Budget alert."
+echo "installers bucket, SES identity, Firehose/S3 log buckets, the AWS Budget"
+echo "alert, and the activities-webhook Lambda/DynamoDB/API Gateway (Task 19 —"
+echo "costs nothing at rest, so it isn't targeted for teardown either)."
 
 if [ "${CONFIRM:-}" != "destroy" ]; then
   read -p "Type 'destroy' to confirm: " confirm
@@ -1387,10 +1332,13 @@ terraform destroy -input=false -var-file=terraform.tfvars \
   -target=aws_route53_record.fleet_alb \
   -target=aws_cloudwatch_log_group.container_insights \
   -target=module.migrations \
-  -target=module.monitoring \
-  -target=module.waf \
+  -target=aws_wafv2_web_acl_association.fleet_homelab \
+  -target=aws_wafv2_web_acl.fleet_homelab \
   -target=module.fleet \
   -auto-approve
+# No -target=module.monitoring (Task 5 was superseded — nothing to destroy there;
+# see Task 5's stub) and no -target=module.waf (Task 4 builds a plain
+# aws_wafv2_web_acl directly, not a module — see Task 4's note on why).
 
 # ECS Container Insights keeps writing metrics while the cluster shuts down, so AWS
 # RE-CREATES this log group (untagged) right after Terraform deletes it. Found on the
@@ -2146,7 +2094,7 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
 
 ### Task 17: Grafana dashboard on Proxmox
 
-Infra health (ALB/ECS/Aurora/Redis, already collected by Task 5's monitoring addon) plus Fleet asset data (host counts, policy compliance, vulnerabilities), visualized rather than just alarmed on. Runs on Proxmox, another LXC container alongside the GitHub Actions runner — no new AWS compute cost, and the dashboard stays reachable even when the Fleet stack itself is torn down, since both data sources it queries (CloudWatch, Fleet's REST API) are public AWS/HTTPS endpoints, not something inside the VPC. This task sets up the plumbing (the container, the two data sources, the credentials each needs); the actual dashboard panels are left for you to build hands-on, since "learn how Grafana works" was the actual goal here, not a pre-built dashboard.
+Infra health (ALB/ECS/Aurora/Redis) plus Fleet asset data (host counts, policy compliance, vulnerabilities), visualized rather than just alarmed on. Runs on Proxmox, another LXC container alongside the GitHub Actions runner — no new AWS compute cost, and the dashboard stays reachable even when the Fleet stack itself is torn down, since both data sources it queries (CloudWatch, Fleet's REST API) are public AWS/HTTPS endpoints, not something inside the VPC. This task sets up the plumbing (the container, the two data sources, the credentials each needs); the actual dashboard panels are left for you to build hands-on, since "learn how Grafana works" was the actual goal here, not a pre-built dashboard. **It also builds alerting** (Steps 11-16) — Grafana's own native alerting on the same CloudWatch queries the dashboard uses, replacing what an earlier draft had as a separate Task 5 (standalone CloudWatch alarms + SNS). One monitoring system instead of two: an alert shows up next to the metric that fired it, and there's no second notification channel to maintain.
 
 **A deliberate exception to this whole plan's "no long-lived credentials" pattern, stated plainly**: Grafana runs outside AWS with no equivalent to GitHub's OIDC federation available to it, so its CloudWatch data source needs a real, static AWS access key. Mitigated by scoping it to CloudWatch read-only actions alone (Step 3) — it cannot create, modify, or delete anything. (Task 18 adds a second such exception, an Entra client secret, for the same underlying reason — Grafana has no federated identity path into either cloud.)
 
@@ -2154,10 +2102,11 @@ Infra health (ALB/ECS/Aurora/Redis, already collected by Task 5's monitoring add
 - Create: `scripts/proxmox/create-grafana-lxc.sh`
 - Create: `scripts/proxmox/bootstrap-grafana.sh`
 - Create: `grafana-cloudwatch.tf`
+- Create: `grafana-alerting.tf`
 
 **Interfaces:**
 - Consumes: nothing from earlier Terraform state directly — talks to CloudWatch and Fleet's API as an external client, the same way you would from a browser or `curl`.
-- Produces: `aws_iam_access_key.grafana_cloudwatch` (Step 3's sensitive outputs, retrieved in Step 4 and pasted into Grafana's UI in Step 6) and a read-only Fleet API token (created in Step 5, pasted into Grafana's UI in Step 7).
+- Produces: `aws_iam_access_key.grafana_cloudwatch` (Step 3's sensitive outputs, retrieved in Step 4 and pasted into Grafana's UI in Step 6), a read-only Fleet API token (created in Step 5, pasted into Grafana's UI in Step 7), and `aws_iam_access_key.grafana_ses_smtp` (Step 12's sensitive outputs, converted to an SES SMTP password in Step 13 and pasted into Grafana's own SMTP config in Step 14).
 
 - [ ] **Step 1: Write `scripts/proxmox/create-grafana-lxc.sh`** — run on the Proxmox host to create the container. (Grafana is the only thing on Proxmox now — the CI runner moved to GitHub-hosted in Task 15 when the repo went public.)
 
@@ -2295,24 +2244,106 @@ Connections > Data sources > Add data source > Infinity. Under Auth: Bearer Toke
 In the CloudWatch data source's settings page, use "Save & test" — expect a success message. For Infinity, create a test query against `/api/v1/fleet/hosts/count` (Type: JSON, no auth override needed since it's set at the data source level) and confirm it returns a number, not an error.
 
 - [ ] **Step 9: Build the dashboard.** Left open-ended on purpose. A few real, verified starting points to query against:
-  - CloudWatch: the same ALB/ECS/Aurora/Redis metrics Task 5's alarms already watch — request count and 5xx rate, CPU/memory utilization, database connections.
+  - CloudWatch: the same ALB/ECS/Aurora/Redis metrics this task's own alert rules watch (Steps 11-16) — request count and 5xx rate, CPU/memory utilization, database connections.
   - Fleet, via Infinity: `GET /api/v1/fleet/hosts/count` (optionally repeated with `?platforms=darwin`/`windows`/`linux` for a platform breakdown), `GET /api/v1/fleet/global/policies` (each policy object includes `passing_host_count`/`failing_host_count` — verified against Fleet's own API reference), and `GET /api/v1/fleet/charts/cve` for vulnerability trends (Premium feature, available on this license).
 
 - [ ] **Step 10: Build the up/down status board.** The point of this dashboard is being able to see at a glance whether each part of the Fleet stack is up, so build this first, before any of Step 9's performance panels. One "State timeline" or "Stat" panel per component, colored green/red on a threshold:
   - **Fleet itself** (Infinity → Fleet data source): `GET /healthz` on `https://<fleet_subdomain>`. A successful response is up; an error or timeout is down. This is the only true end-to-end check, since it goes through DNS, WAF, ALB, Fargate, and the database.
-  - **ALB targets** (CloudWatch, namespace `AWS/ApplicationELB`): `HealthyHostCount` (green when >= 1) and `UnHealthyHostCount` (red when > 0), with the `LoadBalancer` and `TargetGroup` dimensions. `HealthyHostCount` is the same metric Task 5's monitoring addon already alarms on (verified in the addon source); `UnHealthyHostCount` is a standard ALB metric, not checked against the addon.
+  - **ALB targets** (CloudWatch, namespace `AWS/ApplicationELB`): `HealthyHostCount` (green when >= 1) and `UnHealthyHostCount` (red when > 0), with the `LoadBalancer` and `TargetGroup` dimensions. Both are standard ALB metrics.
   - **Fargate** (CloudWatch, namespace `ECS/ContainerInsights`): `RunningTaskCount` for the `fleet` service (dimensions `ClusterName=fleet-homelab`, `ServiceName=fleet`), green when >= 1. Container Insights is enabled by default on the cluster the Fleet module creates (verified in `byo-db/variables.tf`), so this metric should exist without extra setup; confirm the panel returns data on the first run.
   - **Aurora** (CloudWatch, `AWS/RDS`): `DatabaseConnections` and `CPUUtilization` for the cluster. Aurora has no direct up/down metric, so treat "no data" as down.
   - **Redis** (CloudWatch, `AWS/ElastiCache`): `CurrConnections` and `EngineCPUUtilization` (both used by the monitoring addon). Same "no data means down" rule.
-  - **Alarm states**, if Grafana's CloudWatch data source can list them: the alarms Task 5 creates. Not verified — check at build time whether it's available, and skip it if not.
+  - **Alert states**, once Steps 11-16 below build them: Grafana's built-in "Alert list" panel type shows each alert rule's current state (Normal/Pending/Firing) natively — no separate CloudWatch alarm system needed to populate this.
 
-  Two limits, worth knowing so the board isn't misread: (1) this stack is torn down most of the time by design, so a fully red board usually means "torn down on purpose", not "broken" — a dashboard cannot tell those apart; read it alongside whether you've run `up`. (2) Grafana only displays status here; it does not notify you. AWS Budgets remains the only alert this deployment sends.
+  One limit, worth knowing so the board isn't misread: this stack is torn down most of the time by design, so a fully red board usually means "torn down on purpose", not "broken" — a dashboard cannot tell those apart; read it alongside whether you've run `up`. (Unlike an earlier draft of this plan, Grafana does notify now — see Steps 11-16 — so this is no longer purely a passive display.)
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 11: Write `grafana-alerting.tf`** — a second, separate IAM user scoped only to `ses:SendRawEmail`, purely so Grafana can authenticate to SES's SMTP interface. Deliberately not reusing Task 6's `module.ses` (that addon wires Fleet's own IAM-role-based API sending; Grafana runs outside AWS on Proxmox and needs SMTP username/password credentials instead — a different mechanism for the same underlying SES domain identity). Verified against AWS's own SES SMTP docs: SMTP credentials are derived from a plain IAM access key via a documented algorithm (Step 13), so this is a normal `aws_iam_user` + `aws_iam_access_key`, same shape as Step 3's CloudWatch user.
+
+```hcl
+resource "aws_iam_user" "grafana_ses_smtp" {
+  name = "fleet-homelab-grafana-ses-smtp"
+}
+
+resource "aws_iam_user_policy" "grafana_ses_smtp" {
+  name = "ses-send-only"
+  user = aws_iam_user.grafana_ses_smtp.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ses:SendRawEmail"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_access_key" "grafana_ses_smtp" {
+  user = aws_iam_user.grafana_ses_smtp.name
+}
+
+output "grafana_ses_smtp_access_key_id" {
+  value = aws_iam_access_key.grafana_ses_smtp.id
+}
+
+output "grafana_ses_smtp_secret_access_key" {
+  value     = aws_iam_access_key.grafana_ses_smtp.secret
+  sensitive = true
+}
+```
+
+- [ ] **Step 12: Validate, plan, apply, and retrieve the key**
+
+Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Then: `terraform output grafana_ses_smtp_access_key_id && terraform output -raw grafana_ses_smtp_secret_access_key` — same handling as Step 4's CloudWatch key (don't paste it anywhere but the SMTP conversion in the next step and Grafana's own config).
+
+- [ ] **Step 13: Derive the SES SMTP password from the access key.** SES's SMTP password is *not* the IAM secret access key itself — it's a region-specific transform of it (HMAC-SHA256, versioned). Algorithm below is AWS's own, published at `docs.aws.amazon.com/ses/latest/dg/smtp-credentials.html` (verified there, not reconstructed from memory):
+
+```python
+import hmac, hashlib, base64
+
+def ses_smtp_password(secret_access_key: str, region: str) -> str:
+    date, service, terminal, message, version = "11111111", "ses", "aws4_request", "SendRawEmail", 0x04
+    def sign(key, msg): return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+    k = sign(("AWS4" + secret_access_key).encode(), date)
+    k = sign(k, region); k = sign(k, service); k = sign(k, terminal); k = sign(k, message)
+    return base64.b64encode(bytes([version]) + k).decode()
+
+print(ses_smtp_password("<secret from Step 12>", "us-east-1"))
+```
+
+The SMTP **username** is simply the access key ID from Step 12 (unchanged). Endpoint: `email-smtp.us-east-1.amazonaws.com`, port `587` with STARTTLS (verify against AWS's current SMTP endpoints table for `us-east-1` — general reference, `docs.aws.amazon.com/general/latest/gr/ses.html`).
+
+- [ ] **Step 14: Configure Grafana's SMTP settings and an email contact point.** On the Grafana container, edit `/etc/grafana/grafana.ini`'s `[smtp]` section:
+
+```ini
+[smtp]
+enabled = true
+host = email-smtp.us-east-1.amazonaws.com:587
+user = <access key ID from Step 12>
+password = <SMTP password from Step 13>
+from_address = grafana-alerts@<fleet_subdomain>
+from_name = Grafana
+startTLS_policy = MandatoryStartTLS
+```
+
+`systemctl restart grafana-server`. Then in the UI: Alerting > Contact points > Add contact point, type Email, address = your own inbox. **SES sandbox caveat, same one Task 6 already flagged for Fleet's own mail**: if the account hasn't been granted SES production access, the *recipient* address must be individually verified first (`aws sesv2 get-account --query ProductionAccessEnabled` to check; if `false`, verify your own address the same way Task 6 Step 3 describes) — the `from_address`'s domain is already verified via Task 6, but that alone doesn't let you send *to* an unverified address in sandbox mode.
+
+- [ ] **Step 15: Build alert rules on the CloudWatch data source.** Alerting > Alert rules > New alert rule. Grafana-managed rules work against any data source that returns numeric data, CloudWatch included (verified against Grafana's own CloudWatch-datasource docs) — reuse Step 10's exact queries as the rule's query, add a Threshold expression, and set a evaluation group/interval (a few minutes is plenty for a homelab). Suggested starting rules, one per Step 10 panel:
+  - ALB `UnhealthyHostCount` > 0
+  - ECS `RunningTaskCount` < 1 for the `fleet` service
+  - Aurora: no-data-as-alert on `DatabaseConnections` (mirrors Step 10's "no data means down" rule)
+  - Redis: same no-data pattern on `CurrConnections`
+
+  Point each rule's notification policy at the Email contact point from Step 14 (Alerting > Notification policies — the default policy routes everything to it unless you add label-based routing, which isn't needed at this scale).
+
+- [ ] **Step 16: Verify with a real alert.** Temporarily lower one rule's threshold (e.g. the ECS one to `< 2`, which the normal `RunningTaskCount = 1` will trip) or use Grafana's rule-preview/test-run feature, and confirm the email actually arrives — don't just trust the rule was saved. Revert the threshold afterward.
+
+- [ ] **Step 17: Commit**
 
 ```bash
-git add scripts/proxmox/create-grafana-lxc.sh scripts/proxmox/bootstrap-grafana.sh grafana-cloudwatch.tf
-git commit -m "Add Grafana on Proxmox: CloudWatch + Fleet API data sources"
+git add scripts/proxmox/create-grafana-lxc.sh scripts/proxmox/bootstrap-grafana.sh grafana-cloudwatch.tf grafana-alerting.tf
+git commit -m "Add Grafana on Proxmox: CloudWatch + Fleet API data sources, plus native alerting via SES SMTP"
 ```
 
 ---
@@ -2684,7 +2715,7 @@ git commit -m "Add Fleet activities webhook -> Lambda -> DynamoDB -> Grafana"
 - Identity/SSO (Entra + break-glass + JIT provisioning + group-based role mapping): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
 - Device enrollment (Windows/macOS/Linux): Tasks 7-8 (Windows via WSTEP secret + `windows_enabled_and_configured` in Task 11; macOS via APNs cert uploaded in the Fleet UI), Task 11 fleet enroll secret covers Linux via `fleetd`. ✓
 - Infra sizing (root module, NAT on, Aurora `db.t4g.medium` no replica, Redis `t4g.small`, Fargate 512/4096): Task 3. ✓
-- WAF/Monitoring/SES: Tasks 4, 5, 6. ✓
+- WAF: Task 4. SES: Task 6. ✓ (Monitoring folded into Task 17's native Grafana alerting — see Task 5.)
 - DNS/TLS: Task 2. ✓
 - GitOps: Task 11. ✓
 - Osquery log destination (Firehose → S3): Task 12. ✓
@@ -2693,7 +2724,7 @@ git commit -m "Add Fleet activities webhook -> Lambda -> DynamoDB -> Grafana"
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
 - Remote (non-laptop) execution of `up`/`down`/`plan` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
-- Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources: Task 17. ✓
+- Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources, plus native alerting via SES SMTP (replaces the standalone CloudWatch-alarms design): Task 17. ✓
 - Entra (Microsoft Graph) data source for Grafana, portable to Okta later: Task 18. ✓
 - Two-repo layout: this repo (Tasks 1-9, 12-18) + `fleet-homelab-gitops` (Task 11). ✓
 - Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at the user's request, to learn API Gateway/Lambda): Task 19.

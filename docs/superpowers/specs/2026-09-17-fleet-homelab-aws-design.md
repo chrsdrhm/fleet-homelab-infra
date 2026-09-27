@@ -135,7 +135,7 @@ Non-goals above.
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | `addons/waf-alb` in `blocklist` mode, attached to the ALB — this addon is geo/IP-based (default blocked-country list), not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Pause tooling. |
-| Monitoring | `addons/monitoring` — ALB 5xx, ECS/Aurora/Redis health, ACM cert-expiry alarms |
+| Monitoring | No standalone CloudWatch-alarm addon — superseded by Grafana's own native alerting on the same metrics (see Dashboard), delivered via a dedicated SES-SMTP IAM user |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Pause tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable / Secrets Manager entry to the ECS task |
@@ -208,7 +208,7 @@ Target, `us-east-1`, running continuously:
 | WAF | ~$6–8 |
 | Secrets Manager (~5 secrets) | ~$2 |
 | Route 53 hosted zone | ~$0.50 |
-| CloudWatch (logs + monitoring addon) | ~$4 |
+| CloudWatch (logs only — alerting now happens in Grafana, not as billed CloudWatch alarms) | ~$3 |
 | SES | ~$0.50 |
 | Firehose + S3 (osquery/audit logs, 10-host volume) | ~$1 |
 | AWS Budgets | $0 (within free tier) |
@@ -277,8 +277,8 @@ state — only `up`/`down` actually removes their cost.
   - The VPC (including NAT Gateway) is destroyed and recreated each cycle
     too — it's part of the same root module call as everything else now
     (see AWS infrastructure above), so `-target=module.fleet`
-    (plus migrations/monitoring/WAF) handles it alongside Aurora/Redis/ALB/ECS, no separate targeting
-    needed. Cheap and fast relative to Aurora/ALB, and nothing durable
+    (plus migrations, and the WAF Web ACL) handles it alongside Aurora/Redis/ALB/ECS, no separate
+    targeting needed. Cheap and fast relative to Aurora/ALB, and nothing durable
     lives inside it (Route 53 and ACM are independent of the VPC).
 
 No automatic scheduling (Lambda/EventBridge) — `up`/`down`/`idle`/`resume`
@@ -375,9 +375,14 @@ or ingests this data — it's purely a query-and-visualize layer, issuing
 each data source's query live on every dashboard load/refresh; only the
 panel/dashboard *definitions* live in Grafana's own database.
 
-- **CloudWatch** — the same ALB/ECS/Aurora/Redis metrics the monitoring
-  addon already alarms on, now visualized. Reached directly over the public
-  CloudWatch API; no VPC access needed.
+- **CloudWatch** — ALB/ECS/Aurora/Redis metrics, visualized *and* alerted
+  on: Grafana's own native alerting (OSS, not Enterprise-gated) defines
+  alert rules directly against these same CloudWatch queries, replacing
+  what an earlier draft had as a separate CloudWatch-alarms-plus-SNS design.
+  Notification email goes out through Grafana's own SMTP config, using a
+  second, send-only SES IAM user (distinct from Fleet's own SES sending
+  path) — one monitoring system instead of two. Reached directly over the
+  public CloudWatch API; no VPC access needed.
 - **Fleet's REST API**, via Grafana's Infinity plugin (queries arbitrary
   JSON/REST endpoints — not bundled with Grafana OSS core, installed
   separately) — host counts and platform breakdown, policy pass/fail counts,
