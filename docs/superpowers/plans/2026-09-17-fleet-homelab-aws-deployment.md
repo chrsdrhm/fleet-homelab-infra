@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **`fleetctl` is hands-on: I run every `fleetctl` command myself, to learn the tool.** Each step explains what the command does and what output to expect. Steps marked **🎓 You run this** follow this rule; commands that prompt for a password or print a one-time token have to be run by hand regardless. **Installing `fleetctl` is a prerequisite that is deliberately not done up front (Task 3 Step 8a): before any `fleetctl` step, check `which fleetctl && fleetctl --version` and stop if it's missing or not 4.92.0.**
+- **`fleetctl` is hands-on: I run every `fleetctl` command myself, to learn the tool.** Each step explains what the command does and what output to expect. Steps marked **🎓 You run this** follow this rule; commands that prompt for a password or print a one-time token have to be run by hand regardless. **Installing `fleetctl` is a prerequisite that is deliberately not done up front (Task 3 Step 8a; needed no later than Task 8 Step 5 or Task 11 Step 1): before any `fleetctl` step, check `which fleetctl && fleetctl --version` and stop if it's missing or not 4.92.0.**
 
 - Region: `us-east-1`.
 - NAT Gateway present (single gateway, module default). Fargate task in a **private** subnet with egress via NAT; Aurora and Redis stay in database/elasticache subnets with no internet route regardless.
@@ -568,7 +568,13 @@ Expected: `{"running": 1, "desired": 1}`
 Run: `curl -sI https://<fleet_subdomain>/healthz`
 Expected: `HTTP/2 200`
 
-- [ ] **Step 8a: 🎓 You run this — install `fleetctl` and get oriented. ⛔ GATE: do not start Step 8 until this is done.** Check `which fleetctl && fleetctl --version` first; if it isn't installed at 4.92.0, stop here and install it (it is deliberately not installed earlier). `fleetctl` is Fleet's CLI, the way `aws` is AWS's: a client on your Mac that talks to Fleet's API over HTTPS (it is not installed on AWS or inside the server). Install the same version as the server, then look around before touching the deployment:
+- [ ] **Step 8: Initialize Fleet and create the break-glass admin — in the browser, the way an organization normally does it.** A freshly deployed Fleet has no users at all: opening `https://<fleet_subdomain>/` redirects to `/setup` (seen on this deployment: the redirect and the page load), where you create the first global admin. Every later task (MDM in Task 8, SSO in Tasks 10-11, GitOps, Grafana) needs this login. **No `fleetctl` is needed for this** — Fleet's own AWS/Terraform deployment guide never mentions it either (checked; that guide also says nothing about creating the first user or about migrations, so it is not a complete recipe). Read what the form asks for and fill it in: your name, an email address you control, a strong password, and the organization name (`Homelab`), and confirm the server URL it shows.
+
+Store the password in your personal password manager (not Secrets Manager — this account has to work even if AWS itself is the problem). This is a one-time action per database: because Aurora is restored from snapshot on every `up` (Task 14), the account survives teardown/rebuild. It only needs redoing after a genuinely fresh database (a `--fresh` `up`). Turning on MFA for this account is deliberately deferred to Task 9, after SSO is proven working.
+
+(The CLI equivalent, if you ever want it: `fleetctl config set --address https://<fleet_subdomain>` then `fleetctl setup --email <email> --name "Break Glass Admin" --org-name "Homelab"` — verified against Fleet v4.92.0's source; it prompts for the password. Not used here.)
+
+- [ ] **Step 8a: 🎓 You run this — install `fleetctl`, log in, and get oriented. Do this whenever you're ready; the first hard requirement is Task 8 Step 5 (or Task 11 Step 1, whichever you reach first), not now.** ⛔ Gate: before any later step that runs `fleetctl`, check `which fleetctl && fleetctl --version`; if it isn't installed at 4.92.0, stop and do this step (it is deliberately not installed earlier). `fleetctl` is Fleet's CLI, the way `aws` is AWS's: a client on your Mac that talks to Fleet's API over HTTPS (it is not installed on AWS or inside the server). Install the same version as the server, log in as the admin you created in Step 8, then look around:
 
 ```bash
 npm install -g fleetctl@4.92.0     # or run any command as: npx fleetctl@4.92.0 <command>
@@ -576,24 +582,14 @@ fleetctl --version                 # should print 4.92.0
 fleetctl --help                    # the top-level command list: setup, login, get, apply, gitops, user, query, ...
 fleetctl get --help                # what "get" can list (hosts, queries, labels, teams/fleets — the names shift between versions, trust the help output)
 fleetctl config --help             # contexts: like AWS profiles, one per Fleet instance
-```
 
-Nothing here contacts the server yet. It's worth reading the help output — `fleetctl gitops --help` in particular is what Task 11 builds on.
-
-- [ ] **Step 8: 🎓 You run this — initialize Fleet and create the break-glass admin.** A freshly deployed Fleet has no users at all — it sits in setup mode until the first admin is created, and every later task (MDM verification in Task 8, SSO in Tasks 10-11, GitOps, Grafana) needs a working admin login. `fleetctl user create` can't be used for this (it needs an existing authenticated session), so this uses `fleetctl setup`, which is Fleet's first-run bootstrap. Verified against Fleet v4.92.0's `fleetctl setup` source; `--password` is deliberately omitted so it prompts interactively instead of leaving the password in shell history.
-
-```bash
 fleetctl config set --address https://<fleet_subdomain>
-fleetctl setup --email <your real email> --name "Break Glass Admin" --org-name "Homelab"
+fleetctl login --email <the admin email from Step 8>    # prompts for the password; verify the flags with `fleetctl login --help`
 ```
 
-Expected: `[+] Fleet setup successful and context configured!` — this also logs `fleetctl` in as that user.
+`config set --address` saves the server URL in `~/.fleet/config` under a context named `default` (like an AWS profile); `login` exchanges your email and password for a session token and stores it in that context, so later commands are authenticated. That token is a session token and expires (by default after days) — re-run `fleetctl login` when commands start returning 401, and never use a login token for CI (Task 11 uses an API-only user for that).
 
-What these two commands do: `config set --address` saves the server URL in `~/.fleet/config` under a context named `default` (like an AWS profile); `setup` calls the one API endpoint that works on an empty Fleet, creates the first global admin, prompts you for its password, and stores that user's API token in the same context so later commands are authenticated.
-
-Store the password in your personal password manager (not Secrets Manager — this account has to work even if AWS itself is the problem). This is a one-time action per database: because Aurora is restored from snapshot on every `up` (Task 14), the account survives teardown/rebuild. It only needs redoing after a genuinely fresh database (a `--fresh` `up`). Turning on MFA for this account is deliberately deferred to Task 9, after SSO is proven working.
-
-- [ ] **Step 8b: 🎓 You run this — poke around the live server.** Read-only commands to see what a brand-new Fleet contains and how the CLI shapes its output:
+- [ ] **Step 8b: 🎓 You run this — poke around the live server** (needs Step 8a). Read-only commands to see what a brand-new Fleet contains and how the CLI shapes its output:
 
 ```bash
 fleetctl config get                # which server/context/token you are using (token is masked)
@@ -881,7 +877,7 @@ Windows MDM itself is switched *on* declaratively in Task 11 (`controls.windows_
 
 **Part B — Apple MDM (APNs push certificate), all through the Fleet UI**
 
-- [ ] **Step 5: 🎓 You run this — generate the APNs CSR.** *(Pre-flight: `fleetctl --version` → 4.92.0 and still logged in — `fleetctl get config` works. Otherwise stop; see Task 3 Step 8a.)* (What it does: asks the Fleet server to create the Apple MDM SCEP CA and APNs key, then writes only the signing request to disk for you to upload to Apple.) With `fleetctl` still logged in from Task 3 Step 8: `fleetctl generate mdm-apple --csr ~/fleet-apns.csr`. Verified against Fleet v4.92.0: this asks *the Fleet server* for the CSR (it generates the SCEP CA and APNs key server-side and keeps them in the database — nothing to store in AWS) and writes only the CSR to disk. Alternatively use Fleet UI > Settings > Integrations > Mobile device management (MDM) > Apple Push Certificates > "Add APNs".
+- [ ] **Step 5: 🎓 You run this — generate the APNs CSR.** *(Pre-flight: `fleetctl --version` → 4.92.0 and still logged in — `fleetctl get config` works. Otherwise stop; see Task 3 Step 8a.)* (What it does: asks the Fleet server to create the Apple MDM SCEP CA and APNs key, then writes only the signing request to disk for you to upload to Apple.) With `fleetctl` installed and logged in (Task 3 Step 8a): `fleetctl generate mdm-apple --csr ~/fleet-apns.csr`. Verified against Fleet v4.92.0: this asks *the Fleet server* for the CSR (it generates the SCEP CA and APNs key server-side and keeps them in the database — nothing to store in AWS) and writes only the CSR to disk. Alternatively use Fleet UI > Settings > Integrations > Mobile device management (MDM) > Apple Push Certificates > "Add APNs".
 
   **Email caveat (verified in Fleet's source, not tested):** the CSR is signed via fleetdm.com using the *logged-in user's email address*, and fleetdm.com can reject the request with "Email domain '@…' is not permitted for APNS certificate signing. Please use a corporate or organization email address." The break-glass admin was created with your personal address; if that gets rejected, do this step while logged in as an SSO/Fleet user whose email is on your own domain (after Task 11 Step 8 — Apple MDM is not needed until you enroll a Mac, so postponing it is fine), or create a temporary admin on a domain-owned address. Which domains fleetdm.com rejects is not known — verify at execution.
 
