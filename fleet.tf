@@ -58,19 +58,25 @@ module "fleet" {
       create_bucket = false
       bucket_name   = aws_s3_bucket.software_installers.bucket
     }
-    extra_iam_policies = [aws_iam_policy.software_installers.arn]
+    extra_iam_policies = concat(
+      [aws_iam_policy.software_installers.arn],
+      module.ses.fleet_extra_iam_policies
+    )
 
     autoscaling = {
       min_capacity = 1
       max_capacity = 2
     }
 
-    extra_environment_variables = {
-      FLEET_LICENSE_KEY          = var.fleet_license_key
-      FLEET_LOGGING_JSON         = "true"
-      FLEET_MYSQL_MAX_OPEN_CONNS = "10"
-      FLEET_REDIS_MAX_OPEN_CONNS = "50"
-    }
+    extra_environment_variables = merge(
+      {
+        FLEET_LICENSE_KEY          = var.fleet_license_key
+        FLEET_LOGGING_JSON         = "true"
+        FLEET_MYSQL_MAX_OPEN_CONNS = "10"
+        FLEET_REDIS_MAX_OPEN_CONNS = "50"
+      },
+      module.ses.fleet_extra_environment_variables
+    )
   }
 }
 
