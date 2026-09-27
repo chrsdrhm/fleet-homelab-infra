@@ -721,7 +721,7 @@ module "ses" {
 }
 ```
 
-- [ ] **Step 3: Init, validate, plan, apply**
+- [ ] **Step 2: Init, validate, plan, apply**
 
 Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
 
