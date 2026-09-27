@@ -737,7 +737,7 @@ module "ses" {
 }
 ```
 
-- [ ] **Step 2: Init, validate, plan, apply**
+- [ ] **Step 3: Init, validate, plan, apply**
 
 Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
 
@@ -1005,7 +1005,7 @@ controls:
   windows_enabled_and_configured: true
 ```
 
-Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim configured in Task 10 Step 6 (default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
+(**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim configured in Task 10 Step 6 (default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
 
 - [ ] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
 
@@ -2316,6 +2316,329 @@ A third Infinity data source instance (same plugin as Task 17's Fleet API connec
 
 ---
 
+### Task 19: Fleet activities webhook → Lambda → DynamoDB → Grafana
+
+Added after the original 18 tasks, at the user's request, specifically to learn API Gateway + Lambda. Wires up Fleet's **activities webhook** (fires on essentially every event — logins, config changes, host enrollment; this is what logged the "starter library" activity flood in Task 3) to a small serverless pipeline: API Gateway (HTTP API) → an ingest Lambda → DynamoDB, plus a second read Lambda that Grafana's already-installed Infinity plugin (Task 17) queries for a fourth data source. Deliberately DynamoDB + a read Lambda rather than a community Grafana/DynamoDB plugin — it reuses the Infinity pattern already in this plan instead of installing an unvetted plugin.
+
+**Verified against Fleet's own source before designing this** (`server/service/endpoint_setup.go`, `server/activity/internal/service/new_activity.go`, `server/platform/http/post_json.go`): the activities webhook is a plain `POST` of a fixed JSON shape (`timestamp`, `actor_full_name`, `actor_id`, `actor_email`, `type`, `details`), with **no signature or HMAC header of any kind** — Fleet does not authenticate its own outgoing webhook calls. Fleet's code already anticipates a secret living in the URL itself (a `MaskSecretURLParams` helper scrubs query-string values from its own logs before printing them), so that's the mechanism used here: a random token as a query parameter, checked by both Lambdas before doing anything else. This is the same shape of tradeoff as Task 17's plain IAM user — a static secret accepted because the alternative (no auth at all on a public endpoint) is worse, and Fleet gives no better option.
+
+**Files:**
+- Create: `webhook.tf`
+- Create: `lambda/activities-webhook/ingest.py`, `lambda/activities-webhook/read.py`
+
+**Interfaces:**
+- Consumes: nothing from other `.tf` files (standalone, account-level resources, same as Task 13).
+- Produces: `aws_apigatewayv2_stage.activities_webhook.invoke_url` — the ingest URL (`.../webhook`, used as Fleet's `destination_url` in Task 11's `default.yml`) and the read URL (`.../activities`, used in Task 17/18's Grafana as a fourth Infinity data source, added as an addendum there rather than repeated here).
+
+- [ ] **Step 1: Write the two Lambda source files.** Kept intentionally minimal — the point is learning the API Gateway/Lambda wiring, not the application logic. Both check the same shared-secret query parameter before doing anything else; both use only `boto3`, which ships in the Lambda Python runtime (no dependency packaging needed).
+
+`lambda/activities-webhook/ingest.py`:
+
+```python
+import json, os, time, uuid
+import boto3
+
+table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+TOKEN = os.environ["WEBHOOK_TOKEN"]
+TTL_DAYS = int(os.environ.get("TTL_DAYS", "30"))
+
+
+def handler(event, context):
+    qs = event.get("queryStringParameters") or {}
+    if qs.get("token") != TOKEN:
+        return {"statusCode": 403, "body": "forbidden"}
+
+    try:
+        payload = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return {"statusCode": 400, "body": "invalid json"}
+
+    now = int(time.time())
+    details = payload.get("details")
+    table.put_item(Item={
+        "id": str(uuid.uuid4()),
+        "ts": now,
+        "type": payload.get("type", "unknown"),
+        "actor_email": payload.get("actor_email"),
+        "actor_full_name": payload.get("actor_full_name"),
+        "details": json.dumps(details) if details is not None else None,
+        "expires_at": now + TTL_DAYS * 86400,
+    })
+    return {"statusCode": 200, "body": "ok"}
+```
+
+`lambda/activities-webhook/read.py`:
+
+```python
+import json, os
+import boto3
+
+table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+TOKEN = os.environ["WEBHOOK_TOKEN"]
+
+
+def handler(event, context):
+    qs = event.get("queryStringParameters") or {}
+    if qs.get("token") != TOKEN:
+        return {"statusCode": 403, "body": "forbidden"}
+
+    limit = int(qs.get("limit", "100"))
+    # A Scan is fine at this scale (a homelab's occasional activity); it would
+    # not be at real volume — noted rather than optimized, per this plan's
+    # "avoid overcomplication" rule.
+    resp = table.scan(Limit=limit)
+    items = sorted(resp.get("Items", []), key=lambda i: i.get("ts", 0), reverse=True)
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(items, default=str),
+    }
+```
+
+- [ ] **Step 2: Write `webhook.tf`.** Verified against the installed `hashicorp/aws` provider's own schema (`terraform providers schema -json`), not memory — this project has been burned twice already by invented schemas (the Task 4 WAF addon, the Task 3 module ALB path). Two Lambdas, two IAM roles (least-privilege, separate per function — same pattern as Task 15's two OIDC roles), one on-demand DynamoDB table with a TTL attribute for automatic cleanup, one HTTP API with two routes. `hashicorp/archive` is a new provider (add it to `providers.tf`'s `required_providers`, next to `cloudflare`).
+
+```hcl
+# providers.tf addition:
+#     archive = {
+#       source  = "hashicorp/archive"
+#       version = "~> 2.4"
+#     }
+
+resource "random_id" "activities_webhook_token" {
+  byte_length = 20
+}
+
+resource "aws_dynamodb_table" "fleet_activities" {
+  name         = "fleet-homelab-activities"
+  billing_mode = "PAY_PER_REQUEST" # a homelab's event rate never approaches provisioned-capacity territory
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+}
+
+data "archive_file" "ingest" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/activities-webhook/ingest.py"
+  output_path = "${path.module}/lambda/activities-webhook/ingest.zip"
+}
+
+data "archive_file" "read" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/activities-webhook/read.py"
+  output_path = "${path.module}/lambda/activities-webhook/read.zip"
+}
+
+data "aws_iam_policy_document" "activities_lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "activities_ingest" {
+  name               = "fleet-homelab-activities-ingest"
+  assume_role_policy = data.aws_iam_policy_document.activities_lambda_assume.json
+}
+
+resource "aws_iam_role" "activities_read" {
+  name               = "fleet-homelab-activities-read"
+  assume_role_policy = data.aws_iam_policy_document.activities_lambda_assume.json
+}
+
+resource "aws_iam_role_policy" "activities_ingest" {
+  name = "fleet-homelab-activities-ingest"
+  role = aws_iam_role.activities_ingest.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["dynamodb:PutItem"], Resource = aws_dynamodb_table.fleet_activities.arn },
+      { Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:*:*:*" },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "activities_read" {
+  name = "fleet-homelab-activities-read"
+  role = aws_iam_role.activities_read.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["dynamodb:Scan"], Resource = aws_dynamodb_table.fleet_activities.arn },
+      { Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:*:*:*" },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "activities_ingest" {
+  function_name    = "fleet-homelab-activities-ingest"
+  filename         = data.archive_file.ingest.output_path
+  source_code_hash = data.archive_file.ingest.output_base64sha256
+  role             = aws_iam_role.activities_ingest.arn
+  handler          = "ingest.handler"
+  runtime          = "python3.13" # verify the current runtime list at execution (python3.14 also exists as of this writing) — pinned to the stable one, not the newest
+  timeout          = 10
+
+  environment {
+    variables = {
+      TABLE_NAME    = aws_dynamodb_table.fleet_activities.name
+      WEBHOOK_TOKEN = random_id.activities_webhook_token.hex
+      TTL_DAYS      = "30"
+    }
+  }
+}
+
+resource "aws_lambda_function" "activities_read" {
+  function_name    = "fleet-homelab-activities-read"
+  filename         = data.archive_file.read.output_path
+  source_code_hash = data.archive_file.read.output_base64sha256
+  role             = aws_iam_role.activities_read.arn
+  handler          = "read.handler"
+  runtime          = "python3.13"
+  timeout          = 10
+
+  environment {
+    variables = {
+      TABLE_NAME    = aws_dynamodb_table.fleet_activities.name
+      WEBHOOK_TOKEN = random_id.activities_webhook_token.hex
+    }
+  }
+}
+
+resource "aws_apigatewayv2_api" "activities_webhook" {
+  name          = "fleet-homelab-activities-webhook"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_stage" "activities_webhook" {
+  api_id      = aws_apigatewayv2_api.activities_webhook.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_apigatewayv2_integration" "ingest" {
+  api_id                 = aws_apigatewayv2_api.activities_webhook.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.activities_ingest.invoke_arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_integration" "read" {
+  api_id                 = aws_apigatewayv2_api.activities_webhook.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.activities_read.invoke_arn
+  integration_method     = "POST" # API Gateway always invokes Lambda via POST regardless of the route's method — this is not a typo
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "ingest" {
+  api_id    = aws_apigatewayv2_api.activities_webhook.id
+  route_key = "POST /webhook"
+  target    = "integrations/${aws_apigatewayv2_integration.ingest.id}"
+}
+
+resource "aws_apigatewayv2_route" "read" {
+  api_id    = aws_apigatewayv2_api.activities_webhook.id
+  route_key = "GET /activities"
+  target    = "integrations/${aws_apigatewayv2_integration.read.id}"
+}
+
+resource "aws_lambda_permission" "ingest" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.activities_ingest.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.activities_webhook.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "read" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.activities_read.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.activities_webhook.execution_arn}/*/*"
+}
+
+output "activities_webhook_ingest_url" {
+  value = "${aws_apigatewayv2_stage.activities_webhook.invoke_url}webhook?token=${random_id.activities_webhook_token.hex}"
+}
+
+output "activities_webhook_read_url" {
+  value     = "${aws_apigatewayv2_stage.activities_webhook.invoke_url}activities?token=${random_id.activities_webhook_token.hex}"
+  sensitive = true
+}
+```
+
+Tags: nothing extra needed — `default_tags` on the provider (Task 3) already applies `Project`/`ManagedBy` to every resource here that supports tags (the DynamoDB table, both Lambdas, the API). `aws_apigatewayv2_route`, `_integration`, `_stage`, `aws_lambda_permission`, and `aws_iam_role_policy` don't support tags in AWS at all — same "hangs off a tagged parent" situation as the resources noted in the tagging audit done for the rest of this stack.
+
+- [ ] **Step 3: Init, validate, plan, apply**
+
+Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
+Expected: 1 DynamoDB table, 2 Lambda functions (+ 2 `archive_file` zips written to disk, gitignored — add `lambda/**/*.zip` to `.gitignore`), 2 IAM roles + inline policies, 1 HTTP API with 2 integrations/routes, 1 stage, 2 Lambda permissions.
+
+- [ ] **Step 4: Verify the ingest path directly**, before touching Fleet — isolates "is the AWS side working" from "is Fleet configured right".
+
+```bash
+INGEST=$(terraform output -raw activities_webhook_ingest_url)
+curl -s -o /dev/null -w "wrong token -> %{http_code}\n" -X POST "${INGEST%token=*}token=wrong" -d '{"type":"test"}'
+curl -s -o /dev/null -w "correct token -> %{http_code}\n" -X POST "$INGEST" -d '{"type":"test.manual","actor_email":"you@example.com","details":{"note":"manual verification"}}'
+aws dynamodb scan --table-name fleet-homelab-activities --query 'Items[?type.S==`test.manual`]' --output json
+```
+
+Expected: `403` then `200`, and the scan returns the item just written. Then the read endpoint:
+
+```bash
+curl -s "$(terraform output -raw activities_webhook_read_url)" | python3 -m json.tool | head -20
+```
+
+Expected: a JSON array containing that same item.
+
+- [ ] **Step 5: Point Fleet's activities webhook at the ingest URL.** If Task 11's GitOps repo is already live, add this to `default.yml`'s `org_settings:` instead of running the command below, and commit/push it there — **not verified**: whether `fleetctl gitops`'s reconciliation resets `webhook_settings` to disabled when the key is entirely absent from `default.yml` (as opposed to explicitly present-and-disabled) is unconfirmed; check by adding it explicitly and watching the next scheduled gitops run rather than assuming either way.
+
+```yaml
+org_settings:
+  webhook_settings:
+    activities_webhook:
+      enable_activities_webhook: true
+      destination_url: "$FLEET_ACTIVITIES_WEBHOOK_URL"   # add FLEET_ACTIVITIES_WEBHOOK_URL to Task 11 Step 6's secrets and env block, value = Step 1's ingest URL (with its token)
+```
+
+If GitOps isn't live yet, set it directly (as the break-glass admin, `fleetctl` logged in per Task 3 Step 8a):
+
+```bash
+fleetctl get config --yaml > /tmp/fleet-config.yml
+# edit /tmp/fleet-config.yml: under org_settings, add the webhook_settings block above
+# with destination_url set to the real ingest URL from Step 1 (terraform output activities_webhook_ingest_url)
+fleetctl apply -f /tmp/fleet-config.yml
+rm /tmp/fleet-config.yml   # held the token in plaintext
+```
+
+- [ ] **Step 6: Verify end-to-end.** Trigger any real Fleet activity (log out and back in as the break-glass admin is enough — Task 3's screenshots already showed this fires on login) and confirm a new item lands: `aws dynamodb scan --table-name fleet-homelab-activities --query 'Items[?type.S==`user_logged_in`]' --output json`. Expect at least one item with a recent `ts`.
+
+- [ ] **Step 7: Add a fourth Grafana data source (Infinity) for this** — addendum to Task 17/18 rather than a new Grafana setup. Connections > Data sources > Add data source > Infinity, Base URL = Step 1's read URL (the query-string token makes this the auth — no separate bearer/header config needed, unlike Task 17 Step 7's Fleet data source). Starting query: the URL as-is returns the 100 most recent activities as JSON — a table panel with columns `ts`, `type`, `actor_email` is a reasonable first panel; a time-series count-by-type view is a natural follow-on, left open-ended like Task 17 Step 9.
+
+- [ ] **Step 8: No teardown wiring needed.** Unlike the Task 3 stack, nothing here bills hourly — DynamoDB on-demand, Lambda, and an HTTP API are all zero-cost at rest and near-zero at this event volume — so `scripts/down.sh`/`up.sh` (Task 14) deliberately do **not** target these resources; they simply stay up whether or not the Fleet stack is up (the webhook just has nothing to fire while Fleet itself is torn down).
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add webhook.tf lambda/ providers.tf .gitignore .terraform.lock.hcl
+git commit -m "Add Fleet activities webhook -> Lambda -> DynamoDB -> Grafana"
+```
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Entra + break-glass + JIT provisioning + group-based role mapping): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2333,3 +2656,4 @@ A third Infinity data source instance (same plugin as Task 17's Fleet API connec
 - Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources: Task 17. ✓
 - Entra (Microsoft Graph) data source for Grafana, portable to Okta later: Task 18. ✓
 - Two-repo layout: this repo (Tasks 1-9, 12-18) + `fleet-homelab-gitops` (Task 11). ✓
+- Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at the user's request, to learn API Gateway/Lambda): Task 19.
