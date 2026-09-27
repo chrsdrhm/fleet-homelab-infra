@@ -556,6 +556,8 @@ Expected: `Plan: 86 to add, 0 to change, 0 to destroy` (after the secret pre-cre
 Run: `terraform apply tfplan`
 Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gateway provisioning dominate, then the migrations addon runs `fleet prepare db` as a one-off task and scales the service back up, adding a few minutes).
 
+**Teardown note (found on the first real destroy):** after `terraform destroy`, AWS re-creates the Container Insights log group `/aws/ecs/containerinsights/fleet-homelab/performance` (untagged) because the cluster is still emitting metrics as it shuts down. Left behind, it makes the next apply fail with `ResourceAlreadyExistsException`. Delete it after every destroy (`aws logs delete-log-group --log-group-name /aws/ecs/containerinsights/fleet-homelab/performance`); Task 14's `down.sh` does this. A `depends_on` on the log group can't fix it — on create it would make Terraform try to make the group *after* the tasks have already caused AWS to create it. Aurora's automated `rds:fleet-homelab-…` snapshot for the deleted cluster also lingers for a few minutes and then removes itself.
+
 **Expect one retry (reproduced on two separate builds):** the first `apply` fails near the end with `NoSuchEntity: The role with name fleet-role cannot be found` on `aws_iam_role_policy_attachment.extras[0]` — IAM is eventually consistent and the module attaches our software-installers policy the instant the role is created. Nothing is wrong: the role exists seconds later. Re-run `terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`; it shows **4 to add** (that attachment, the RDS ingress rule, the `fleet_alb` DNS record, and the migrations `null_resource`) and completes, including the ~8-minute migrations run. On a rebuild after `down.sh`, the same retry applies.
 
 - [ ] **Step 6: Verify the ECS service is healthy**
@@ -1340,11 +1342,19 @@ aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$SN
 echo "Snapshot complete: $SNAPSHOT_ID"
 
 terraform destroy -input=false -var-file=terraform.tfvars \
+  -target=aws_route53_record.fleet_alb \
+  -target=aws_cloudwatch_log_group.container_insights \
   -target=module.migrations \
   -target=module.monitoring \
   -target=module.waf \
   -target=module.fleet \
   -auto-approve
+
+# ECS Container Insights keeps writing metrics while the cluster shuts down, so AWS
+# RE-CREATES this log group (untagged) right after Terraform deletes it. Found on the
+# first real teardown. If it's left behind, the next `up` fails with
+# ResourceAlreadyExistsException when Terraform tries to create it. Delete it by exact name.
+aws logs delete-log-group --log-group-name /aws/ecs/containerinsights/fleet-homelab/performance 2>/dev/null || true
 
 echo "Down. Route 53 zone, ACM cert, TF state backend, MDM secrets, private key,"
 echo "installers bucket, SES, log buckets, and budget alert all remain. Run"
