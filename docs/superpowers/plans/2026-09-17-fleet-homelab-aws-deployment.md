@@ -2325,7 +2325,7 @@ A third Infinity data source instance (same plugin as Task 17's Fleet API connec
 - DNS/TLS: Task 2. ✓
 - GitOps: Task 11. ✓
 - Osquery log destination (Firehose → S3): Task 12. ✓
-- AWS Budget alert ($100/mo, 20/40/60/80/100% thresholds): Task 13. ✓
+- AWS Budget alert ($100/mo, an alert every $10): Task 13. ✓ (built and applied)
 - Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
 - Remote (non-laptop) execution of `up`/`down`/`plan` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
