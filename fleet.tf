@@ -77,6 +77,9 @@ module "fleet" {
       },
       module.ses.fleet_extra_environment_variables
     )
+
+    extra_secrets                = merge(module.mdm.extra_secrets)
+    extra_execution_iam_policies = concat(module.mdm.extra_execution_iam_policies)
   }
 }
 
