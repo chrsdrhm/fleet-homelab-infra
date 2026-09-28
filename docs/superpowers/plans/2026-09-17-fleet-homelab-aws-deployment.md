@@ -820,30 +820,35 @@ Two independent halves: Part A (Windows, Terraform + `openssl`) and Part B (Appl
 
 **Part A — Windows MDM (WSTEP identity certificate)**
 
-- [ ] **Step 1: Generate the WSTEP certificate and key.** Fleet's own `fleetctl preview` tooling uses an RSA-4096 self-signed CA with a PKCS#1 private key for this, so the same shape is used here (parameters derived from Fleet's source; Fleet's Windows MDM guide itself was not cross-checked — if Windows enrollment fails with a key-parse error, that is the first place to look).
+- [ ] **Step 1: Generate the WSTEP certificate and key — exact commands from Fleet's own guide** (`fleetdm.com/guides/windows-mdm-setup`), fetched and verified directly against this machine's OpenSSL, not taken from memory. An earlier draft of this step improvised a generate-then-detect-and-convert approach; Fleet's guide does it in one line with `-traditional`.
 
 ```bash
 mkdir -p ~/fleet-wstep && cd ~/fleet-wstep
-openssl genrsa -out wstep.key 4096
-head -1 wstep.key   # must read: -----BEGIN RSA PRIVATE KEY-----
+openssl version   # confirm this is real OpenSSL, not macOS's stock LibreSSL (Fleet's own guide flags this exact gotcha — LibreSSL doesn't support -traditional; Homebrew's openssl, verified in this session, does)
+openssl genrsa -traditional -out fleet-mdm-win-wstep.key 4096
+head -1 fleet-mdm-win-wstep.key   # must read: -----BEGIN RSA PRIVATE KEY----- (PKCS#1, "traditional" format)
 ```
 
-If it reads `-----BEGIN PRIVATE KEY-----` instead (OpenSSL 3 default is PKCS#8), convert it: `openssl rsa -in wstep.key -traditional -out wstep.key.new && mv wstep.key.new wstep.key`.
+If your `openssl` turns out to be LibreSSL and rejects `-traditional`, fall back to: `openssl genrsa -out fleet-mdm-win-wstep.key 4096` then, if `head -1` shows `-----BEGIN PRIVATE KEY-----` (PKCS#8) instead, convert with `openssl rsa -in fleet-mdm-win-wstep.key -traditional -out fleet-mdm-win-wstep.key.new && mv fleet-mdm-win-wstep.key.new fleet-mdm-win-wstep.key`.
 
 ```bash
-openssl req -x509 -new -key wstep.key -sha256 -days 3650 -subj "/CN=Fleet WSTEP CA" -out wstep.crt
+openssl req -x509 -new -nodes -key fleet-mdm-win-wstep.key -sha256 -days 3652 -out fleet-mdm-win-wstep.crt -subj '/CN=Fleet Root CA/C=US/O=Fleet.'
 ```
+
+(`-nodes` is a no-op here specifically — it only matters when `req` generates a fresh key itself, and this one reads the existing `fleet-mdm-win-wstep.key` — included anyway to match Fleet's documented command exactly, in case that assumption is wrong on some OpenSSL version. `-days 3652` matches Fleet's guide precisely; the previous draft used `3650`, an immaterial ~2-day difference, but exact reuse of Fleet's own tested command is safer than a hand-derived approximation of it.)
 
 **Back these two files up in your password manager / encrypted storage.** Fleet uses this pair to escrow BitLocker recovery keys for Windows hosts; replacing it later permanently loses access to keys already escrowed. Do not lose it and do not casually regenerate it.
 
 - [ ] **Step 2: Store the pair in the secret** (jq builds the JSON so the PEM newlines are escaped correctly):
 
 ```bash
-jq -n --rawfile c wstep.crt --rawfile k wstep.key \
+jq -n --rawfile c fleet-mdm-win-wstep.crt --rawfile k fleet-mdm-win-wstep.key \
   '{FLEET_MDM_APPLE_SCEP_CERT_BYTES: $c, FLEET_MDM_APPLE_SCEP_KEY_BYTES: $k}' > payload.json
 aws secretsmanager put-secret-value --secret-id fleet-scep --secret-string file://payload.json
 shred -u payload.json 2>/dev/null || rm -P payload.json
 ```
+
+(These JSON key names, `FLEET_MDM_APPLE_SCEP_CERT_BYTES`/`_KEY_BYTES`, are the `addons/mdm` module's Secrets-Manager-internal naming — verified in Task 7 against the module's own `outputs.tf`. Fleet's guide itself, written for a bare-metal/Docker deployment, has you set `FLEET_MDM_WINDOWS_WSTEP_IDENTITY_CERT_BYTES`/`_KEY_BYTES` directly as environment variables; here the module maps our secret\'s Apple-named keys into those same real env var names at the ECS task level, so the end state matches Fleet\'s guide even though the path there looks different.)
 
 (The key names say "APPLE_SCEP" because that is what the `addons/mdm` module hard-codes; with `enable_windows_mdm = true` it re-exposes the same two values as the Windows WSTEP variables. Nothing Apple-related is happening here.)
 
