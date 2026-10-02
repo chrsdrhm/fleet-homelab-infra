@@ -558,7 +558,14 @@ Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gatew
 
 **Teardown note (found on the first real destroy):** after `terraform destroy`, AWS re-creates the Container Insights log group `/aws/ecs/containerinsights/fleet-homelab/performance` (untagged) because the cluster is still emitting metrics as it shuts down. Left behind, it makes the next apply fail with `ResourceAlreadyExistsException`. Delete it after every destroy (`aws logs delete-log-group --log-group-name /aws/ecs/containerinsights/fleet-homelab/performance`); Task 14's `down.sh` does this. A `depends_on` on the log group can't fix it — on create it would make Terraform try to make the group *after* the tasks have already caused AWS to create it. Aurora's automated `rds:fleet-homelab-…` snapshot for the deleted cluster also lingers for a few minutes and then removes itself.
 
-**Expect one retry (reproduced on two separate builds):** the first `apply` fails near the end with `NoSuchEntity: The role with name fleet-role cannot be found` on `aws_iam_role_policy_attachment.extras[0]` — IAM is eventually consistent and the module attaches our software-installers policy the instant the role is created. Nothing is wrong: the role exists seconds later. Re-run `terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`; it shows **4 to add** (that attachment, the RDS ingress rule, the `fleet_alb` DNS record, and the migrations `null_resource`) and completes, including the ~8-minute migrations run. On a rebuild after `down.sh`, the same retry applies.
+**Expect one retry — now automatic, not manual (reproduced on 3 of 3 real builds).** The first `apply` fails near the end with `NoSuchEntity: The role with name fleet-role cannot be found` on `aws_iam_role_policy_attachment.extras[0]` — IAM is eventually consistent, and the module attaches our software-installers policy the instant the role is created, sometimes before IAM has replicated the role everywhere. Nothing is wrong: the role exists seconds later. This isn't retried by the AWS provider itself (`NoSuchEntity` isn't classified as a throttling/retryable error), and it's not fixable inside the pinned upstream module without forking it, so `scripts/tf-apply.sh` (written ahead of Task 14, since every apply from here on benefits from it) wraps `terraform apply`, detects this specific error, waits 20s, and re-plans/re-applies automatically:
+
+```bash
+terraform apply -var-file=terraform.tfvars -out=tfplan
+./scripts/tf-apply.sh tfplan -- -var-file=terraform.tfvars
+```
+
+On the initial build this resolves **4 to add** (the attachment, the RDS ingress rule, the `fleet_alb` DNS record, and the migrations `null_resource`); on a snapshot-restore rebuild it resolved **5 to add** (also the WAF Web ACL association, and a second `extras[]` index since Tasks 6-8 add more `extra_iam_policies`/`extra_execution_iam_policies`). Either way, `scripts/tf-apply.sh` handles it without a human needing to notice and re-run — use it (not a bare `terraform apply`) for every apply in this plan from here on, including inside Task 14's `up.sh`/`down.sh` and Task 15's CI workflow.
 
 - [ ] **Step 6: Verify the ECS service is healthy**
 
@@ -1223,6 +1230,7 @@ Given the primary usage pattern is intermittent (evenings/weekends), `up.sh`/`do
 - Create: `scripts/resume.sh`
 - Create: `scripts/up.sh`
 - Create: `scripts/down.sh`
+- (`scripts/tf-apply.sh` already exists, written and committed in Task 3 — `up.sh` calls it, nothing to create here.)
 
 **Interfaces:**
 - Consumes: nothing beyond AWS CLI credentials and this repo's Terraform state.
@@ -1295,7 +1303,12 @@ else
 fi
 
 # ${arr[@]+"${arr[@]}"} keeps macOS bash 3.2 + `set -u` from erroring on an empty array
-terraform apply -input=false -var-file=terraform.tfvars ${SNAPSHOT_ARGS[@]+"${SNAPSHOT_ARGS[@]}"} -auto-approve
+VAR_ARGS=(-var-file=terraform.tfvars ${SNAPSHOT_ARGS[@]+"${SNAPSHOT_ARGS[@]}"})
+terraform plan -input=false "${VAR_ARGS[@]}" -out=tfplan
+# tf-apply.sh (Task 3) auto-retries the one known, reproducible IAM role-propagation
+# race this stack hits on every from-scratch build of module.fleet — see Task 3 for
+# why a bare `terraform apply` isn't enough here.
+./scripts/tf-apply.sh tfplan -- "${VAR_ARGS[@]}"
 echo "Up. This can take 15-20 minutes for VPC/NAT/Aurora/ALB/ECS to fully stabilize even after apply returns."
 ```
 
@@ -1364,7 +1377,7 @@ echo "then aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <
 - [ ] **Step 5: Make them executable and verify**
 
 Run: `chmod +x scripts/*.sh && ls -l scripts/`
-Expected: all four scripts show the executable bit set.
+Expected: all five scripts (the four from this task, plus `tf-apply.sh` from Task 3) show the executable bit set.
 
 - [ ] **Step 6: Smoke-test `idle.sh` / `resume.sh`** (safe — no data loss, seconds to reverse)
 
