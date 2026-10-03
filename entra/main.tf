@@ -1,8 +1,14 @@
 data "azuread_client_config" "me" {}
 
-# Stable IDs for the two app roles (an app role is referenced by GUID).
-resource "random_uuid" "role_admin" {}
-resource "random_uuid" "role_observer" {}
+locals {
+  # An app role is referenced by GUID. These are RFC 4122 version-5 UUIDs derived
+  # from fixed names: deterministic (nothing in state to drift) and VALID.
+  # Do not use random_uuid here: it returns UUID-shaped strings without the
+  # version/variant bits, the Entra API accepts them, but the portal can then not
+  # match the role on an assignment (Edit assignment shows "None selected").
+  role_admin_id    = uuidv5("dns", "admin.${var.fleet_subdomain}")
+  role_observer_id = uuidv5("dns", "observer.${var.fleet_subdomain}")
+}
 
 resource "azuread_application" "fleet" {
   display_name     = "Fleet"
@@ -25,7 +31,7 @@ resource "azuread_application" "fleet" {
   # These role values are what that attribute carries. Fleet reads a LIST of
   # values for the attribute, so every user must hold exactly one of these.
   app_role {
-    id                   = random_uuid.role_admin.result
+    id                   = local.role_admin_id
     value                = "admin"
     display_name         = "Fleet admin"
     description          = "Global admin in Fleet"
@@ -34,7 +40,7 @@ resource "azuread_application" "fleet" {
   }
 
   app_role {
-    id                   = random_uuid.role_observer.result
+    id                   = local.role_observer_id
     value                = "observer"
     display_name         = "Fleet observer"
     description          = "Read-only in Fleet"
@@ -91,13 +97,13 @@ resource "azuread_group" "fleet_observers" {
 # observer, never just removing them from admins. (Group assignment to an app
 # needs Entra ID P1; the tenant has it via EMS.)
 resource "azuread_app_role_assignment" "admins" {
-  app_role_id         = random_uuid.role_admin.result
+  app_role_id         = local.role_admin_id
   principal_object_id = azuread_group.fleet_admins.object_id
   resource_object_id  = azuread_service_principal.fleet.object_id
 }
 
 resource "azuread_app_role_assignment" "observers" {
-  app_role_id         = random_uuid.role_observer.result
+  app_role_id         = local.role_observer_id
   principal_object_id = azuread_group.fleet_observers.object_id
   resource_object_id  = azuread_service_principal.fleet.object_id
 }
