@@ -44,10 +44,11 @@ AWS cost, since this is for personal homelab learning, not production scale.
   (accepted values: `admin`, `maintainer`, `observer`, `observer_plus`,
   `technician`, `null`) — this is entirely an IdP-side mechanism, not a
   Fleet-side mapping table: an Entra security group ("Fleet Admins") is
-  created and assigned the `admin` app role on the Entra application, and a
-  claims-mapping policy emits each user's assigned app role as the
-  attribute (`observer` is the other role; a user with no role is ignored, so
-  Fleet's default `observer` applies). The whole Entra side is Terraform
+  created and assigned the `admin` app role on the Entra application (and a
+  "Fleet Observers" group the `observer` role; membership of both comes from
+  two Terraform lists, and a plan-time check rejects anyone in both, because
+  Fleet silently takes the last role value it is sent). A claims-mapping
+  policy emits each user's assigned app role as the attribute. The whole Entra side is Terraform
   (`entra/`, separate state, applied locally by a tenant admin, never from CI). Per-team role mapping
   (`FLEET_JIT_USER_ROLE_FLEET_<team_id>`) is possible later but needs the
   numeric team ID Fleet assigns once the "Workstations" team exists — a
