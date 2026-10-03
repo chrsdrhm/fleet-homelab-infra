@@ -12,7 +12,13 @@ module "fleet" {
 
   vpc = {
     name = "fleet-homelab"
-    azs  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+    # db.t4g.medium (Aurora MySQL 3.08) is only orderable in us-east-1c and us-east-1f.
+    # With 1a/1b/1c, Aurora could only ever place the instance in 1c, and a build failed
+    # when 1c had no spare capacity (InvalidVPCNetworkStateFault). Keep BOTH orderable
+    # zones in the set so there are two chances; the module wants three zones in total.
+    # 1f takes 1b's old slot: subnets are matched to zones by position, so this
+    # replaces one subnet per tier instead of shifting every zone.
+    azs = ["us-east-1a", "us-east-1f", "us-east-1c"]
   }
 
   ecs_cluster = {

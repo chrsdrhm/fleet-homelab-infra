@@ -399,7 +399,10 @@ module "fleet" {
 
   vpc = {
     name = "fleet-homelab"
-    azs  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+    # db.t4g.medium (Aurora MySQL 3.08) is only orderable in us-east-1c and us-east-1f.
+    # Keep BOTH in the set (the module wants three zones in total). 1f sits in 1b's old
+    # slot: subnets are matched to zones by position.
+    azs = ["us-east-1a", "us-east-1f", "us-east-1c"]
   }
 
   ecs_cluster = {
@@ -557,6 +560,8 @@ Expected: `Plan: 86 to add, 0 to change, 0 to destroy` (after the secret pre-cre
 
 Run: `terraform apply tfplan`
 Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gateway provisioning dominate, then the migrations addon runs `fleet prepare db` as a one-off task and scales the service back up, adding a few minutes).
+
+**Availability zones matter for Aurora capacity (found on the rebuild of 2026-10-03).** The first rebuild failed on the Aurora *instance* with `InvalidVPCNetworkStateFault: … no subnets exist in Availability Zones with sufficient capacity for … db.t4g.medium … choose from these Availability Zones: us-east-1f`. For Aurora MySQL 3.08, `db.t4g.medium` is only *orderable* in `us-east-1c` and `us-east-1f` (`aws rds describe-orderable-db-instance-options --engine aurora-mysql --engine-version 8.0.mysql_aurora.3.08.2 --db-instance-class db.t4g.medium`); the original zone set `1a/1b/1c` only ever worked because Aurora always placed the instance in `1c`, and `1c` ran out of spare capacity. The restored cluster itself was fine and no data was at risk. The fix is to keep **both** orderable zones in `vpc.azs` (above). To diagnose a similar failure, read the full apply log (the first line of the error names the cause) and check which zones can order the class. **Do not change `azs` on a live stack:** the VPC module derives each subnet's CIDR from its slot, so a swapped zone creates a new subnet with the *same* CIDR before the old one is deleted and AWS rejects it (`InvalidSubnet.Conflict`), and the old subnets can't go first while the ALB, DB, and cache subnet groups still reference them. Destroy and rebuild instead — safe here because the database comes back from the snapshot. Also keep the apply log: I once deleted it in a cleanup step and had to reconstruct the error from AWS.
 
 **Teardown note (found on the first real destroy):** after `terraform destroy`, AWS re-creates the Container Insights log group `/aws/ecs/containerinsights/fleet-homelab/performance` (untagged) because the cluster is still emitting metrics as it shuts down. Left behind, it makes the next apply fail with `ResourceAlreadyExistsException`. Delete it after every destroy (`aws logs delete-log-group --log-group-name /aws/ecs/containerinsights/fleet-homelab/performance`); Task 14's `down.sh` does this. A `depends_on` on the log group can't fix it — on create it would make Terraform try to make the group *after* the tasks have already caused AWS to create it. Aurora's automated `rds:fleet-homelab-…` snapshot for the deleted cluster also lingers for a few minutes and then removes itself.
 
