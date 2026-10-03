@@ -125,6 +125,15 @@ resource "azuread_claims_mapping_policy" "fleet" {
           SamlClaimType = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
         },
         {
+          # Fleet takes a user's display name from the first attribute named name,
+          # displayname, cn, urn:oid:2.5.4.3 or this URI (server/sso/authorization_response.go),
+          # and Entra's default for this URI is the UPN, so JIT-created users were
+          # named by their email. Modifying a basic claim is allowed by a claims policy.
+          Source        = "user"
+          ID            = "displayname"
+          SamlClaimType = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+        },
+        {
           Source        = "user"
           ID            = "assignedroles"
           SamlClaimType = "FLEET_JIT_USER_ROLE_GLOBAL"
