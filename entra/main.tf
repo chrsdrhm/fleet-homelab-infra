@@ -18,7 +18,8 @@ resource "azuread_application" "fleet" {
 
   web {
     # Fleet's SAML assertion consumer service for Fleet users. The second,
-    # /mdm/sso/callback path is only for end-user SSO during MDM enrollment.
+    # /mdm/sso/callback path is only for end-user SSO during MDM enrollment, and Fleet
+    # wants that as a SEPARATE app (see Task 20 in the plan).
     redirect_uris = ["https://${var.fleet_subdomain}/api/v1/fleet/sso/callback"]
   }
 

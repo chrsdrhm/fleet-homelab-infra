@@ -54,6 +54,12 @@ AWS cost, since this is for personal homelab learning, not production scale.
   numeric team ID Fleet assigns once the "Workstations" team exists — a
   deliberate follow-up, not part of this pass, to avoid a chicken-and-egg
   with team creation.
+- **End user SSO (Task 20)**: separate from admin SSO. Device owners
+  authenticate with a second Entra app (distinct identifier URI, the
+  `/mdm/sso/callback` URL, NameID mapped to email) during MDM enrollment, so
+  each host carries a verified IdP identity. Fleet requires two IdP apps if
+  both are used; roles and JIT apply only to the admin side. Not built until
+  the admin SSO is proven and there is a device to enroll.
 - **Break-glass account**: one Fleet global admin created via
   `fleetctl setup` — Fleet's first-run bootstrap, immediately after the first
   deploy (a fresh Fleet has no users, and `fleetctl user create` needs an
