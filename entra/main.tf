@@ -54,21 +54,51 @@ resource "azuread_service_principal" "fleet" {
   }
 }
 
+# Role membership is the ONLY way anyone gets a Fleet role, and it is driven by two
+# lists in terraform.tfvars. There are deliberately no direct user-to-app
+# assignments: with one place to look, "one role per user" (which Fleet needs, see
+# variables.tf) can be enforced by a plan-time check instead of by discipline.
+# `members` is exclusive, so a member added by hand in the portal is removed at the
+# next apply — re-apply after any manual change to restore the guarantee.
+data "azuread_users" "admins" {
+  user_principal_names = var.fleet_admins
+  ignore_missing       = false # a typo'd UPN fails the plan instead of silently granting nothing
+}
+
+data "azuread_users" "observers" {
+  count                = length(var.fleet_observers) > 0 ? 1 : 0
+  user_principal_names = var.fleet_observers
+  ignore_missing       = false
+}
+
 resource "azuread_group" "fleet_admins" {
   display_name     = "Fleet Admins"
   security_enabled = true
   owners           = [data.azuread_client_config.me.object_id]
-  members          = [data.azuread_client_config.me.object_id]
+  members          = data.azuread_users.admins.object_ids
 }
 
-# Group -> role assignment: members of Fleet Admins get the "admin" role,
-# which the claims policy below emits as FLEET_JIT_USER_ROLE_GLOBAL=admin.
-# (Group assignment to apps needs Entra ID P1; the tenant has it via EMS.)
-# To add a read-only user later, assign that USER to the observer role directly,
-# and never put anyone in both — two role values makes Fleet reject the login.
+resource "azuread_group" "fleet_observers" {
+  display_name     = "Fleet Observers"
+  security_enabled = true
+  owners           = [data.azuread_client_config.me.object_id]
+  members          = length(var.fleet_observers) > 0 ? data.azuread_users.observers[0].object_ids : []
+}
+
+# Group -> role. The claims policy below emits the assigned role as
+# FLEET_JIT_USER_ROLE_GLOBAL. Both roles must stay: a user with NO role value is
+# left unchanged by Fleet on login, so demoting someone means moving them to
+# observer, never just removing them from admins. (Group assignment to an app
+# needs Entra ID P1; the tenant has it via EMS.)
 resource "azuread_app_role_assignment" "admins" {
   app_role_id         = random_uuid.role_admin.result
   principal_object_id = azuread_group.fleet_admins.object_id
+  resource_object_id  = azuread_service_principal.fleet.object_id
+}
+
+resource "azuread_app_role_assignment" "observers" {
+  app_role_id         = random_uuid.role_observer.result
+  principal_object_id = azuread_group.fleet_observers.object_id
   resource_object_id  = azuread_service_principal.fleet.object_id
 }
 
