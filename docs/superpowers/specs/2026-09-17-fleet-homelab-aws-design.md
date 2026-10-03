@@ -130,7 +130,7 @@ Non-goals above.
 
 | Component | Decision |
 |---|---|
-| VPC | 3 AZs (module requirement for subnet groups); public, private, database, and elasticache subnets. **NAT Gateway restored** (single gateway, module default) — Fargate now runs in a private subnet with egress via NAT, not a public subnet. |
+| VPC | 3 AZs (module requirement for subnet groups; us-east-1a, 1f and 1c — db.t4g.medium Aurora is only orderable in 1c and 1f, see the plan's Task 3); public, private, database, and elasticache subnets. **NAT Gateway restored** (single gateway, module default) — Fargate now runs in a private subnet with egress via NAT, not a public subnet. |
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, `db.t4g.medium`, single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |

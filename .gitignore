@@ -9,3 +9,6 @@ tfplan
 
 # Lambda build artifacts (Task 19) — rebuilt from source by archive_file
 lambda/**/*.zip
+tfup*
+tfdestroy*
+tfaz*
