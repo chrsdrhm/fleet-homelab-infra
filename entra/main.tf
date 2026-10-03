@@ -19,10 +19,7 @@ resource "azuread_application" "fleet" {
   web {
     # Fleet's SAML assertion consumer service for Fleet users. The second,
     # /mdm/sso/callback path is only for end-user SSO during MDM enrollment.
-    redirect_uris = concat(
-      ["https://${var.fleet_subdomain}/api/v1/fleet/sso/callback"],
-      tolist(var.debug_reply_urls),
-    )
+    redirect_uris = ["https://${var.fleet_subdomain}/api/v1/fleet/sso/callback"]
   }
 
   # Lets a claims-mapping policy apply to this app without a custom signing key.
