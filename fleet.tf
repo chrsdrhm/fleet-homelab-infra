@@ -1,3 +1,10 @@
+locals {
+  # The Container Insights log group name embeds the cluster name, so the two have
+  # to move together. A typo in either would silently recreate the untagged
+  # group AWS makes on its own (see aws_cloudwatch_log_group.container_insights).
+  cluster_name = "fleet-homelab"
+}
+
 module "fleet" {
   source = "github.com/fleetdm/fleet-terraform?depth=1&ref=tf-mod-root-v1.31.1"
 
@@ -9,7 +16,7 @@ module "fleet" {
   }
 
   ecs_cluster = {
-    cluster_name = "fleet-homelab"
+    cluster_name = local.cluster_name
   }
 
   alb_config = {
@@ -78,8 +85,8 @@ module "fleet" {
       module.ses.fleet_extra_environment_variables
     )
 
-    extra_secrets                = merge(module.mdm.extra_secrets)
-    extra_execution_iam_policies = concat(module.mdm.extra_execution_iam_policies)
+    extra_secrets                = module.mdm.extra_secrets
+    extra_execution_iam_policies = module.mdm.extra_execution_iam_policies
   }
 }
 
@@ -111,7 +118,7 @@ module "migrations" {
 # gets the default tags and is removed on teardown. (No depends_on needed:
 # metrics only start flowing minutes after the cluster has tasks.)
 resource "aws_cloudwatch_log_group" "container_insights" {
-  name              = "/aws/ecs/containerinsights/fleet-homelab/performance"
+  name              = "/aws/ecs/containerinsights/${local.cluster_name}/performance"
   retention_in_days = 1
 }
 

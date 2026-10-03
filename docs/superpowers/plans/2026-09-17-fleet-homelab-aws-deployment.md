@@ -496,9 +496,11 @@ module "migrations" {
 # ECS Container Insights writes to this log group and AWS auto-creates it
 # untagged, where it outlives `terraform destroy`. Declaring it here means it
 # gets the default tags and is removed on teardown. (No depends_on needed:
-# metrics only start flowing minutes after the cluster has tasks.)
+# metrics only start flowing minutes after the cluster has tasks.) The name embeds
+# the cluster name, so it comes from the same `local.cluster_name` as
+# `ecs_cluster.cluster_name` in module "fleet" (a `locals` block at the top of fleet.tf).
 resource "aws_cloudwatch_log_group" "container_insights" {
-  name              = "/aws/ecs/containerinsights/fleet-homelab/performance"
+  name              = "/aws/ecs/containerinsights/${local.cluster_name}/performance"
   retention_in_days = 1
 }
 
@@ -862,8 +864,8 @@ shred -u payload.json 2>/dev/null || rm -P payload.json
 - [ ] **Step 3: Wire MDM's secrets into the Fleet task** — modify `fleet.tf`'s `fleet_config` block (extending, not replacing, Task 6's SES merge if it is already there — merge all module outputs into the same expression):
 
 ```hcl
-    extra_secrets                = merge(module.mdm.extra_secrets)
-    extra_execution_iam_policies = concat(module.mdm.extra_execution_iam_policies)
+    extra_secrets                = module.mdm.extra_secrets
+    extra_execution_iam_policies = module.mdm.extra_execution_iam_policies
 ```
 
 - [ ] **Step 4: Validate, plan, apply**
