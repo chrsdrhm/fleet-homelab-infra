@@ -928,29 +928,37 @@ Also confirm the *sender* address Fleet uses (Task 6) is a verified identity or 
 
 ---
 
-### Task 10: Entra ID SSO — app registration, JIT provisioning, and group-based role mapping
+### Task 10: Entra ID SSO — Terraform (`entra/`): app, group, app roles, claims policy, signing certificate
 
-**Files:** none in this repo yet (values feed into Task 11's GitOps repo).
+**Built with Terraform, not by clicking through the portal** — an earlier draft of this plan listed seven manual portal steps and claimed Entra had no Terraform-manageable resources. That was wrong: the official `hashicorp/azuread` provider covers a custom SAML app, app roles, groups, claims mapping policies and token-signing certificates (schemas checked against the installed provider, v3.10).
 
-- [ ] **Step 1: Manual — register the Enterprise Application in Entra.** In the Azure portal: Entra ID > Enterprise applications > New application > Create your own application > "Fleet" > register a SAML-based app.
+**Files** (new directory `entra/`, its own Terraform root and its own state key `fleet-homelab/entra.tfstate` in the same S3 bucket — Entra changes and AWS changes never share state or a lock):
+- `entra/providers.tf`, `backend.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `example.tfvars`; real values (`tenant_id`, `fleet_subdomain`) in the gitignored `entra/terraform.tfvars`.
 
-- [ ] **Step 2: Manual — configure SAML basic settings.** Identifier (Entity ID): `https://<fleet_subdomain>`. Reply URL (ACS URL): `https://<fleet_subdomain>/api/v1/fleet/sso/callback` — verified against Fleet's own SSO docs (there's a second, different callback path for MDM end-user auth, `/api/v1/fleet/mdm/sso/callback`, not used here). Sign-on URL: `https://<fleet_subdomain>/login`.
+**Applied locally by a tenant admin, never from CI.** The identity that can change who may sign in to Fleet shouldn't sit in the AWS pipeline's reach (same reasoning that keeps `oidc.tf` out of CI). Auth is the Azure CLI session — `az login` — so there is no stored secret.
 
-- [ ] **Step 3: Manual — copy the App Federation Metadata URL** from the SAML Certificates section — this is the `metadata_url` value Task 11 needs.
+**What it creates (8 resources):**
+- `azuread_application` "Fleet" — single tenant; Entity ID = `https://<fleet_subdomain>` (must be on a verified tenant domain); reply URL = `https://<fleet_subdomain>/api/v1/fleet/sso/callback` (verified against Fleet's Entra guide); two app roles whose values are `admin` and `observer`; `api.mapped_claims_enabled = true` (lets a claims policy apply without a custom signing key — the provider can't set a preferred custom key, so this is the documented route for a single-tenant app).
+- `azuread_service_principal` — `preferred_single_sign_on_mode = "saml"`, `app_role_assignment_required = true` (only assigned principals can sign in), `feature_tags.custom_single_sign_on = true` (a custom, non-gallery SAML app).
+- `azuread_group` "Fleet Admins" (you as owner and member) and `azuread_app_role_assignment` giving that group the `admin` role. Group assignment to an app needs Entra ID P1; this tenant has it through the EMS license.
+- `azuread_claims_mapping_policy` + assignment: emits the user's **assigned app role** as the SAML attribute `FLEET_JIT_USER_ROLE_GLOBAL` (`Source: user`, `ID: assignedroles` — listed in Microsoft's claims reference). This replaces the earlier plan's portal "conditional claim": app roles do the group-to-role mapping inside Entra, so no condition logic is needed.
+- `azuread_service_principal_token_signing_certificate` — **required, and easy to miss**: the portal creates a SAML signing certificate automatically when SAML SSO is switched on, but creating the app through the API does not. Without it the metadata has no signing key and every login fails — and `terraform apply` still reports success. Found by checking the metadata document (no `KeyDescriptor` at all), then fixed. Entra's default lifetime is 3 years; re-apply to rotate.
 
-- [ ] **Step 4: Manual — create an Entra security group for Fleet admins**, e.g. "Fleet Admins", and add yourself to it. This is what Step 6 below conditions the role claim on.
+**Why these design choices follow from Fleet's own source** (read, not assumed): Fleet takes the user's identity from `NameID.Value` and ignores the NameID *format* (`server/sso/authorization_response.go`), so Entra's default NameID works when UPN and mail are the same address — no NameID claim customization is needed. Fleet reads `FLEET_JIT_USER_ROLE_GLOBAL` as a **list** of values and matches the name exactly (`server/fleet/sessions.go`), so every user must hold **exactly one** app role: a user with no role gets no value (ignored, so Fleet's default `observer` applies), and a user with two roles makes Fleet reject the login. Never put someone in Fleet Admins *and* assign them the observer role.
 
-- [ ] **Step 5: Manual — assign yourself (and any other Entra users) to the Enterprise Application** under Users and groups, so Entra actually allows SSO login for those accounts. Being in the "Fleet Admins" group doesn't imply being assigned to the app — both are required.
+**Steps:**
 
-- [ ] **Step 6: Manual — configure the JIT role-mapping claim.** Fleet's JIT-provisioned users get their Fleet role from a custom SAML attribute the IdP sends — verified against Fleet's SSO docs, not assumed. In the Enterprise Application: Single sign-on > Attributes & claims > Add a new claim:
-  - Name: `FLEET_JIT_USER_ROLE_GLOBAL`
-  - Source: default value `observer` (so anyone assigned to the app but not in "Fleet Admins" gets the least-privileged role, not silently full admin)
-  - Add a **condition**: scope = User, group = "Fleet Admins", source = value `admin`
-  - **Clear the "Namespace" field** on the claim (Entra's claim form has an optional Namespace box; if it's filled, Entra emits the attribute name as `<namespace>/FLEET_JIT_USER_ROLE_GLOBAL`). Fleet matches SAML attribute names *exactly* (verified in Fleet's source — no prefix/suffix stripping), so a namespaced name is silently ignored and every JIT user falls back to the default role instead of the one you configured. Unverified here: whether Entra applies a default namespace when you leave the field blank — after your first SSO login (Task 11 Step 8), check the attribute name in the SAML response (browser SAML-tracer extension, or Entra's "Test this application") and confirm it is exactly `FLEET_JIT_USER_ROLE_GLOBAL`, and confirm your Fleet user actually came out as `admin`.
-  
-  Fleet accepts exactly these values for this attribute: `admin`, `maintainer`, `observer`, `observer_plus`, `technician`, or `null`. Don't also set a `FLEET_JIT_USER_ROLE_FLEET_<id>` attribute alongside this one — Fleet errors if both a global and a team-specific role attribute are present at once. (Per-team role mapping via `FLEET_JIT_USER_ROLE_FLEET_<id>` is possible later, but needs the numeric team ID Fleet assigns once the "Workstations" team exists from Task 11 — a chicken-and-egg with this task, so it's a deliberate follow-up, not part of this pass.)
+- [ ] **Step 1: `az login`** to the tenant (interactive — run it yourself with `! az login`). Check the tenant's license and the signed-in user before writing anything: `az rest --method GET --url https://graph.microsoft.com/v1.0/subscribedSkus` (group-to-app assignment needs a SKU containing `AAD_PREMIUM`), and confirm the user has a populated `mail` or a UPN that is the sign-in address. Also confirm nothing named "Fleet" / "Fleet Admins" already exists.
+- [ ] **Step 2: Write the files** (contents are in the repo under `entra/`).
+- [ ] **Step 3: Init, plan, apply — from `entra/`:** `terraform init && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`. Expected: 9 to add including the signing certificate. If the claims-policy assignment returns a 403, the Azure CLI's delegated token lacks `Policy.ReadWrite.ApplicationConfiguration` — it did not on the run that built this (Global Administrator), but a lesser admin role might.
+- [ ] **Step 4: Verify in the tenant, not just in Terraform.** Via Graph: the service principal shows `saml`, `appRoleAssignmentRequired: true` and both roles; `claimsMappingPolicies` shows the policy with `assignedroles` -> `FLEET_JIT_USER_ROLE_GLOBAL`; `appRoleAssignedTo` lists the Fleet Admins group; `keyCredentials` holds a Sign/Verify certificate pair. Then fetch the **metadata URL** unauthenticated and confirm it returns HTTP 200 with signing `KeyDescriptor`s.
+- [ ] **Step 5: Record the Fleet-side values** with `terraform output` (from `entra/`): `entity_id`, and `terraform output -raw metadata_url` (sensitive — it embeds tenant and app IDs; the provider's own `saml_metadata_url` attribute is empty for a custom SAML app, so the output is built from tenant ID + app client ID in the standard portal format, verified to serve metadata). These feed Task 11's `default.yml` and its `FLEET_ENTRA_METADATA_URL` secret.
+- [ ] **Step 6: Commit** `entra/*.tf`, `entra/example.tfvars` and `entra/.terraform.lock.hcl` (never `entra/terraform.tfvars`).
 
-- [ ] **Step 7: Record the three values needed for GitOps**: the Entity ID (`https://<fleet_subdomain>`), the metadata URL from Step 3, and confirmation that `FLEET_JIT_USER_ROLE_GLOBAL` is configured. These go into `default.yml` in Task 11 — no code change in this repo.
+**Not verified until Task 11 Step 8 (the first real login):**
+- Microsoft's claims reference describes `SamlClaimType` as a *URI*; a plain name such as `FLEET_JIT_USER_ROLE_GLOBAL` was accepted by the API, but whether Entra emits it with that exact name in the assertion is only provable at login. If Fleet shows `observer` for an admin, inspect the assertion's attribute name first.
+- Which signing key Entra actually uses (`preferredTokenSigningKeyThumbprint` is null, and the provider can't set it). The metadata lists every signing key, so assertions should validate whichever is used — unconfirmed.
+- Whether Fleet's JIT user creation conflicts with the break-glass account if the emails ever matched. They don't (SSO user is on the tenant's own domain, break-glass is a personal address), so this isn't exercised.
 
 ---
 
@@ -988,7 +996,7 @@ org_settings:
     enable_sso_idp_login: true
     enable_jit_provisioning: true   # Premium
     idp_name: "Entra ID"
-    entity_id: "https://<fleet_subdomain>"   # literal value; must exactly match Task 10 Step 2
+    entity_id: "https://<fleet_subdomain>"   # literal value; must exactly match Task 10's `entity_id` output
     metadata_url: "$FLEET_ENTRA_METADATA_URL"
   secrets:
     - secret: "$FLEET_GLOBAL_ENROLL_SECRET"
@@ -1001,7 +1009,7 @@ controls:
   windows_enabled_and_configured: true
 ```
 
-(**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim configured in Task 10 Step 6 (default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
+(**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim built in Task 10 (an app role emitted by a claims-mapping policy; default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
 
 - [ ] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
 
@@ -1055,7 +1063,7 @@ gh repo create fleet-homelab-gitops --public --source=. --push --description "Fl
 ```bash
 gh secret set FLEET_URL --body "https://<fleet_subdomain>"
 gh secret set FLEET_API_TOKEN            # prompts — paste the token from Step 4; never put it on the command line or in history
-gh secret set FLEET_ENTRA_METADATA_URL   # prompts — paste the metadata URL from Task 10 (it contains tenant/app IDs; keep it out of files)
+gh secret set FLEET_ENTRA_METADATA_URL   # prompts — paste `terraform output -raw metadata_url` from `entra/` (Task 10; it contains tenant/app IDs, so keep it out of files)
 gh secret set FLEET_GLOBAL_ENROLL_SECRET --body "$(openssl rand -hex 16)"
 gh secret set FLEET_WORKSTATIONS_ENROLL_SECRET --body "$(openssl rand -hex 16)"
 git add -A && git commit -m "Pass extra secrets to gitops step" && git push
@@ -1066,7 +1074,7 @@ git add -A && git commit -m "Pass extra secrets to gitops step" && git push
 Run: `gh workflow run "Apply latest configuration to Fleet" && gh run watch`
 Expected: workflow completes successfully (the scaffold also dry-runs on pull requests, applies on push to `main`, and reconciles nightly); in the Fleet UI, Settings > Organization settings shows "Homelab", Settings > Integrations > SSO shows Entra configured, and Settings > Integrations > MDM shows Windows MDM turned on.
 
-- [ ] **Step 8: Verify SSO login works** by logging out of the break-glass session and signing in via the Entra SSO button at `https://<fleet_subdomain>/login`. Then confirm the new user's role in Settings > Users is `admin` (see the Task 10 Step 6 namespace check if it isn't).
+- [ ] **Step 8: Verify SSO login works** by logging out of the break-glass session and signing in via the Entra SSO button at `https://<fleet_subdomain>/login`. Then confirm the new user's role in Settings > Users is `admin` (if it isn't, check Task 10's "Not verified until Task 11 Step 8" list first — the claim name Entra actually emits is the prime suspect — and remember a user must hold exactly one app role).
 
 - [ ] **Step 9: Go back and do Task 9** (break-glass MFA hardening) now that SSO is proven as a second way in. Also do the Apple MDM half of Task 8 (Part B) at this point if you didn't already — it is best done once you have an SSO/domain-email user, because of the APNs CSR email-domain restriction described there.
 
@@ -2373,7 +2381,7 @@ A third Infinity data source instance (same plugin as Task 17's Fleet API connec
 **One piece of this may not work on your tenant, checked and flagged rather than assumed**: sign-in activity via Microsoft Graph (`signInActivity` on user objects, and the `/auditLogs/signIns` endpoint) requires an Entra ID **P1 or P2** license — verified against Microsoft's own docs, and explicitly **not available on Entra ID Free**. Group membership and device listing have no such gate. Check your tenant's licensed SKUs (Entra admin center > Billing > Licenses, or `GET /organization` via Graph) before building the sign-in panel — if it's Free tier, everything else in this task still works, just not that one piece.
 
 **Files:**
-- None in this repo — the App Registration is created in the Azure portal (Entra doesn't have a Terraform-manageable resource in this project's AWS-focused state), and the data source lives entirely in Grafana's own config from Task 17.
+- Optional: this app registration could live in `entra/` too (Task 10 showed the `azuread` provider handles apps and permissions; an earlier draft wrongly said Entra wasn't Terraform-manageable). Not done: its client secret would then sit in the Terraform state (private, encrypted S3 bucket, but still a secret at rest), so decide that trade-off when building it. The data source itself lives entirely in Grafana's own config from Task 17.
 
 **Interfaces:**
 - Consumes: Grafana instance and Infinity plugin from Task 17.
