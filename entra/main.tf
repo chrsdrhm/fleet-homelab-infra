@@ -19,7 +19,10 @@ resource "azuread_application" "fleet" {
   web {
     # Fleet's SAML assertion consumer service for Fleet users. The second,
     # /mdm/sso/callback path is only for end-user SSO during MDM enrollment.
-    redirect_uris = ["https://${var.fleet_subdomain}/api/v1/fleet/sso/callback"]
+    redirect_uris = concat(
+      ["https://${var.fleet_subdomain}/api/v1/fleet/sso/callback"],
+      tolist(var.debug_reply_urls),
+    )
   }
 
   # Lets a claims-mapping policy apply to this app without a custom signing key.
@@ -114,11 +117,21 @@ resource "azuread_claims_mapping_policy" "fleet" {
     ClaimsMappingPolicy = {
       Version              = 1
       IncludeBasicClaimSet = "true"
-      ClaimsSchema = [{
-        Source        = "user"
-        ID            = "assignedroles"
-        SamlClaimType = "FLEET_JIT_USER_ROLE_GLOBAL"
-      }]
+      ClaimsSchema = [
+        {
+          # Fleet identifies the user by the NameID VALUE (the format is ignored).
+          # Entra's default for this app is an opaque "persistent" pairwise ID, which
+          # Fleet would take as the user's email. Found by capturing a real assertion.
+          Source        = "user"
+          ID            = "mail"
+          SamlClaimType = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
+        },
+        {
+          Source        = "user"
+          ID            = "assignedroles"
+          SamlClaimType = "FLEET_JIT_USER_ROLE_GLOBAL"
+        },
+      ]
     }
   })]
 }

@@ -35,3 +35,9 @@ variable "fleet_observers" {
     error_message = "A user must not be in both fleet_admins and fleet_observers: Fleet takes the last role value in the assertion, and the order isn't controllable."
   }
 }
+
+variable "debug_reply_urls" {
+  description = "Extra SAML reply URLs, only while capturing an assertion on localhost to debug claims (Task 10). Leave empty; pass with -var, never in tfvars."
+  type        = set(string)
+  default     = []
+}
