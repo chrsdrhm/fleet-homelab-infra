@@ -6,15 +6,12 @@ Status: approved, ready for implementation plan
 ## Goal
 
 Deploy a "real" Fleet Premium instance into my own
-AWS account: publicly accessible over HTTPS, federated to Entra ID for SSO,
+AWS account: publicly accessible over HTTPS, federated to Okta for SSO,
 managed via Fleet GitOps, and reasonably secure — while minimizing recurring
 AWS cost, since this is for personal homelab learning, not production scale.
 
 ## Non-goals (explicitly deferred)
 
-- **Okta SSO** — I don't have an Okta tenant yet. Entra ID is the primary
-  IdP now; Okta can be added later as a second IdP exercise if a tenant
-  becomes available through work.
 - **Apple Business Manager / zero-touch enrollment** — needs a registered
   business entity; manual/QR Apple MDM enrollment is used instead.
 - **Multi-AZ / HA (read replicas, Redis failover, min 2+ Fargate tasks)** —
@@ -28,13 +25,19 @@ AWS cost, since this is for personal homelab learning, not production scale.
 
 ## Identity & access
 
-- **Primary IdP: Entra ID**, chosen because I already have this tenant;
-  not Entra-specific in any way that locks the design in — Fleet's SSO is
-  generic SAML, so switching to Okta later is a GitOps YAML change
-  (`idp_name`, `metadata_url`) plus a new Okta app registration, no
-  infrastructure change. The one thing that *would* need redoing is the
-  group-to-role mapping below, since Okta and Entra represent group
-  membership differently in a SAML assertion.
+- **Primary IdP: Okta** (changed from Entra ID on 2026-10-03). Entra was built
+  and worked, but could not meet the requirement that nobody holds a Fleet
+  role unless explicitly assigned: Fleet creates a new SSO user with no role
+  claim as a global observer, and Entra lets Global Administrators sign in
+  to any app regardless of "assignment required" (only a Conditional Access
+  policy holds them). Okta is documented to refuse unassigned users, super
+  admins included, which is **still to be verified in the build (Task 10
+  Step 5)**. The org is an Okta Workforce
+  Identity free trial, which converts after 30 days to a Free Plan (up to 10
+  users, no support, can end on 45 days of inactivity). The Integrator Free
+  plan was rejected because its terms exclude production use, and paid
+  Starter ($1,500 annual minimum) is far over budget. Fleet's SSO is
+  generic SAML, so nothing in the AWS infrastructure changes.
 - **JIT provisioning + group-based role mapping** (Premium): SAML SSO
   configured via Fleet GitOps `org_settings.sso_settings` (`entity_id`,
   `idp_name`, `metadata_url`, `enable_sso_idp_login`, `enable_jit_provisioning`).
@@ -43,19 +46,19 @@ AWS cost, since this is for personal homelab learning, not production scale.
   account gets comes from a custom SAML attribute, `FLEET_JIT_USER_ROLE_GLOBAL`
   (accepted values: `admin`, `maintainer`, `observer`, `observer_plus`,
   `technician`, `null`) — this is entirely an IdP-side mechanism, not a
-  Fleet-side mapping table: an Entra security group ("Fleet Admins") is
-  created and assigned the `admin` app role on the Entra application (and a
-  "Fleet Observers" group the `observer` role; membership of both comes from
-  two Terraform lists, and a plan-time check rejects anyone in both, because
-  Fleet silently takes the last role value it is sent). A claims-mapping
-  policy emits each user's assigned app role as the attribute. The whole Entra side is Terraform
-  (`entra/`, separate state, applied locally by a tenant admin, never from CI). Per-team role mapping
+  Fleet-side mapping table: two Okta groups ("Fleet Admins", "Fleet Observers")
+  are assigned to the Okta SAML app, and an attribute statement emits `admin`
+  or `observer` from group membership (admin wins if a user is in both,
+  which avoids Fleet silently taking the last role value it is sent). The Okta
+  side is Terraform (`okta/`, separate state, applied locally, never from CI),
+  except **group membership, which is never managed by Terraform** and is set
+  by hand in the Okta console. Per-team role mapping
   (`FLEET_JIT_USER_ROLE_FLEET_<team_id>`) is possible later but needs the
   numeric team ID Fleet assigns once the "Workstations" team exists — a
   deliberate follow-up, not part of this pass, to avoid a chicken-and-egg
   with team creation.
 - **End user SSO (Task 20)**: separate from admin SSO. Device owners
-  authenticate with a second Entra app (distinct identifier URI, the
+  authenticate with a second Okta app (the
   `/mdm/sso/callback` URL, NameID mapped to email) during MDM enrollment, so
   each host carries a verified IdP identity. Fleet requires two IdP apps if
   both are used; roles and JIT apply only to the admin side. Not built until
@@ -70,7 +73,7 @@ AWS cost, since this is for personal homelab learning, not production scale.
   Manager, so an IAM/AWS-side problem can't also lock out the break-glass
   path. JIT provisioning has no effect on this account since it isn't
   SSO-authenticated. **MFA (optional, recommended, enabled last)**: it's the one account
-  protected by a password alone (SSO users get Entra's own MFA), so it can get
+  protected by a password alone (SSO users get the IdP's own MFA), so it can get
   Fleet's email-based MFA (Premium, needs SMTP — provided by the SES addon).
   Enabled only *after* SSO is verified as a second way in, because MFA users
   can't use `fleetctl login` and a mail failure would otherwise lock out the
@@ -168,7 +171,7 @@ via `fleetctl new` into a new repo (`fleet-homelab-gitops`), pushed to
 GitHub.
 
 - `default.yml` (repo root) — org-wide settings, including
-  `org_settings.sso_settings` for Entra, global enroll secret, and
+  `org_settings.sso_settings` for Okta, global enroll secret, and
   `controls.windows_enabled_and_configured`.
 - `fleets/workstations.yml` (scaffold's current layout; older docs say
   `teams/`) — a single fleet covering all my devices
@@ -179,7 +182,7 @@ GitHub.
 - GitHub Actions workflow (from the `fleetctl new` scaffold): push to `main`
   → apply; pull request → dry-run only; nightly cron → drift correction.
 - Repo secrets: `FLEET_URL`, `FLEET_API_TOKEN` (the GitOps-role API user),
-  `FLEET_ENTRA_METADATA_URL`, and the enroll secrets — the last three must
+  `FLEET_OKTA_METADATA_URL`, and the enroll secrets — the last three must
   also be added to the scaffolded workflow's `env:` block, which only
   forwards `FLEET_URL` and `FLEET_API_TOKEN` by default.
 
@@ -399,16 +402,8 @@ panel/dashboard *definitions* live in Grafana's own database.
   Fleet's own public HTTPS endpoint with a dedicated read-only (`observer`)
   API-only Fleet user's token (non-expiring, unlike a `fleetctl login`
   session token).
-- **Entra ID, via Microsoft Graph** (a second Infinity data source instance)
-  — user/sign-in activity, "Fleet Admins" group membership, and
-  Entra-registered devices cross-referenced against Fleet's own enrolled
-  hosts. Built as the Entra-specific instance of a pattern meant to port to
-  Okta later, not an Entra-only design: a dedicated least-privilege App
-  Registration with application (not delegated) Graph permissions, admin-
-  consented since I administer this tenant directly, authenticating
-  via OAuth2 client credentials. Sign-in activity specifically requires
-  Entra ID P1/P2 (not available on Free) — verified against Microsoft's own
-  docs; group membership and device listing have no such gate.
+- **A directory data source (Task 18) is retired.** It read Entra through
+  Microsoft Graph and went away with Entra; an Okta equivalent is not designed.
 
 **Up/down status board first**: the dashboard's main job is showing at a
 glance whether each part of the Fleet stack is up — a Fleet `/healthz`
@@ -420,16 +415,15 @@ Grafana only displays status; it sends no notifications.
 
 The primary goal stated for the Grafana work overall was learning Grafana
 itself, so the dashboard panels are deliberately left for hands-on building
-rather than fully pre-built — the plan sets up the container and all three
+rather than fully pre-built — the plan sets up the container and its
 data source connections, not the finished dashboard.
 
-**Two deliberate exceptions to this whole plan's "no long-lived
-credentials" pattern** live here, both for the same underlying reason —
-Grafana runs outside both AWS and Entra with no equivalent to GitHub
-Actions' OIDC federation available to it: a static AWS IAM access key
-(CloudWatch read-only, Task 17) and an Entra App Registration client secret
-(Task 18). Both scoped to read-only/least-privilege actions to bound what
-either is worth if it ever leaked.
+**One deliberate exception to this whole plan's "no long-lived
+credentials" pattern** lives here: Grafana runs outside AWS with no equivalent to GitHub Actions' OIDC
+federation available to it: a static AWS IAM access key (CloudWatch
+read-only, Task 17), scoped to read-only actions to bound what it is worth
+if it ever leaked. (A second one, an Entra client secret for Task 18, went away with
+Task 18.)
 
 ## Repositories
 

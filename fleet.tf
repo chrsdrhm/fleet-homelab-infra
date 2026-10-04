@@ -31,8 +31,16 @@ module "fleet" {
   }
 
   rds_config = {
-    name           = "fleet-homelab"
-    instance_class = "db.t4g.medium"
+    name = "fleet-homelab"
+    # db.t3.medium (2 vCPU / 4 GiB, x86) instead of db.t4g.medium (same size, ARM): on
+    # 2026-10-04 three rebuild attempts in a row failed with InsufficientDBInstanceCapacity
+    # for db.t4g.medium in all three zones. Same sizing, so this is a straight swap.
+    instance_class = "db.t3.medium"
+    # Aurora MySQL 3.13.0 = MySQL 8.0.45. Fleet states a minimum of MySQL 8.0.44 (docs +
+    # its CI: 8.0.44 on every change, 8.4.8 nightly), and AWS ends standard support for
+    # Aurora 3.08/3.09 on 2026-08-31 then force-upgrades them. The module default
+    # (3.08.2) is below both, so it must be pinned here.
+    engine_version = "8.0.mysql_aurora.3.13.0"
     replicas       = 1
     db_parameters = {
       sort_buffer_size = 8388608
