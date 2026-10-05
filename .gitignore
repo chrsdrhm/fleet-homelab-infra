@@ -12,3 +12,6 @@ lambda/**/*.zip
 tfup*
 tfdestroy*
 tfaz*
+
+# Terraform state bucket name (embeds the AWS account ID); see backend.example.hcl
+backend.hcl

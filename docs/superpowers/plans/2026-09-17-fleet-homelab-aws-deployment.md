@@ -31,6 +31,8 @@
 
 ### Task 1: Terraform state backend + provider bootstrap
 
+**The state bucket name is not in the repo.** `backend.tf` (and `okta/backend.tf`) hold a partial `s3` backend configuration, and the bucket name comes from a gitignored `backend.hcl` (template: `backend.example.hcl`) at init time: `terraform init -backend-config=backend.hcl` (add `-reconfigure` after changing it). A backend block cannot read variables, so tfvars cannot supply it. See Global Constraints for why, and Task 15 for the CI consequence (the bucket comes from a repository secret).
+
 **Files:**
 - Create: `providers.tf`
 - Create: `backend.tf`
@@ -911,18 +913,18 @@ git commit -m "Wire MDM WSTEP secret into the Fleet task (Windows MDM)"
 
 **Files:** none (operational).
 
-- [ ] **Step 1: Verify the break-glass login works as a plain password login** (before MFA changes anything).
+- [x] **Step 1: Verify the break-glass login works as a plain password login** (before MFA changes anything).
 
 Run: `curl -s -X POST https://<fleet_subdomain>/api/v1/fleet/login -H 'Content-Type: application/json' -d '{"email":"<email>","password":"<password>"}' | grep -o '"token"'`
 Expected: `"token"` present in the response.
 
-- [ ] **Step 2: Decide whether to enable MFA at all.** This is a real trade-off, not a formality:
+- [x] **Step 2: Decide whether to enable MFA at all.** This is a real trade-off, not a formality:
   - **Option A — enable email MFA (recommended if you're willing to keep SES delivery working).** Adds a second factor to the only password-only account.
   - **Option B — skip MFA and rely on a long random password + the WAF + SSO for daily use.** Simpler and cannot lock you out via email problems; the residual risk is a single-factor admin account on a public URL.
 
   Either is defensible; A is the plan's default. If you pick B, skip the rest of this task.
 
-- [ ] **Step 3: (Option A) Make SES able to deliver to your address.** This AWS account's SES is in the **sandbox** (`ProductionAccessEnabled=false`, checked live) — in the sandbox SES only delivers to *verified* recipient identities, so MFA emails to an unverified address would silently never arrive. The SES addon (Task 6) is destroyed and recreated on every `down`/`up`, so verify the recipient *outside Terraform* so it persists:
+- [x] **Step 3: (Option A) Make SES able to deliver to your address.** This AWS account's SES is in the **sandbox** (`ProductionAccessEnabled=false`, checked live) — in the sandbox SES only delivers to *verified* recipient identities, so MFA emails to an unverified address would silently never arrive. The SES addon (Task 6) is destroyed and recreated on every `down`/`up`, so verify the recipient *outside Terraform* so it persists:
 
 ```bash
 aws sesv2 create-email-identity --email-identity <your real email> --tags Key=Project,Value=fleet-lab Key=ManagedBy,Value=terraform   # then click the link in the verification email
@@ -931,11 +933,18 @@ aws sesv2 get-email-identity --email-identity <your real email> --query Verifica
 
 Also confirm the *sender* address Fleet uses (Task 6) is a verified identity or a verified domain — the recipient being verified is not enough. Send a test message before relying on it (e.g. `aws sesv2 send-email` from the sender to the recipient). Requesting SES production access from AWS is the alternative that removes this whole class of problem, at the cost of a support-case round trip.
 
-- [ ] **Step 4: (Option A) Enable MFA on the break-glass user.** Fleet UI > Settings > Users > the break-glass row > Edit > "Require multi-factor authentication" (Premium, email-based, requires SMTP — which Task 6 provides). MFA cannot be enabled on SSO or API-only users, which is fine here. Not verified: whether an account may enable MFA on itself or needs a second admin — check at execution; an SSO-provisioned Fleet Admins user (Task 11 Step 8) can do it for you.
+- [x] **Step 4: (Option A) Enable MFA on the break-glass user.** Fleet UI > Settings > Users > the break-glass row > Edit > "Require multi-factor authentication" (Premium, email-based, requires SMTP — which Task 6 provides). MFA cannot be enabled on SSO or API-only users, which is fine here. Not verified: whether an account may enable MFA on itself or needs a second admin — check at execution; an SSO-provisioned Fleet Admins user (Task 11 Step 8) can do it for you.
 
-- [ ] **Step 5: (Option A) Test it now, while SSO is still your fallback.** Log out and log in as break-glass; expect an emailed magic link/confirmation. **Recovery notes:** if email breaks later (SES sandbox drift, sender identity gone after a rebuild), this account is locked out and you fall back to SSO; the local account can then only be repaired by another admin editing the user (or, worst case, database access). Also, `fleetctl` can no longer log in as this user — for any future CLI use, get an API token from the UI (My account > Get API token) and run `fleetctl config set --token <token>`. (Task 11's GitOps and Task 17's Grafana use dedicated API-only users, so neither depends on this account.)
+- [x] **Step 5: (Option A) Test it now, while SSO is still your fallback.** Log out and log in as break-glass; expect an emailed magic link/confirmation. **Recovery notes:** if email breaks later (SES sandbox drift, sender identity gone after a rebuild), this account is locked out and you fall back to SSO; the local account can then only be repaired by another admin editing the user (or, worst case, database access). Also, `fleetctl` can no longer log in as this user — for any future CLI use, get an API token from the UI (My account > Get API token) and run `fleetctl config set --token <token>`. (Task 11's GitOps and Task 17's Grafana use dedicated API-only users, so neither depends on this account.)
 
-- [ ] **Step 6: No commit needed** — operational action, not code. The account and its MFA setting live in the database, so they survive the Aurora snapshot/restore cycle (Task 14). Only the SES *recipient identity* from Step 3 is separate state, and it too persists because it was created outside Terraform.
+- [x] **Step 6: No commit needed** — operational action, not code. The account and its MFA setting live in the database, so they survive the Aurora snapshot/restore cycle (Task 14). Only the SES *recipient identity* from Step 3 is separate state, and it too persists because it was created outside Terraform.
+
+**Done 2026-10-04 (Option A, email MFA), as reported by the user.** SSO (Okta) was proven first, so the precondition held. What it took, and what was learned:
+- **SES:** the account is still in the sandbox (`ProductionAccessEnabled=false`). The break-glass mailbox was already a verified SES recipient (created earlier outside Terraform, so it persists across teardowns); the sender domain `<fleet-hostname>` is verified with DKIM. A test sent with `aws sesv2 send-email` from the Fleet domain reached the mailbox.
+- **Sender address:** Fleet's SMTP settings page only says "Email already configured" and has no sender field, because email is set through the server (`FLEET_EMAIL_BACKEND=ses`). From `server/mail/ses.go`: with the SES backend Fleet builds the From address itself as `do-not-reply@<server host>`, i.e. `do-not-reply@<fleet-hostname>`, covered by the verified domain identity. Nothing to configure.
+- **Enabling:** done from an Okta-SSO admin session (the docs say to use a different admin), with that session kept open as the fallback. MFA is a per-user setting (`mfa_enabled`, Premium; incompatible with SSO and API-only users).
+- **Test:** in a private window the break-glass user logged in with email and password, received the emailed link, and the link completed the login.
+- **Remaining risk, unchanged:** if SES delivery breaks (sandbox drift, a lost verified recipient), the break-glass account is locked out and SSO is the way back in. `fleetctl login` no longer works for it; use an API token from the UI or an SSO admin.
 
 ---
 
@@ -979,7 +988,9 @@ Everything Entra-side was destroyed on 2026-10-03 (all nine Terraform resources,
 
 **Result of the deciding test (2026-10-04, reported by the user, not independently logged):** with the Okta super admin in neither Fleet group, signing in to Fleet through Okta was refused, and SSO login worked for an assigned user. This closes the gap that Entra could not: an unassigned Global Administrator got in and became observer there. Okta enforces app assignment even for the org's super admin. **Also reported by the user the same day:** moving the account from Fleet Admins to Fleet Observers and logging in again correctly changed the Fleet role to observer, so the role expression emits both `admin` and `observer` as intended and Fleet applies the demotion (an explicit value arrives, unlike Entra where a missing value left the old role in place). **Not yet checked:** the exact refusal text and Okta system-log entry; Okta's "Preview the SAML Assertion" output; the case where a user is directly assigned to the app (should never be done); and that a user who is in a group but whose Fleet account was deleted is recreated correctly.
 
-**Direct assignment orphaned the old role; fixed with an invalid fallback value (2026-10-04).** Reported by the user: assigning the Fleet app to a user directly (no group) left their previous Fleet role in place. Cause, from `parseRole` in `server/fleet/sessions.go` (v4.92.0): an empty, whitespace-only or missing `FLEET_JIT_USER_ROLE_GLOBAL` is coerced to `null` and ignored, so an existing user keeps their role and a new one becomes observer; but any value other than `admin`, `maintainer`, `observer`, `observer_plus`, `technician` or `null` returns `invalid role: <value>` and the login is rejected for new and existing users alike. The expression's fallback was therefore changed from `""` to `"unassigned"`, so a user who matches neither group now fails at Fleet with an explicit error instead of silently keeping or getting a role. Applied (one in-place change, re-plan clean). **Test still to run by the user:** assign the app directly with no group, log in, expect failure ("invalid SSO attributes" / `invalid role: unassigned`), no account created or changed. This does not end open Fleet sessions or touch existing accounts.
+**Direct assignment orphaned the old role; fixed with an invalid fallback value (2026-10-04).** Reported by the user: assigning the Fleet app to a user directly (no group) left their previous Fleet role in place. Cause, from `parseRole` in `server/fleet/sessions.go` (v4.92.0): an empty, whitespace-only or missing `FLEET_JIT_USER_ROLE_GLOBAL` is coerced to `null` and ignored, so an existing user keeps their role and a new one becomes observer; but any value other than `admin`, `maintainer`, `observer`, `observer_plus`, `technician` or `null` returns `invalid role: <value>` and the login is rejected for new and existing users alike. The expression's fallback was therefore changed from `""` to `"unassigned"`, so a user who matches neither group now fails at Fleet with an explicit error instead of silently keeping or getting a role. Applied (one in-place change, re-plan clean). **Tested by the user the same day:** with the app assigned directly and no group, the Fleet login failed with an SSO error, as expected (reported, not independently logged; whether an existing account's role stayed untouched was not separately checked). This does not end open Fleet sessions or touch existing accounts.
+
+**Where to see the role attribute in Okta's console (found by the user, 2026-10-04):** Applications → Applications → Fleet → the SAML settings page's **legacy configuration** section → **Attribute Statements**. The Terraform resource (`okta_app_saml`) creates Okta's classic SAML app, which this org's newer console files under "legacy configuration". The attribute name `FLEET_JIT_USER_ROLE_GLOBAL` is Fleet's (`server/fleet/sessions.go`); Okta only supplies the value, via the expression. These are plain Attribute Statements, not Group Attribute Statements (a separate list on the same page). Terraform owns the setting: an edit in the console is reverted by the next `terraform apply` in `okta/`.
 
 **Facts about Fleet that still hold** (read from source, v4.92.0): identity is `NameID.Value`; the role attribute is a list and `parseRole` takes the **last** value; a **new** user with no role becomes observer; an **existing** user with no role arriving is left **unchanged**; name, email and job title are written once at creation; deleting a user is blocked only for the last global admin.
 
@@ -1021,7 +1032,7 @@ Requires the break-glass admin from Task 3 Step 8 (used below to create the API-
 - Modify: `fleets/workstations.yml` (the scaffold's directory is `fleets/`, formerly `teams/`)
 - Modify: `.github/workflows/workflow.yml` (env block)
 
-- [ ] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.0, else stop; see Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
+- [ ] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.x. The server image is v4.92.0; a patch-level difference (the installed fleetctl is 4.92.2) is accepted, any other minor version: stop. See Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
 
 ```bash
 mkdir -p ~/Dev/fleet-homelab-gitops && cd ~/Dev/fleet-homelab-gitops   # ~/Dev, not ~/Documents: iCloud corrupts git repos and .terraform caches
@@ -1034,6 +1045,15 @@ rm fleets/personal-mobile-devices.yml   # not needed for this homelab (no BYOD m
 
 `fleetctl new` is non-interactive in v4.92.0 (flags above; `--force` because the directory already exists). It generates `default.yml`, `fleets/workstations.yml` and `fleets/personal-mobile-devices.yml`, `labels/`, `platforms/` (configuration profiles), `.github/workflows/workflow.yml`, and `.github/fleet-gitops/` (the action that runs `fleetctl gitops`). Every `fleets/*.yml` file is applied automatically, and — because `default.yml` contains `org_settings:` — any Fleet in your instance that has *no* matching file is deleted (`--delete-other-fleets`). That is the desired GitOps behavior, but means fleets created in the UI won't survive the next run.
 
+**Progress 2026-10-04 (the repo exists locally at `~/Dev/fleet-homelab-gitops`; not yet committed or published).** Step 1 (scaffold) done by the user. Steps 2 and 3 done with these deviations from the text below, all found by reading the scaffold and running a local dry run against the live Fleet:
+- **No enroll secrets in Git.** Fleet's `gitops.exceptions.secrets` is `true` by default and `fleetctl gitops` rejects a `secrets:` key then. So no `FLEET_GLOBAL_ENROLL_SECRET` / `FLEET_WORKSTATIONS_ENROLL_SECRET` secrets either; only `FLEET_URL`, `FLEET_API_TOKEN`, `FLEET_OKTA_METADATA_URL` and `FLEET_IDP_IMAGE_URL` go in GitHub. Other exceptions at that moment: labels `false`, software `false`; `gitops_mode_enabled` is `false`.
+- `enable_sso_idp_login: false` (Task 10's decision), `idp_image_url` added, `actions/checkout` pinned to a commit SHA (`# v6`), the unused `.gitlab-ci.yml` removed, and README, MIT LICENSE and `.github/CODEOWNERS` added.
+- **Local `fleetctl` auth** for this task is an SSO admin's API token (`fleetctl config set --address ... --token "$(pbpaste)"`), because the break-glass account has MFA. `fleetctl api` needs the `/api` prefix (`fleetctl api /api/latest/fleet/me`; without it, 404). `fleetctl` is 4.92.2 against server 4.92.0: it warns "Version mismatch" on every call and still works.
+- **Dry run** (`FLEET_URL=... FLEET_OKTA_METADATA_URL=... fleetctl gitops -f default.yml -f fleets/workstations.yml --delete-other-fleets --dry-run`, exit 0): would update 4 labels, apply the fleet config, apply 1 fleet and 1 policy, **delete the `📱🔐 Personal mobile devices` fleet** (0 hosts), and apply no scripts, software or profiles. Fleet had 0 hosts and two users (the MFA break-glass admin and the SSO admin). Glob warnings ("matched no ... files") are expected for the empty folders.
+- **Pre-publish review passed:** `platforms/` and `labels/` are the generic scaffold; no `pull_request_target`; permissions `contents: read`; the only literals are public (the Fleet URL, the Okta Entity ID, the logo URL). Noted, not changed: the scaffold action runs `npm install -g fleetctl@<server version>` and falls back to `fleetctl@latest` if that fails.
+- **Nothing identifying goes in the public repos** (see Global Constraints). In this repo that means the YAML uses variables: `entity_id: "$FLEET_URL"` and `idp_image_url: "$FLEET_IDP_IMAGE_URL"`, both repository secrets. Limits to know: the hostname is still discoverable through Certificate Transparency logs and public DNS, and GitHub masks secret values in public Actions logs but does not guarantee every error message is clean.
+- **Before the first push:** `gh auth refresh -h github.com -s workflow` (the token lacks the `workflow` scope GitHub requires to push workflow files). Set the three GitHub secrets **before** the push that triggers the apply, or the first run fails on an empty token (a safe failure, but noisy).
+
 - [ ] **Step 2: Edit `default.yml`.** The scaffold already has `org_settings.org_info.org_name` (set by `--org-name`) and `server_settings.server_url: $FLEET_URL`. Add to `org_settings:` (uncommenting/replacing the scaffold's commented `sso_settings` example, and adding `secrets`):
 
 ```yaml
@@ -1041,13 +1061,16 @@ org_settings:
   # ...org_info and server_settings from the scaffold stay as they are...
   sso_settings:
     enable_sso: true
-    enable_sso_idp_login: true
+    enable_sso_idp_login: false     # Task 10: left OFF on purpose; GitOps must not turn it on (it removes the login request-binding)
     enable_jit_provisioning: true   # Premium
     idp_name: "Okta"
-    entity_id: "https://<fleet_subdomain>"   # literal value; must exactly match the Entity ID configured on the Okta app in Task 10
+    idp_image_url: "$FLEET_IDP_IMAGE_URL"   # NOT a literal (it embeds the AWS account ID): the `idp_logo_url` output from the infra repo, held as a repository secret
+    entity_id: "$FLEET_URL"                  # NOT a literal: the Fleet hostname is kept out of both public repos. Must equal the Okta app's audience exactly (no trailing slash)
     metadata_url: "$FLEET_OKTA_METADATA_URL"
-  secrets:
-    - secret: "$FLEET_GLOBAL_ENROLL_SECRET"
+  # No `secrets:` key. Fleet's change-management settings exclude enroll secrets from
+  # GitOps by default (`gitops.exceptions.secrets: true`), and a `secrets:` key then
+  # makes `fleetctl gitops` fail: 'Error: "secrets" is excepted from GitOps management'
+  # (found by the local dry run, 2026-10-04). Enroll secrets are managed in Fleet itself.
 ```
 
 And under `controls:` (the scaffold has this commented out) turn on Windows MDM — this is the switch that makes use of the WSTEP secret from Task 8:
@@ -1057,21 +1080,19 @@ controls:
   windows_enabled_and_configured: true
 ```
 
-(**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each new account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` claim built in Task 10 (an app role emitted by a claims-mapping policy; default Global Observer if the claim is absent). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
+(**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` attribute built in Task 10 (an Okta expression over the Fleet Admins and Fleet Observers groups; a user in neither gets the invalid value `unassigned`, so Fleet rejects the login instead of guessing a role). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
 
 - [ ] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
 
 ```yaml
 name: "💻 Workstations"
-settings:
-  secrets:
-    - secret: "$FLEET_WORKSTATIONS_ENROLL_SECRET"
-# ...controls/reports/policies/software from the scaffold stay as they are...
+# ...controls/reports/policies/software from the scaffold stay as they are. No `settings.secrets`
+# (see Step 2): enroll secrets are managed in Fleet, not Git.
 ```
 
 (Verify the scaffold's default `controls:` for this fleet are what you want before pushing — macOS setup-assistant lines are commented out by default, so nothing will require Apple MDM.)
 
-- [ ] **Step 4: 🎓 You run this — create the GitOps API-only user on Fleet** (what it does: creates a user that has an API token but no password or UI login, with the `gitops` role, which can only apply configuration) (as the break-glass admin; do this *before* enabling MFA on that account in Task 9)
+- [ ] **Step 4: 🎓 You run this — create the GitOps API-only user on Fleet** (what it does: creates a user that has an API token but no password or UI login, with the `gitops` role, which can only apply configuration) **Authenticating `fleetctl` for this:** the break-glass account now has email MFA (Task 9), and Fleet rejects `fleetctl login` for MFA users, so use an SSO admin's API token instead: sign in to Fleet through Okta, My account → Get API token, then `fleetctl config set --address https://<fleet_subdomain> --token <token>` (do not type the token on a shared screen; it is a session-bound credential for your own account and can be revoked from the same page).
 
 ```bash
 fleetctl user create --name "GitOps CI" --global-role gitops --api-only
@@ -1079,11 +1100,11 @@ fleetctl user create --name "GitOps CI" --global-role gitops --api-only
 
 Verified in Fleet v4.92.0: `--api-only` needs no email/password/`--username` (there is no `--username` flag; an earlier draft used one and would have failed), and **prints the API token once** — press a key when prompted and copy it immediately into your password manager. The `gitops` role is only valid for API-only users. Do not use `fleetctl login` here: that would need a password user and produces a short-lived session token (default 5 days) that would silently break the workflow.
 
-- [ ] **Step 5: Public-readiness gate, then publish the repo as PUBLIC and lock it down.** `gh` must be logged in (`gh auth status`). **Creating a public repo is effectively irreversible — confirm immediately before the `gh repo create`.**
+- [ ] **Step 5: Public-readiness gate, then publish the repo as PUBLIC and lock it down.** `gh` must be logged in (`gh auth status`) **and its token needs the `workflow` scope** to push `.github/workflows/*` (GitHub refuses workflow-file pushes from a token without it); the current token has `admin:gpg_key, gist, read:org, repo` only, so run `gh auth refresh -h github.com -s workflow` first (interactive, browser). **Creating a public repo is effectively irreversible — confirm immediately before the `gh repo create`.**
 
 **Review before the first commit** (this is the part that is specific to a GitOps repo):
 1. **`platforms/` configuration profiles.** Read every file. Profiles can embed Wi-Fi passwords, certificates, or server addresses. Delete or genericise anything that isn't safe to publish (the scaffold's defaults are generic, but check).
-2. **No literal secrets, IDs or addresses.** Every value that isn't public must be a `$VARIABLE` (enroll secrets, `$FLEET_OKTA_METADATA_URL` — that URL embeds your Entra tenant and app IDs). `git grep -niE 'secret|token|password|tenant|login\.microsoftonline'` and read each hit; also the email/secret scans from Task 15 Step 1's gate.
+2. **No literal secrets, IDs or addresses.** Every value that isn't public must be a `$VARIABLE` (enroll secrets, `$FLEET_OKTA_METADATA_URL` — that URL embeds your Okta org name and app entity key). `git grep -niE 'secret|token|password|okta\.com|0oa[0-9a-z]{10}|trial-[0-9]+'` and read each hit; also the email/secret scans from Task 15 Step 1's gate.
 3. **Workflow triggers.** Open `.github/workflows/workflow.yml`. It must **not** use `pull_request_target` (that trigger runs with secrets against untrusted code). The apply job must run only on `push` to `main`, `schedule` and `workflow_dispatch`; `pull_request` may dry-run (fork PRs simply get no secrets, so their dry-run fails harmlessly).
 4. **Pin every `uses:` to a full commit SHA** (with the version as a trailing comment). Step 5's settings turn on `sha_pinning_required`, and an unpinned action fails the run. Note which actions the scaffold uses (`actions/checkout`, plus its local `.github/fleet-gitops/` action) and allow-list only those.
 5. **Add `README.md`** (what it is and that it's a homelab/learning repo, LinkedIn badge like the infra repo's, AI-assistance note), an **MIT `LICENSE`**, and `.github/CODEOWNERS` (`* @<owner>`).
@@ -1096,7 +1117,7 @@ gh repo create fleet-homelab-gitops --public --source=. --push --description "Fl
 
 **Then lock it down immediately** — the same calls as Task 15 Step 5 (use that block, with `R=repos/<owner>/fleet-homelab-gitops`): fork-PR approval for all outside contributors, read-only workflow token, selected actions only (adjust `patterns_allowed` to the actions the scaffold actually uses — it needs no `aws-actions/*` or `hashicorp/*`) with SHA pinning, secret scanning + push protection, Dependabot alerts, private vulnerability reporting, wiki/projects off, and the `protect-main` ruleset. Add the dry-run job as a required status check on the ruleset once it has run once. Confirm the only collaborator is you and that both commits report `verified=true` (`gh api repos/<owner>/fleet-homelab-gitops/commits/<sha> --jq .commit.verification`).
 
-- [ ] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the three extra variables used in the YAML above would expand to empty strings unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
+- [ ] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the extra variable used in the YAML above would expand to an empty string unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
 
 ```yaml
         env:
@@ -1104,16 +1125,14 @@ gh repo create fleet-homelab-gitops --public --source=. --push --description "Fl
           FLEET_API_TOKEN: ${{ secrets.FLEET_API_TOKEN }}
           # added:
           FLEET_OKTA_METADATA_URL: ${{ secrets.FLEET_OKTA_METADATA_URL }}
-          FLEET_GLOBAL_ENROLL_SECRET: ${{ secrets.FLEET_GLOBAL_ENROLL_SECRET }}
-          FLEET_WORKSTATIONS_ENROLL_SECRET: ${{ secrets.FLEET_WORKSTATIONS_ENROLL_SECRET }}
+          FLEET_IDP_IMAGE_URL: ${{ secrets.FLEET_IDP_IMAGE_URL }}
 ```
 
 ```bash
 gh secret set FLEET_URL --body "https://<fleet_subdomain>"
 gh secret set FLEET_API_TOKEN            # prompts — paste the token from Step 4; never put it on the command line or in history
+gh secret set FLEET_IDP_IMAGE_URL       # prompts — paste `terraform output -raw idp_logo_url` from the infra repo (root, not okta/); it embeds the AWS account ID
 gh secret set FLEET_OKTA_METADATA_URL   # prompts — paste the Okta app's metadata URL (Task 10; it contains the org and app IDs, so keep it out of files)
-gh secret set FLEET_GLOBAL_ENROLL_SECRET --body "$(openssl rand -hex 16)"
-gh secret set FLEET_WORKSTATIONS_ENROLL_SECRET --body "$(openssl rand -hex 16)"
 git add -A && git commit -m "Pass extra secrets to gitops step" && git push
 ```
 
@@ -1457,6 +1476,8 @@ git commit -m "Add idle/resume and up/down cost-control scripts with Aurora snap
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
+
+**Consequence of the account-ID rule for CI (2026-10-04):** the workflows cannot hard-code the state bucket or the account ID. Pass the bucket at init from a repository secret (for example `terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"`), and take the role ARNs and account from secrets as well; also check the workflow logs for the account ID, since GitHub masks only values it knows are secrets (a secret is masked everywhere it appears, including inside a longer string). The plan and role outputs in Task 15 that say "substituted by hand into the two workflow files, same as the account ID in `backend.tf`" no longer hold: there is no literal account ID in the repo to mirror.
 
 Up to this task, every `terraform apply`/`plan`/`destroy` — including `up.sh`/`down.sh` — runs from your own machine with your own AWS credentials. This task moves day-to-day `up`/`down`/`plan` to a manually-triggered GitHub Actions workflow, so they're runnable from anywhere (GitHub's UI, the mobile app, `gh workflow run` from any machine) without your laptop present. It's explicitly **not** auto-apply-on-push — you still press the button — because an infra `destroy` is a lot more consequential than a Fleet config sync, and this deployment's whole shape (mostly torn down) doesn't suit "apply whenever something merges" anyway. Local runs remain available for testing (`terraform plan` while iterating on `.tf` files), but shouldn't be the normal way `up`/`down` get triggered going forward.
 
