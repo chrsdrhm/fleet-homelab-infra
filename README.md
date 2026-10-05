@@ -23,7 +23,7 @@ An always-on stack costs roughly $170/month, which is too much for a homelab. So
 
 ## Status
 
-Work in progress. The design and a detailed task-by-task plan are written and reviewed; implementation is going through it in order. The core Fleet stack (plan Tasks 1-3) has been deployed and verified once, then torn down.
+Work in progress, built task by task from a written plan. Running and verified so far: the core Fleet stack, a US-only WAF, outbound mail through SES, Windows MDM, Okta SAML single sign-on with just-in-time provisioning and group-based roles, and email MFA on the break-glass admin. The Fleet configuration is managed from a separate GitOps repo. Still to come: scripts for the teardown and rebuild routine, CI for this repo, osquery logs to S3, a Grafana dashboard, and device enrollment extras.
 
 ## Repo layout
 

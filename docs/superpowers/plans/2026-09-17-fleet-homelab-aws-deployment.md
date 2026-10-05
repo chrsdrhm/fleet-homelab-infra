@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-fleet-homelab-aws-design.md`
 
+**Status as of 2026-10-05** (checkboxes reconciled against git history, Terraform state and live AWS; steps that cannot be verified from here stay open):
+- **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), and 13 (budget; Step 5, checking the inbox, is open).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Tasks 14 (scripts), 15 (CI/OIDC), 16 (PR plan checks), 17 (Grafana plus alerting), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
+- **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
+- **Running state:** the stack is torn down and rebuilt by hand with the snapshot pattern in Task 14's notes (no scripts yet), and `okta/` is applied locally.
+
+
 ## Global Constraints
 
 - **`fleetctl` is hands-on: I run every `fleetctl` command myself, to learn the tool.** Each step explains what the command does and what output to expect. Steps marked **🎓 You run this** follow this rule; commands that prompt for a password or print a one-time token have to be run by hand regardless. **Installing `fleetctl` is a prerequisite that is deliberately not done up front (Task 3 Step 8a; needed no later than Task 8 Step 5 or Task 11 Step 1): before any `fleetctl` step, check `which fleetctl && fleetctl --version` and stop if it's missing or not 4.92.0.**
@@ -41,7 +48,7 @@
 **Interfaces:**
 - Produces: an S3 bucket every later task's `terraform init` depends on.
 
-- [ ] **Step 1: Create the state bucket via AWS CLI**
+- [x] **Step 1: Create the state bucket via AWS CLI**
 
 No DynamoDB lock table — `dynamodb_table` was deprecated in Terraform 1.11 (late 2024) in favor of S3's own native conditional-write locking (`use_lockfile = true` on the backend, Step 4). Caught and fixed during execution, not planned this way from the start — worth naming since "S3 + DynamoDB for state locking" is still what most Terraform tutorials show.
 
@@ -66,12 +73,12 @@ aws s3api put-bucket-tagging \
   --tagging 'TagSet=[{Key=Project,Value=fleet-lab},{Key=ManagedBy,Value=terraform}]'
 ```
 
-- [ ] **Step 2: Verify it exists**
+- [x] **Step 2: Verify it exists**
 
 Run: `aws s3api head-bucket --bucket fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text)`
 Expected: no error.
 
-- [ ] **Step 3: Write `providers.tf`**
+- [x] **Step 3: Write `providers.tf`**
 
 ```hcl
 terraform {
@@ -101,7 +108,7 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 ```
 
-- [ ] **Step 4: Write `backend.tf`** (substitute the real account ID printed by Step 2)
+- [x] **Step 4: Write `backend.tf`** (substitute the real account ID printed by Step 2)
 
 ```hcl
 terraform {
@@ -115,7 +122,7 @@ terraform {
 }
 ```
 
-- [ ] **Step 5: Write `.gitignore`**
+- [x] **Step 5: Write `.gitignore`**
 
 ```
 .terraform/
@@ -126,12 +133,12 @@ terraform {
 crash.log
 ```
 
-- [ ] **Step 6: Init and verify**
+- [x] **Step 6: Init and verify**
 
 Run: `terraform init`
 Expected: `Successfully configured the backend "s3"!` and `Terraform has been successfully initialized!`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add providers.tf backend.tf .gitignore .terraform.lock.hcl
@@ -154,7 +161,7 @@ Includes `.terraform.lock.hcl` — Terraform generates and explicitly recommends
 - Consumes: nothing.
 - Produces: `aws_acm_certificate_validation.fleet.certificate_arn`, `aws_route53_zone.fleet.zone_id` — consumed by Task 3 (ALB) and Task 6 (SES).
 
-- [ ] **Step 1: Write `variables.tf`**
+- [x] **Step 1: Write `variables.tf`**
 
 ```hcl
 variable "fleet_subdomain" {
@@ -175,16 +182,16 @@ variable "rds_snapshot_identifier" {
 }
 ```
 
-- [ ] **Step 2: Write `example.tfvars`**
+- [x] **Step 2: Write `example.tfvars`**
 
 ```hcl
 fleet_subdomain   = "fleet.example.com"
 fleet_license_key = "replace-with-real-license-key"
 ```
 
-- [ ] **Step 3: Write `terraform.tfvars`** with your real subdomain and license key (not shown here — real values, gitignored).
+- [x] **Step 3: Write `terraform.tfvars`** with your real subdomain and license key (not shown here — real values, gitignored).
 
-- [ ] **Step 4: Write `dns.tf`**
+- [x] **Step 4: Write `dns.tf`**
 
 ```hcl
 resource "aws_route53_zone" "fleet" {
@@ -222,13 +229,13 @@ resource "aws_acm_certificate_validation" "fleet" {
 }
 ```
 
-- [ ] **Step 5: Apply and get the NS records**
+- [x] **Step 5: Apply and get the NS records**
 
 Run: `terraform apply -var-file=terraform.tfvars -target=aws_route53_zone.fleet`
 Then: `aws route53 get-hosted-zone --id $(terraform state show aws_route53_zone.fleet | grep -m1 'zone_id ' | awk '{print $3}' | tr -d '"') --query 'DelegationSet.NameServers'`
 Expected: 4 NS hostnames printed.
 
-- [ ] **Step 6: Delegate the subdomain in Cloudflare — automated (`cloudflare.tf`)**
+- [x] **Step 6: Delegate the subdomain in Cloudflare — automated (`cloudflare.tf`)**
 
 The zone gets a *new* set of four nameservers every time it is recreated, so the delegation is managed in code instead of by hand. Verified against `cloudflare/cloudflare` v5.26.0's schema: `cloudflare_dns_record` requires `zone_id`, `name`, `type`, `ttl` (plus `content`), and `data "cloudflare_zone"` looks a zone up by `filter = { name = ... }`.
 
@@ -272,12 +279,12 @@ resource "cloudflare_dns_record" "fleet_ns" {
 
 This is a deliberate exception to "no long-lived credentials" (like the Grafana CloudWatch user in Task 17): Cloudflare has no OIDC federation for this. Task 15 stores it as a GitHub secret.
 
-- [ ] **Step 7: Apply the rest and verify cert validation**
+- [x] **Step 7: Apply the rest and verify cert validation**
 
 Run: `terraform apply -var-file=terraform.tfvars`
 Expected: apply completes; `aws acm describe-certificate --certificate-arn <arn> --query 'Certificate.Status'` returns `"ISSUED"` within a few minutes of the NS delegation propagating (the ACM validation resource waits for it, so a single apply normally covers both; re-run if it times out — DNS propagation is the one step gated by something outside AWS and Terraform).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add dns.tf variables.tf example.tfvars
@@ -300,7 +307,7 @@ This is the milestone task: after this, Fleet is live and publicly reachable. On
 - Consumes: `aws_acm_certificate_validation.fleet.certificate_arn`, `aws_route53_zone.fleet.zone_id`, `var.rds_snapshot_identifier`.
 - Produces: `module.fleet.byo-vpc.byo-db.alb.lb_dns_name`, `module.fleet.byo-vpc.byo-db.alb.arn` / `lb_arn_suffix`, `module.fleet.byo-vpc.rds.cluster_members`, `module.fleet.byo-vpc.redis.member_clusters`, `aws_secretsmanager_secret.fleet_server_private_key.arn`, `aws_iam_policy.software_installers.arn` (must stay in `extra_iam_policies` in every later `fleet_config` edit — Tasks 6, 12), output `fleet_url` — consumed by Tasks 4, 5, 6, 8, 12, and `scripts/resume.sh`/`up.sh` in Task 14.
 
-- [ ] **Step 1: Write `secrets.tf` and `installers.tf`** — the two things that hold state and must survive `module.fleet` being destroyed on teardown (see Task 14).
+- [x] **Step 1: Write `secrets.tf` and `installers.tf`** — the two things that hold state and must survive `module.fleet` being destroyed on teardown (see Task 14).
 
 `secrets.tf` — the Fleet server private key. This mirrors what the module would otherwise generate and own itself (verified against `byo-ecs`'s source: `random_password { length = 32, special = true }`). It encrypts sensitive data in the database, so losing it makes a restored snapshot unreadable: `prevent_destroy` guards it against a full `terraform destroy` (the `down` script uses `-target`, so it's unaffected; to genuinely delete it, remove the guard first). An earlier draft had `recovery_window_in_days = 0` (instant, unrecoverable deletion) and a pointless `create_before_destroy` on a fixed secret name — both removed.
 
@@ -391,7 +398,7 @@ resource "aws_iam_policy" "software_installers" {
 
 The same reasoning was checked against the other buckets: the Firehose/S3 log buckets (Task 12) and the state bucket already live outside `module.fleet` and are untouched by `down`.
 
-- [ ] **Step 2: Write `fleet.tf`**
+- [x] **Step 2: Write `fleet.tf`**
 
 ```hcl
 module "fleet" {
@@ -539,7 +546,7 @@ Why this is the whole module call, and nothing more: the `vpc` object's own defa
 - **Restore mechanics that Task 14 relies on, verified in `terraform-aws-rds-aurora` v9.16.1:** `snapshot_identifier` is in the cluster's `ignore_changes`, so a later `apply` (including Task 16's plan without the variable) doesn't propose replacing the cluster. The master password is generated inside `module.fleet` and destroyed with it, so each rebuild gets a fresh one wired to the module's own Secrets Manager entry; that the provider applies it to the restored cluster is expected behaviour I did not reproduce — the Task 14 smoke test (Fleet connects after a restore) is the proof.
 - **Transitive version note:** the module's Redis dependency (`cloudposse/elasticache-redis/aws`) is constrained `>= 1.9.1`, so `terraform init` resolves it to the newest release (2.1.0 at the time of writing), and `.terraform.lock.hcl` doesn't pin modules. If `plan` errors on a Redis input, that's the first suspect.
 
-- [ ] **Step 3: Write `outputs.tf`** — `scripts/resume.sh` (Task 14) references `terraform output -raw fleet_url`, so this needs to actually exist.
+- [x] **Step 3: Write `outputs.tf`** — `scripts/resume.sh` (Task 14) references `terraform output -raw fleet_url`, so this needs to actually exist.
 
 ```hcl
 output "fleet_url" {
@@ -547,7 +554,7 @@ output "fleet_url" {
 }
 ```
 
-- [ ] **Step 4: Init, validate, pre-create the secret, and plan**
+- [x] **Step 4: Init, validate, pre-create the secret, and plan**
 
 **Two-phase apply (required, found by running it).** On a fresh state, a plain `plan` fails with `Invalid count argument` in `byo-ecs/main.tf` (`count = local.private_key_secret_is_module_managed ? 1 : 0`): the module decides whether it manages the private key by checking whether `private_key_secret_arn` is null, and our externalized secret's ARN is unknown until the secret exists. Create the secret chain first:
 
@@ -558,7 +565,7 @@ Then run: `terraform init && terraform fmt && terraform validate && terraform pl
 (`init` is required first — this step adds new modules and the `random`/`null` providers, and `validate` fails with "Module not installed" without it. The same applies to every later task that adds a module or provider.)
 Expected: `Plan: 86 to add, 0 to change, 0 to destroy` (after the secret pre-creation above): a new VPC (12 subnets, one NAT Gateway, one EIP), an Aurora cluster with **1 instance** (`fleet-homelab-one`), a Redis replication group (1 node), the ALB, target group, ECS cluster/service/task definition, the private key secret, the software-installers bucket + policy, and the migrations `null_resource`.
 
-- [ ] **Step 5: Apply**
+- [x] **Step 5: Apply**
 
 Run: `terraform apply tfplan`
 Expected: apply completes (10+ minutes — Aurora cluster creation and NAT Gateway provisioning dominate, then the migrations addon runs `fleet prepare db` as a one-off task and scales the service back up, adding a few minutes).
@@ -576,23 +583,23 @@ terraform apply -var-file=terraform.tfvars -out=tfplan
 
 On the initial build this resolves **4 to add** (the attachment, the RDS ingress rule, the `fleet_alb` DNS record, and the migrations `null_resource`); on a snapshot-restore rebuild it resolved **5 to add** (also the WAF Web ACL association, and a second `extras[]` index since Tasks 6-8 add more `extra_iam_policies`/`extra_execution_iam_policies`). Either way, `scripts/tf-apply.sh` handles it without a human needing to notice and re-run — use it (not a bare `terraform apply`) for every apply in this plan from here on, including inside Task 14's `up.sh`/`down.sh` and Task 15's CI workflow.
 
-- [ ] **Step 6: Verify the ECS service is healthy**
+- [x] **Step 6: Verify the ECS service is healthy**
 
 Run: `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].{running:runningCount,desired:desiredCount}'`
 Expected: `{"running": 1, "desired": 1}`
 
-- [ ] **Step 7: Verify Fleet is reachable over HTTPS**
+- [x] **Step 7: Verify Fleet is reachable over HTTPS**
 
 Run: `curl -sI https://<fleet_subdomain>/healthz`
 Expected: `HTTP/2 200`
 
-- [ ] **Step 8: Initialize Fleet and create the break-glass admin — in the browser, the way an organization normally does it.** A freshly deployed Fleet has no users at all: opening `https://<fleet_subdomain>/` redirects to `/setup` (seen on this deployment: the redirect and the page load), where you create the first global admin. Every later task (MDM in Task 8, SSO in Tasks 10-11, GitOps, Grafana) needs this login. **No `fleetctl` is needed for this** — Fleet's own AWS/Terraform deployment guide never mentions it either (checked; that guide also says nothing about creating the first user or about migrations, so it is not a complete recipe). Read what the form asks for and fill it in: your name, an email address you control, a strong password, and the organization name (`Homelab`), and confirm the server URL it shows.
+- [x] **Step 8: Initialize Fleet and create the break-glass admin — in the browser, the way an organization normally does it.** A freshly deployed Fleet has no users at all: opening `https://<fleet_subdomain>/` redirects to `/setup` (seen on this deployment: the redirect and the page load), where you create the first global admin. Every later task (MDM in Task 8, SSO in Tasks 10-11, GitOps, Grafana) needs this login. **No `fleetctl` is needed for this** — Fleet's own AWS/Terraform deployment guide never mentions it either (checked; that guide also says nothing about creating the first user or about migrations, so it is not a complete recipe). Read what the form asks for and fill it in: your name, an email address you control, a strong password, and the organization name (`Homelab`), and confirm the server URL it shows.
 
 Store the password in your personal password manager (not Secrets Manager — this account has to work even if AWS itself is the problem). This is a one-time action per database: because Aurora is restored from snapshot on every `up` (Task 14), the account survives teardown/rebuild. It only needs redoing after a genuinely fresh database (a `--fresh` `up`). Turning on MFA for this account is deliberately deferred to Task 9, after SSO is proven working.
 
 (The CLI equivalent, if you ever want it: `fleetctl config set --address https://<fleet_subdomain>` then `fleetctl setup --email <email> --name "Break Glass Admin" --org-name "Homelab"` — verified against Fleet v4.92.0's source; it prompts for the password. Not used here.)
 
-- [ ] **Step 8a: 🎓 You run this — install `fleetctl`, log in, and get oriented. Do this whenever you're ready; the first hard requirement is Task 8 Step 5 (or Task 11 Step 1, whichever you reach first), not now.** ⛔ Gate: before any later step that runs `fleetctl`, check `which fleetctl && fleetctl --version`; if it isn't installed at 4.92.0, stop and do this step (it is deliberately not installed earlier). `fleetctl` is Fleet's CLI, the way `aws` is AWS's: a client on your Mac that talks to Fleet's API over HTTPS (it is not installed on AWS or inside the server). Install the same version as the server, log in as the admin you created in Step 8, then look around:
+- [x] **Step 8a: 🎓 You run this — install `fleetctl`, log in, and get oriented. Do this whenever you're ready; the first hard requirement is Task 8 Step 5 (or Task 11 Step 1, whichever you reach first), not now.** ⛔ Gate: before any later step that runs `fleetctl`, check `which fleetctl && fleetctl --version`; if it isn't installed at 4.92.0, stop and do this step (it is deliberately not installed earlier). `fleetctl` is Fleet's CLI, the way `aws` is AWS's: a client on your Mac that talks to Fleet's API over HTTPS (it is not installed on AWS or inside the server). Install the same version as the server, log in as the admin you created in Step 8, then look around:
 
 ```bash
 npm install -g fleetctl@4.92.0     # or run any command as: npx fleetctl@4.92.0 <command>
@@ -618,7 +625,7 @@ fleetctl get config --yaml | head  # add --yaml or --json to most `get` commands
 
 What to notice: `get config` shows `org_info`, `server_settings`, `sso_settings` (still disabled) and `mdm` — every setting Tasks 8, 10 and 11 will change, first by hand and later from Git. That's the mental model for GitOps: the YAML you push is this same config document.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add secrets.tf installers.tf fleet.tf outputs.tf .terraform.lock.hcl
@@ -639,7 +646,7 @@ git commit -m "Deploy Fleet (VPC + Aurora + Redis + ALB + Fargate) via the root 
 **Interfaces:**
 - Consumes: `module.fleet.byo-vpc.byo-db.alb.arn`.
 
-- [ ] **Step 1: Write `waf.tf`**
+- [x] **Step 1: Write `waf.tf`**
 
 **Built as a custom `aws_wafv2_web_acl`, not Fleet's `waf-alb` addon** — found while executing this task, not planned this way from the start. The addon (`addons/waf-alb`) only supports "block these specific countries/IPs, default-allow the rest" or "allow these specific IPs, default-block the rest" (verified in its `variables.tf`/`main.tf`); there's no "allow only this one country" mode. What I actually want — US-only access — doesn't fit either mode well: a blocklist of every non-US country hit a real AWS limit (`geo_match_statement.country_codes` allows at most 50 entries per statement — confirmed by a failed `apply`, not assumed) long before it hit AWS's own `CountryCode` enum of 250 codes, and even if that limit didn't exist, a maintained "block everyone except US" list would silently *allow* any country AWS adds in the future until the list is updated. An allow-only-US rule with a default block action is simpler (one country code, not 249), avoids the limit entirely, and needs no upkeep as AWS adds countries — so this task built that directly instead of forcing it through the addon.
 
@@ -689,16 +696,16 @@ resource "aws_wafv2_web_acl_association" "fleet_homelab" {
 
 **`description` has an undocumented (in the Terraform provider) character restriction** — AWS rejects `;` (and likely other punctuation outside `[\w+=:#@/\-,.\s]`); found by a failed apply, fixed by dropping the semicolon. **The Web ACL association can fail once with `WAFUnavailableEntityException: AWS WAF couldn't retrieve the resource that you requested`** even though the ACL was just created successfully — transient, found on this exact apply; a re-run of `terraform apply -target=aws_wafv2_web_acl_association.fleet_homelab` (the ACL itself is already in state, so nothing else re-runs) succeeds. If a stricter geo-blocking posture is wanted later (e.g. resuming Fleet's own addon for its narrower blocklist use case, or adding IP-based rules for MDM/webhook callers that might not originate from US IPs), revisit rather than assume this design covers those cases.
 
-- [ ] **Step 2: Init, validate, and plan**
+- [x] **Step 2: Init, validate, and plan**
 
 Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
 Expected: plan shows one `aws_wafv2_web_acl` (with a geo-match blocking rule listing 249 country codes) and one `aws_wafv2_web_acl_association`, plus the addon's supporting `aws_wafv2_rule_group`s and `aws_wafv2_ip_set`s (all named `fleet-homelab`).
 
-- [ ] **Step 3: Apply**
+- [x] **Step 3: Apply**
 
 Run: `terraform apply tfplan`
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `aws wafv2 list-web-acls --scope REGIONAL --query "WebACLs[?Name=='fleet-homelab']"`
 Expected: one Web ACL returned.
@@ -707,7 +714,7 @@ Then confirm it's actually associated with the ALB (the association is a separat
 `aws wafv2 get-web-acl-for-resource --resource-arn $(aws elbv2 describe-load-balancers --names fleet-homelab --query 'LoadBalancers[0].LoadBalancerArn' --output text) --query 'WebACL.Name' --output text`
 Expected: `fleet-homelab`. Also re-check `https://<fleet_subdomain>/healthz` still returns 200 from a US location — a mistake in the geo rule would show up as Fleet suddenly unreachable, not as a Terraform error.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add waf.tf .terraform.lock.hcl
@@ -730,7 +737,7 @@ git commit -m "Attach a US-only AWS WAF Web ACL to the Fleet ALB"
 **Interfaces:**
 - Consumes: `aws_route53_zone.fleet.zone_id` (for DKIM/verification records).
 
-- [ ] **Step 1: Write `ses.tf`**
+- [x] **Step 1: Write `ses.tf`**
 
 ```hcl
 module "ses" {
@@ -741,11 +748,11 @@ module "ses" {
 }
 ```
 
-- [ ] **Step 2: Init, validate, plan, apply**
+- [x] **Step 2: Init, validate, plan, apply**
 
 Run: `terraform init && terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
 
-- [ ] **Step 3: Verify domain identity is verified, and check for the SES sandbox**
+- [x] **Step 3: Verify domain identity is verified, and check for the SES sandbox**
 
 Run: `aws sesv2 get-email-identity --email-identity <fleet_subdomain> --query 'VerifiedForSendingStatus'`
 Expected: `true` (may take a few minutes after DNS records propagate — re-run if `false`).
@@ -754,7 +761,7 @@ Then: `aws sesv2 get-account --query 'ProductionAccessEnabled'`. If `false`, the
 
 `module.ses` is deliberately **not** torn down by `down.sh` (Task 14): it costs nothing at rest, and re-creating the identity/DKIM records every session would mean re-verification on every `up`. An earlier draft tore it down.
 
-- [ ] **Step 4: Merge the SES addon's outputs into `fleet.tf`'s `fleet_config`.** The SES addon follows the same `fleet_extra_environment_variables` / `fleet_extra_iam_policies` convention as the MDM and logging addons — replace the plain `extra_environment_variables` map in `fleet.tf`'s `fleet_config` block with:
+- [x] **Step 4: Merge the SES addon's outputs into `fleet.tf`'s `fleet_config`.** The SES addon follows the same `fleet_extra_environment_variables` / `fleet_extra_iam_policies` convention as the MDM and logging addons — replace the plain `extra_environment_variables` map in `fleet.tf`'s `fleet_config` block with:
 
 ```hcl
     extra_environment_variables = merge(
@@ -774,12 +781,12 @@ Then: `aws sesv2 get-account --query 'ProductionAccessEnabled'`. If `false`, the
 
 (`FLEET_SERVER_URL` is gone from this map — it isn't a real Fleet config key, see Task 3. `aws_iam_policy.software_installers` is Task 3's policy; it has to stay in this list or the task loses access to its installers bucket.)
 
-- [ ] **Step 5: Re-apply**
+- [x] **Step 5: Re-apply**
 
 Run: `terraform fmt && terraform validate && terraform apply -var-file=terraform.tfvars`
 (A plain apply, not `-target=module.fleet`: changing `fleet_config` produces a new task-definition revision, and `module.migrations` must be in the same run to re-trigger off it.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ses.tf fleet.tf .terraform.lock.hcl
@@ -798,7 +805,7 @@ git commit -m "Add SES addon and wire Fleet to send email through it"
 **Interfaces:**
 - Produces: one empty Secrets Manager secret (`fleet-scep`) that Task 8 populates with the Windows WSTEP pair, plus the module outputs `extra_secrets` / `extra_execution_iam_policies` that Task 8 wires into `fleet.tf`.
 
-- [ ] **Step 1: Write `mdm.tf`**
+- [x] **Step 1: Write `mdm.tf`**
 
 ```hcl
 module "mdm" {
@@ -812,17 +819,17 @@ module "mdm" {
 }
 ```
 
-- [ ] **Step 2: Validate, plan, apply**
+- [x] **Step 2: Validate, plan, apply**
 
 Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
 Expected: plan creates one Secrets Manager secret (`fleet-scep`) plus its IAM policy, empty; no APN or ABM secret because both are `null`. (The Fleet task is not touched yet — the secret isn't wired in until Task 8, after it has content. An ECS task whose secret reference points at a missing JSON key fails to start, so the order matters.)
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `aws secretsmanager describe-secret --secret-id fleet-scep --query Name`
 Expected: `"fleet-scep"` prints without error.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add mdm.tf
@@ -840,7 +847,7 @@ Two independent halves: Part A (Windows, Terraform + `openssl`) and Part B (Appl
 
 **Part A — Windows MDM (WSTEP identity certificate)**
 
-- [ ] **Step 1: Generate the WSTEP certificate and key — exact commands from Fleet's own guide** (`fleetdm.com/guides/windows-mdm-setup`), fetched and verified directly against this machine's OpenSSL, not taken from memory. An earlier draft of this step improvised a generate-then-detect-and-convert approach; Fleet's guide does it in one line with `-traditional`.
+- [x] **Step 1: Generate the WSTEP certificate and key — exact commands from Fleet's own guide** (`fleetdm.com/guides/windows-mdm-setup`), fetched and verified directly against this machine's OpenSSL, not taken from memory. An earlier draft of this step improvised a generate-then-detect-and-convert approach; Fleet's guide does it in one line with `-traditional`.
 
 ```bash
 mkdir -p ~/fleet-wstep && cd ~/fleet-wstep
@@ -859,7 +866,7 @@ openssl req -x509 -new -nodes -key fleet-mdm-win-wstep.key -sha256 -days 3652 -o
 
 **Back these two files up in your password manager / encrypted storage.** Fleet uses this pair to escrow BitLocker recovery keys for Windows hosts; replacing it later permanently loses access to keys already escrowed. Do not lose it and do not casually regenerate it.
 
-- [ ] **Step 2: Store the pair in the secret** (jq builds the JSON so the PEM newlines are escaped correctly):
+- [x] **Step 2: Store the pair in the secret** (jq builds the JSON so the PEM newlines are escaped correctly):
 
 ```bash
 jq -n --rawfile c fleet-mdm-win-wstep.crt --rawfile k fleet-mdm-win-wstep.key \
@@ -872,14 +879,14 @@ shred -u payload.json 2>/dev/null || rm -P payload.json
 
 (The key names say "APPLE_SCEP" because that is what the `addons/mdm` module hard-codes; with `enable_windows_mdm = true` it re-exposes the same two values as the Windows WSTEP variables. Nothing Apple-related is happening here.)
 
-- [ ] **Step 3: Wire MDM's secrets into the Fleet task** — modify `fleet.tf`'s `fleet_config` block (extending, not replacing, Task 6's SES merge if it is already there — merge all module outputs into the same expression):
+- [x] **Step 3: Wire MDM's secrets into the Fleet task** — modify `fleet.tf`'s `fleet_config` block (extending, not replacing, Task 6's SES merge if it is already there — merge all module outputs into the same expression):
 
 ```hcl
     extra_secrets                = module.mdm.extra_secrets
     extra_execution_iam_policies = module.mdm.extra_execution_iam_policies
 ```
 
-- [ ] **Step 4: Validate, plan, apply**
+- [x] **Step 4: Validate, plan, apply**
 
 Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
 Expected: the Fleet task definition is replaced and the service redeploys; then `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].{running:runningCount,desired:desiredCount}'` returns running 1 / desired 1 and `curl -sI https://<fleet_subdomain>/healthz` returns `HTTP/2 200`.
@@ -992,6 +999,8 @@ Everything Entra-side was destroyed on 2026-10-03 (all nine Terraform resources,
 
 **Where to see the role attribute in Okta's console (found by the user, 2026-10-04):** Applications → Applications → Fleet → the SAML settings page's **legacy configuration** section → **Attribute Statements**. The Terraform resource (`okta_app_saml`) creates Okta's classic SAML app, which this org's newer console files under "legacy configuration". The attribute name `FLEET_JIT_USER_ROLE_GLOBAL` is Fleet's (`server/fleet/sessions.go`); Okta only supplies the value, via the expression. These are plain Attribute Statements, not Group Attribute Statements (a separate list on the same page). Terraform owns the setting: an edit in the console is reverted by the next `terraform apply` in `okta/`.
 
+**Task 10 Step 4 closed (2026-10-05), as reported by the user:** Okta's "Preview the SAML Assertion" was run and showed the expected attributes (the role and name values), complementing my check that the public metadata serves a signing certificate, the email NameID format and both bindings. Housekeeping done the same day: the stale `fleet-homelab/entra.tfstate` object (0 resources, 0 outputs, bucket versioned so the delete is recoverable) was removed from the state bucket, and the user added a calendar reminder to sign in to the Okta admin console (the 45-day inactivity rule).
+
 **Facts about Fleet that still hold** (read from source, v4.92.0): identity is `NameID.Value`; the role attribute is a list and `parseRole` takes the **last** value; a **new** user with no role becomes observer; an **existing** user with no role arriving is left **unchanged**; name, email and job title are written once at creation; deleting a user is blocked only for the last global admin.
 
 **Residual gaps, stated plainly** (not closed by Okta):
@@ -1001,13 +1010,13 @@ Everything Entra-side was destroyed on 2026-10-03 (all nine Terraform resources,
 
 **Steps:**
 
-- [ ] **Step 1: Sign up for the Okta Workforce Identity free trial** at okta.com/free-trial (interactive — do it yourself; use a <your-domain> address). Read the 2026 free-trial terms and MSA Section 12.9 at okta.com/agreements first (see above). Record the org URL (not committed). In the admin console confirm three things on day one, before building anything: the org's plan/trial status, that a **custom SAML 2.0 app** can be created (Applications → Create App Integration → SAML 2.0), and whether an **API Services (OAuth) app** can be created for Terraform (Applications → Create App Integration → API Services) and, as a fallback, an API token (Security → API → Tokens). If neither: build the app by hand in the console and record the settings here. Put a monthly reminder in your calendar to sign in to the Okta admin console (45-day inactivity rule).
-- [ ] **Step 2: Remove the Entra remnants from the repo** (the `entra/` directory and any `FLEET_ENTRA_METADATA_URL` references), and delete the stale `fleet-homelab/entra.tfstate` object from the state bucket once you are sure nothing reads it.
-- [ ] **Step 3: Write `okta/` and apply** from `okta/` (init, plan, review, apply). Expect the app, two groups and two group assignments. Create the two groups' memberships by hand in the console.
-- [ ] **Step 4: Verify in Okta and with a real assertion.** Use Okta's own "Preview the SAML Assertion" on the app's SAML settings (**existence of that feature in this org is unverified**) for a user in each group, then confirm the metadata URL serves signing keys. Check: NameID is the email, audience equals the Entity ID, `FLEET_JIT_USER_ROLE_GLOBAL` is `admin` or `observer` as expected, display name is present.
+- [x] **Step 1: Sign up for the Okta Workforce Identity free trial** at okta.com/free-trial (interactive — do it yourself; use a <your-domain> address). Read the 2026 free-trial terms and MSA Section 12.9 at okta.com/agreements first (see above). Record the org URL (not committed). In the admin console confirm three things on day one, before building anything: the org's plan/trial status, that a **custom SAML 2.0 app** can be created (Applications → Create App Integration → SAML 2.0), and whether an **API Services (OAuth) app** can be created for Terraform (Applications → Create App Integration → API Services) and, as a fallback, an API token (Security → API → Tokens). If neither: build the app by hand in the console and record the settings here. Put a monthly reminder in your calendar to sign in to the Okta admin console (45-day inactivity rule).
+- [x] **Step 2: Remove the Entra remnants from the repo** (the `entra/` directory and any `FLEET_ENTRA_METADATA_URL` references), and delete the stale `fleet-homelab/entra.tfstate` object from the state bucket once you are sure nothing reads it.
+- [x] **Step 3: Write `okta/` and apply** from `okta/` (init, plan, review, apply). Expect the app, two groups and two group assignments. Create the two groups' memberships by hand in the console.
+- [x] **Step 4: Verify in Okta and with a real assertion.** Use Okta's own "Preview the SAML Assertion" on the app's SAML settings (**existence of that feature in this org is unverified**) for a user in each group, then confirm the metadata URL serves signing keys. Check: NameID is the email, audience equals the Entity ID, `FLEET_JIT_USER_ROLE_GLOBAL` is `admin` or `observer` as expected, display name is present.
 - [x] **Step 5: The test that decides this whole task: an unassigned person must be refused, and that person should be a super admin.** Sign in as the org's super admin while in **neither** Fleet group and open the Fleet login. Expected: Okta refuses ("not assigned"), and no Fleet account is created. Check Settings → Users in Fleet afterwards. If a super admin gets through, stop: Okta has the same gap and the plan needs another control (a Fleet-side reconciler or turning JIT off with pre-created accounts).
-- [ ] **Step 6: Configure Fleet by hand once** (Settings → Integrations → Authentication → Fleet users): Entity ID, the app's metadata URL, provider name "Okta", single sign-on on, **"Create user and sync permissions on login" on**, "Allow SSO login initiated by identity provider" **off** (Fleet's own Okta guide turns it on for the dashboard-tile experience; off removes the request-binding weakness, and the Okta tile then needs a service-initiated start). Log in from Fleet's own page and confirm the role in Settings → Users.
-- [ ] **Step 7: Commit** `okta/*.tf`, `okta/example.tfvars` and `okta/.terraform.lock.hcl` (never `okta/terraform.tfvars` or any token). Run the public-readiness check first.
+- [x] **Step 6: Configure Fleet by hand once** (Settings → Integrations → Authentication → Fleet users): Entity ID, the app's metadata URL, provider name "Okta", single sign-on on, **"Create user and sync permissions on login" on**, "Allow SSO login initiated by identity provider" **off** (Fleet's own Okta guide turns it on for the dashboard-tile experience; off removes the request-binding weakness, and the Okta tile then needs a service-initiated start). Log in from Fleet's own page and confirm the role in Settings → Users.
+- [x] **Step 7: Commit** `okta/*.tf`, `okta/example.tfvars` and `okta/.terraform.lock.hcl` (never `okta/terraform.tfvars` or any token). Run the public-readiness check first.
 
 **Those settings live only in the database** (they survive teardowns through the Aurora snapshot). Task 11's `default.yml` must carry the same values, or its first run can clear them; Task 11 Step 8 repeats the login after GitOps takes ownership.
 
@@ -1250,7 +1259,7 @@ git commit -m "Route osquery result/status/audit logs to S3 via Firehose"
 **Interfaces:**
 - Consumes: nothing (standalone, account-level resource).
 
-- [ ] **Step 1: Write `budget.tf`**
+- [x] **Step 1: Write `budget.tf`**
 
 ```hcl
 resource "aws_budgets_budget" "fleet_homelab" {
@@ -1279,23 +1288,23 @@ resource "aws_budgets_budget" "fleet_homelab" {
 
 Given the actual usage pattern (torn down most of the time, averaging ~$12–15/mo per the spec), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
 
-- [ ] **Step 2: Validate and plan**
+- [x] **Step 2: Validate and plan**
 
 Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan`
 Expected: plan shows one `aws_budgets_budget` with 10 notification blocks. If the Fleet stack is torn down at this point, a bare `plan` would also rebuild it — add `-target=aws_budgets_budget.fleet_homelab` to `plan` (this was done when the task was executed while the stack was down).
 
-- [ ] **Step 3: Apply**
+- [x] **Step 3: Apply**
 
 Run: `terraform apply tfplan`
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `aws budgets describe-budget --account-id $(aws sts get-caller-identity --query Account --output text) --budget-name fleet-homelab-monthly --query 'Budget.{limit:BudgetLimit,notifications:NotificationsWithSubscribers[].Notification.Threshold}'`
 Expected: `limit` shows `100 USD`; `notifications` lists `[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]` (all `ABSOLUTE_VALUE`). Also confirm the address is subscribed: `aws budgets describe-subscribers-for-notification --account-id <acct> --budget-name fleet-homelab-monthly --notification NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=10,ThresholdType=ABSOLUTE_VALUE`.
 
 - [ ] **Step 5: Check the inbox once.** Whether directly-listed Budgets email recipients need a confirmation click is unclear — an independent review said no, and AWS's own docs and search results conflict on it, so this isn't asserted either way. Look in `the budget alert address` (including spam) for an "AWS Notification - Subscription Confirmation" email and click confirm if one arrives; if none does, nothing further is needed. Budgets emails also don't depend on SES or on the Fleet stack being up.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add budget.tf variables.tf example.tfvars
