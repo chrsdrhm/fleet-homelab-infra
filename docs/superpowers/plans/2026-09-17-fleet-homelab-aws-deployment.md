@@ -1032,7 +1032,7 @@ Requires the break-glass admin from Task 3 Step 8 (used below to create the API-
 - Modify: `fleets/workstations.yml` (the scaffold's directory is `fleets/`, formerly `teams/`)
 - Modify: `.github/workflows/workflow.yml` (env block)
 
-- [ ] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.x. The server image is v4.92.0; a patch-level difference (the installed fleetctl is 4.92.2) is accepted, any other minor version: stop. See Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
+- [x] **Step 1: 🎓 You run this — scaffold the repo.** *(Pre-flight: `fleetctl --version` → 4.92.x. The server image is v4.92.0; a patch-level difference (the installed fleetctl is 4.92.2) is accepted, any other minor version: stop. See Task 3 Step 8a.)* `fleetctl new` writes a starter GitOps repository (YAML for org settings, fleets, policies, labels, plus the GitHub Actions workflow). Read the generated files before editing them — they are the best documentation of what Fleet can manage from Git.
 
 ```bash
 mkdir -p ~/Dev/fleet-homelab-gitops && cd ~/Dev/fleet-homelab-gitops   # ~/Dev, not ~/Documents: iCloud corrupts git repos and .terraform caches
@@ -1045,6 +1045,14 @@ rm fleets/personal-mobile-devices.yml   # not needed for this homelab (no BYOD m
 
 `fleetctl new` is non-interactive in v4.92.0 (flags above; `--force` because the directory already exists). It generates `default.yml`, `fleets/workstations.yml` and `fleets/personal-mobile-devices.yml`, `labels/`, `platforms/` (configuration profiles), `.github/workflows/workflow.yml`, and `.github/fleet-gitops/` (the action that runs `fleetctl gitops`). Every `fleets/*.yml` file is applied automatically, and — because `default.yml` contains `org_settings:` — any Fleet in your instance that has *no* matching file is deleted (`--delete-other-fleets`). That is the desired GitOps behavior, but means fleets created in the UI won't survive the next run.
 
+**Done 2026-10-05 (Steps 1-7); Step 8 (SSO login check by the user) still open.** The GitOps repo is public at `chrsdrhm/fleet-homelab-gitops` (one signed commit). What happened, beyond the notes above:
+- **Handling the API token:** run any command that prints a secret in a separate terminal, never with the `!` prefix (which prints into the assistant's session). Capture the output to a private file (`umask 077`), pipe it straight into `gh secret set`, then delete the file. Do not keep it in a password manager or paste it into a chat.
+- **Secrets set (four):** `FLEET_URL`, `FLEET_API_TOKEN`, `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL`, each piped from its source (a `terraform output`, or the tfvars subdomain) without printing.
+- **Lockdown applied and read back** before the first push: fork-PR approval for all external contributors, read-only workflow token, GitHub-owned actions only with SHA pinning required, secret scanning and push protection, Dependabot alerts, private vulnerability reporting, wiki and projects off, you the only collaborator. After the first push, the `protect-main` ruleset (no deletion, no force-push, PR required, `fleet-gitops` check required, admin bypass).
+- **First run: success** (dry run then real apply). The public Actions log was scanned for the hostname, logo URL, account ID, Okta org and token fragments: no hits (secrets show as `***`). Afterwards an unauthenticated SSO initiation against Fleet still returned a SAML request pointing at Okta, so the apply did not clear SSO.
+- **Not read back from Fleet:** the local `fleetctl` session token had expired by then, so the live fleets, labels and policy were not re-listed; the run log says it applied 1 fleet, 1 policy and the fleet config. Refresh with an SSO API token to inspect.
+- **Recreating a repo resets its settings to GitHub defaults.** After any delete-and-recreate, re-apply the Task 15 Step 5 protections (fork-PR approval, read-only workflow token, Actions allow-list with SHA pinning, secret scanning and push protection, Dependabot alerts, private vulnerability reporting) and the `protect-main` ruleset, then read each back.
+
 **Progress 2026-10-04 (the repo exists locally at `~/Dev/fleet-homelab-gitops`; not yet committed or published).** Step 1 (scaffold) done by the user. Steps 2 and 3 done with these deviations from the text below, all found by reading the scaffold and running a local dry run against the live Fleet:
 - **No enroll secrets in Git.** Fleet's `gitops.exceptions.secrets` is `true` by default and `fleetctl gitops` rejects a `secrets:` key then. So no `FLEET_GLOBAL_ENROLL_SECRET` / `FLEET_WORKSTATIONS_ENROLL_SECRET` secrets either; only `FLEET_URL`, `FLEET_API_TOKEN`, `FLEET_OKTA_METADATA_URL` and `FLEET_IDP_IMAGE_URL` go in GitHub. Other exceptions at that moment: labels `false`, software `false`; `gitops_mode_enabled` is `false`.
 - `enable_sso_idp_login: false` (Task 10's decision), `idp_image_url` added, `actions/checkout` pinned to a commit SHA (`# v6`), the unused `.gitlab-ci.yml` removed, and README, MIT LICENSE and `.github/CODEOWNERS` added.
@@ -1054,7 +1062,7 @@ rm fleets/personal-mobile-devices.yml   # not needed for this homelab (no BYOD m
 - **Nothing identifying goes in the public repos** (see Global Constraints). In this repo that means the YAML uses variables: `entity_id: "$FLEET_URL"` and `idp_image_url: "$FLEET_IDP_IMAGE_URL"`, both repository secrets. Limits to know: the hostname is still discoverable through Certificate Transparency logs and public DNS, and GitHub masks secret values in public Actions logs but does not guarantee every error message is clean.
 - **Before the first push:** `gh auth refresh -h github.com -s workflow` (the token lacks the `workflow` scope GitHub requires to push workflow files). Set the three GitHub secrets **before** the push that triggers the apply, or the first run fails on an empty token (a safe failure, but noisy).
 
-- [ ] **Step 2: Edit `default.yml`.** The scaffold already has `org_settings.org_info.org_name` (set by `--org-name`) and `server_settings.server_url: $FLEET_URL`. Add to `org_settings:` (uncommenting/replacing the scaffold's commented `sso_settings` example, and adding `secrets`):
+- [x] **Step 2: Edit `default.yml`.** The scaffold already has `org_settings.org_info.org_name` (set by `--org-name`) and `server_settings.server_url: $FLEET_URL`. Add to `org_settings:` (uncommenting/replacing the scaffold's commented `sso_settings` example, and adding `secrets`):
 
 ```yaml
 org_settings:
@@ -1082,7 +1090,7 @@ controls:
 
 (**Task 19, if built after this**: also add `webhook_settings.activities_webhook` here — see that task's Step 5 for the exact block and its caveat about GitOps reconciliation.) Leave the rest of the scaffold as generated (do not add empty placeholder `policies:`/`queries:`/`agent_options:` keys as an earlier draft did — the current scaffold doesn't use them, and in GitOps YAML an explicitly empty section is treated as "manage this as empty", which is not what you want). `enable_jit_provisioning` is a Premium feature — accounts are created automatically on first SSO login; the role each account gets comes from the `FLEET_JIT_USER_ROLE_GLOBAL` attribute built in Task 10 (an Okta expression over the Fleet Admins and Fleet Observers groups; a user in neither gets the invalid value `unassigned`, so Fleet rejects the login instead of guessing a role). Apple MDM is *not* configured here — it's connected through the UI in Task 8 Part B.
 
-- [ ] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
+- [x] **Step 3: Edit `fleets/workstations.yml`** — the scaffold already names it "💻 Workstations". Add a top-level `settings:` block for this fleet's enroll secret (per-fleet secrets live under `settings:`, the equivalent of `org_settings:` in `default.yml`; verified in Fleet's yaml-files docs):
 
 ```yaml
 name: "💻 Workstations"
@@ -1092,7 +1100,7 @@ name: "💻 Workstations"
 
 (Verify the scaffold's default `controls:` for this fleet are what you want before pushing — macOS setup-assistant lines are commented out by default, so nothing will require Apple MDM.)
 
-- [ ] **Step 4: 🎓 You run this — create the GitOps API-only user on Fleet** (what it does: creates a user that has an API token but no password or UI login, with the `gitops` role, which can only apply configuration) **Authenticating `fleetctl` for this:** the break-glass account now has email MFA (Task 9), and Fleet rejects `fleetctl login` for MFA users, so use an SSO admin's API token instead: sign in to Fleet through Okta, My account → Get API token, then `fleetctl config set --address https://<fleet_subdomain> --token <token>` (do not type the token on a shared screen; it is a session-bound credential for your own account and can be revoked from the same page).
+- [x] **Step 4: 🎓 You run this — create the GitOps API-only user on Fleet** (what it does: creates a user that has an API token but no password or UI login, with the `gitops` role, which can only apply configuration) **Authenticating `fleetctl` for this:** the break-glass account now has email MFA (Task 9), and Fleet rejects `fleetctl login` for MFA users, so use an SSO admin's API token instead: sign in to Fleet through Okta, My account → Get API token, then `fleetctl config set --address https://<fleet_subdomain> --token <token>` (do not type the token on a shared screen; it is a session-bound credential for your own account and can be revoked from the same page).
 
 ```bash
 fleetctl user create --name "GitOps CI" --global-role gitops --api-only
@@ -1100,7 +1108,7 @@ fleetctl user create --name "GitOps CI" --global-role gitops --api-only
 
 Verified in Fleet v4.92.0: `--api-only` needs no email/password/`--username` (there is no `--username` flag; an earlier draft used one and would have failed), and **prints the API token once** — press a key when prompted and copy it immediately into your password manager. The `gitops` role is only valid for API-only users. Do not use `fleetctl login` here: that would need a password user and produces a short-lived session token (default 5 days) that would silently break the workflow.
 
-- [ ] **Step 5: Public-readiness gate, then publish the repo as PUBLIC and lock it down.** `gh` must be logged in (`gh auth status`) **and its token needs the `workflow` scope** to push `.github/workflows/*` (GitHub refuses workflow-file pushes from a token without it); the current token has `admin:gpg_key, gist, read:org, repo` only, so run `gh auth refresh -h github.com -s workflow` first (interactive, browser). **Creating a public repo is effectively irreversible — confirm immediately before the `gh repo create`.**
+- [x] **Step 5: Public-readiness gate, then publish the repo as PUBLIC and lock it down.** `gh` must be logged in (`gh auth status`) **and its token needs the `workflow` scope** to push `.github/workflows/*` (GitHub refuses workflow-file pushes from a token without it); the current token has `admin:gpg_key, gist, read:org, repo` only, so run `gh auth refresh -h github.com -s workflow` first (interactive, browser). **Creating a public repo is effectively irreversible — confirm immediately before the `gh repo create`.**
 
 **Review before the first commit** (this is the part that is specific to a GitOps repo):
 1. **`platforms/` configuration profiles.** Read every file. Profiles can embed Wi-Fi passwords, certificates, or server addresses. Delete or genericise anything that isn't safe to publish (the scaffold's defaults are generic, but check).
@@ -1117,7 +1125,7 @@ gh repo create fleet-homelab-gitops --public --source=. --push --description "Fl
 
 **Then lock it down immediately** — the same calls as Task 15 Step 5 (use that block, with `R=repos/<owner>/fleet-homelab-gitops`): fork-PR approval for all outside contributors, read-only workflow token, selected actions only (adjust `patterns_allowed` to the actions the scaffold actually uses — it needs no `aws-actions/*` or `hashicorp/*`) with SHA pinning, secret scanning + push protection, Dependabot alerts, private vulnerability reporting, wiki/projects off, and the `protect-main` ruleset. Add the dry-run job as a required status check on the ruleset once it has run once. Confirm the only collaborator is you and that both commits report `verified=true` (`gh api repos/<owner>/fleet-homelab-gitops/commits/<sha> --jq .commit.verification`).
 
-- [ ] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the extra variable used in the YAML above would expand to an empty string unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
+- [x] **Step 6: Add GitHub Actions secrets, and expose them to the workflow.** The scaffolded workflow only passes `FLEET_URL` and `FLEET_API_TOKEN` to the gitops step — the extra variable used in the YAML above would expand to an empty string unless you add them to that step's `env:` block in `.github/workflows/workflow.yml`:
 
 ```yaml
         env:
@@ -1136,7 +1144,7 @@ gh secret set FLEET_OKTA_METADATA_URL   # prompts — paste the Okta app's metad
 git add -A && git commit -m "Pass extra secrets to gitops step" && git push
 ```
 
-- [ ] **Step 7: Run the workflow manually and verify**
+- [x] **Step 7: Run the workflow manually and verify**
 
 Run: `gh workflow run "Apply latest configuration to Fleet" && gh run watch`
 Expected: workflow completes successfully (the scaffold also dry-runs on pull requests, applies on push to `main`, and reconciles nightly); in the Fleet UI, Settings > Organization settings shows "Homelab", Settings > Integrations > SSO shows Okta configured, and Settings > Integrations > MDM shows Windows MDM turned on.
