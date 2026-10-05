@@ -2825,6 +2825,37 @@ Added after Task 19, at my request. **Not the same thing as Task 10/11's SSO.** 
 
 ---
 
+### Task 21: Health and error scan — are all the components working?
+
+Added at the user's request. A read-only runbook to run **while the stack is up** (Fleet's CloudWatch logs are destroyed with the stack, and the app log group keeps only 5 days). First baseline run: 2026-10-05, after the Okta, GitOps and Aurora 3.13.0 work.
+
+**Where Fleet's app logs are.** Fleet writes JSON logs to stdout (`FLEET_LOGGING_JSON=true`); ECS ships them to a CloudWatch log group named `terraform-<hash>` (the module's unnamed default, 5-day retention). Not to be confused with osquery result and status logs (Task 12, Firehose to S3) or Fleet's activity feed (Task 19 sends it to a webhook). The Container Insights group holds ECS metrics only.
+
+**Checks** (all read-only):
+1. **ECS:** running equals desired, rollout `COMPLETED`, no stopped tasks, recent service events.
+2. **Fleet app logs** (Logs Insights, last 3 days): counts by `level`; top `error` and `warn` messages grouped by `msg`; keyword hits for `panic`, `fatal`, `out of memory`, `connection refused`, `deadlock`, `too many connections`, `context deadline`, `timeout`.
+3. **ALB:** target health; three-day sums of `RequestCount`, 2xx, 4xx, `HTTPCode_Target_5XX_Count`, `HTTPCode_ELB_5XX_Count`; response-time average and maximum.
+4. **Aurora:** `describe-events` for the last 3 days, pending maintenance; CPU, `CPUCreditBalance` (burstable class), `FreeableMemory`, connections.
+5. **Fargate task:** CPU and memory utilization, average and maximum.
+6. **Redis:** events, `EngineCPUUtilization`, evictions.
+7. **WAF:** allowed versus blocked requests (CloudWatch `AWS/WAFV2`).
+8. **SES:** send statistics (bounces, complaints, rejects) and enforcement status.
+9. **Certificate and DNS:** ACM status, expiry and renewal eligibility; the delegated nameservers and the A record resolve.
+10. **Budget:** actual and forecast against the limit.
+11. **Fleet itself:** `/healthz`, `/api/v1/fleet/status/result_store` and `/status/live_query` (an empty object means healthy), and the GitHub gitops workflow runs and security alerts on both repos.
+12. **Not covered from here:** Okta's System Log (the service app has no `okta.logs.read` scope, so look in the console under Reports), CloudTrail, Cloudflare, and Fleet's activity feed (its API path returned 404 on 4.92; use the UI).
+
+**Baseline findings, 2026-10-05, everything benign:**
+- **App logs, 3 days (about 38,000 records):** 38,276 info, 40 error, 6 warn. 38 of the errors were one message, `unlock failed` (the `automations` cron), all within one hour and just before a deliberate service restart: a job lost its database lock while the old task shut down. Two errors were `invalid role: unassigned`, the intended refusal from the Okta direct-assignment test. The warnings were empty-role notices from before that fallback existed and API-path deprecation notices from `fleetctl api` calls.
+- **Load balancer:** about 1,800 requests, no target 5xx; 6 load-balancer 5xx in a single minute during the first rebuild attempt, when the ALB was up and the task was not.
+- **Aurora:** CPU averaged 13% (maximum 57%); memory minimum about 1.2 GB; at most 18 connections. The CPU credit balance touched 0 right after instance creation (restore and migrations) and then climbed past 100, with no surplus credits charged.
+- **Fargate:** CPU averaged 3% (spiked to 100% at boot); memory maximum 41%. **Redis:** no evictions, negligible CPU.
+- **WAF:** about 4,000 allowed and about 31,500 blocked over 3 days (the US-only rule blocks foreign scanners). **SES:** 6 sends in 24 hours, no bounces or complaints, status healthy (sandbox). **Certificate:** issued, renews automatically, expires April 2027. **DNS:** delegation and the alias record resolve. **Budget:** about $6.70 spent against a $100 limit, forecast about $14. **GitHub:** the latest gitops run succeeded and there are no Dependabot or secret-scanning alerts.
+
+**Possible follow-ups, not built:** keep Fleet's app logs beyond teardown (a subscription to S3, or a named log group kept outside the teardown), alarms on the error rate, and a scheduled version of this scan.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2837,6 +2868,7 @@ Added after Task 19, at my request. **Not the same thing as Task 10/11's SSO.** 
 - AWS Budget alert ($100/mo, an alert every $10): Task 13. ✓ (built and applied)
 - Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
+- Health and error scan of the running stack (runbook plus baseline): Task 21.
 - Remote (non-laptop) execution of `up`/`down`/`plan` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources, plus native alerting via SES SMTP (replaces the standalone CloudWatch-alarms design): Task 17. ✓
