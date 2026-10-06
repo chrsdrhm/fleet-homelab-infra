@@ -306,7 +306,7 @@ This is the milestone task: after this, Fleet is live and publicly reachable. On
 
 **Interfaces:**
 - Consumes: `aws_acm_certificate_validation.fleet.certificate_arn`, `aws_route53_zone.fleet.zone_id`, `var.rds_snapshot_identifier`.
-- Produces: `module.fleet.byo-vpc.byo-db.alb.lb_dns_name`, `module.fleet.byo-vpc.byo-db.alb.arn` / `lb_arn_suffix`, `module.fleet.byo-vpc.rds.cluster_members`, `module.fleet.byo-vpc.redis.member_clusters`, `aws_secretsmanager_secret.fleet_server_private_key.arn`, `aws_iam_policy.software_installers.arn` (must stay in `extra_iam_policies` in every later `fleet_config` edit — Tasks 6, 12), output `fleet_url` — consumed by Tasks 4, 5, 6, 8, 12, and `scripts/resume.sh`/`up.sh` in Task 14.
+- Produces: `module.fleet.byo-vpc.byo-db.alb.lb_dns_name`, `module.fleet.byo-vpc.byo-db.alb.arn` / `lb_arn_suffix`, `module.fleet.byo-vpc.rds.cluster_members`, `module.fleet.byo-vpc.redis.member_clusters`, `aws_secretsmanager_secret.fleet_server_private_key.arn`, `aws_iam_policy.software_installers.arn` (must stay in `extra_iam_policies` in every later `fleet_config` edit — Tasks 6, 12), output `fleet_url` — consumed by Tasks 4, 5, 6, 8, 12, and `scripts/up.sh` in Task 14.
 
 - [x] **Step 1: Write `secrets.tf` and `installers.tf`** — the two things that hold state and must survive `module.fleet` being destroyed on teardown (see Task 14).
 
@@ -547,7 +547,7 @@ Why this is the whole module call, and nothing more: the `vpc` object's own defa
 - **Restore mechanics that Task 14 relies on, verified in `terraform-aws-rds-aurora` v9.16.1:** `snapshot_identifier` is in the cluster's `ignore_changes`, so a later `apply` (including Task 16's plan without the variable) doesn't propose replacing the cluster. The master password is generated inside `module.fleet` and destroyed with it, so each rebuild gets a fresh one wired to the module's own Secrets Manager entry; that the provider applies it to the restored cluster is expected behaviour I did not reproduce — the Task 14 smoke test (Fleet connects after a restore) is the proof.
 - **Transitive version note:** the module's Redis dependency (`cloudposse/elasticache-redis/aws`) is constrained `>= 1.9.1`, so `terraform init` resolves it to the newest release (2.1.0 at the time of writing), and `.terraform.lock.hcl` doesn't pin modules. If `plan` errors on a Redis input, that's the first suspect.
 
-- [x] **Step 3: Write `outputs.tf`** — `scripts/resume.sh` (Task 14) references `terraform output -raw fleet_url`, so this needs to actually exist.
+- [x] **Step 3: Write `outputs.tf`** — `scripts/up.sh` (Task 14) reads `terraform output -raw fleet_url`, so this needs to actually exist.
 
 ```hcl
 output "fleet_url" {
@@ -1316,11 +1316,15 @@ git commit -m "Add AWS Budget: alert every \$10 of actual spend up to \$100/mo"
 
 ### Task 14: Cost-control scripts
 
-Given the primary usage pattern is intermittent (evenings/weekends), `up.sh`/`down.sh` are the scripts that matter — `idle.sh`/`resume.sh` are included for a same-session pause but only save Fargate+Aurora compute, not the bulk of the bill (see spec).
+**Built 2026-10-06: the files in `scripts/` are the source of truth and supersede the code blocks below** (kept as the original design). Differences, all from running the routine by hand first:
+- **Both:** `AWS_REGION` defaults to `us-east-1` and the pager is off. The Fleet URL is read from `terraform output` and never printed (only HTTP status codes are), so the scripts are safe to run where logs are public.
+- **`up.sh` / `down.sh`:** stop with a clear message if Terraform is not initialized (`terraform init -backend-config=backend.hcl`; the backend is a partial configuration, see Task 1).
+- **`up.sh`:** after the apply it waits for the service to stabilize and reports `/healthz` and `/` status codes (200 on `/` means the data was restored; a 307 to `/setup` means an empty database). If the apply fails with `InsufficientDBInstanceCapacity`, it explains the options (retry later, `down.sh`, or another instance class of the same size) and warns not to change `azs` on a live or partial stack.
+- **`down.sh`:** skips the snapshot if no Aurora cluster exists; tags the snapshot `ManagedBy=script`; deletes the Container Insights log group twice, 20 seconds apart (AWS re-creates it after Terraform deletes it); **prunes teardown snapshots automatically, keeping the newest `KEEP_SNAPSHOTS` (default 2)**, and only in a run that took a fresh snapshot; then **verifies** that no ECS cluster, Aurora, Redis, load balancer, NAT gateway, tagged VPC or WAF web ACL remains, exiting 2 if something does.
+
+The usage pattern is intermittent (evenings and weekends), so the scripts are `up.sh` and `down.sh`. There is deliberately no idle/resume pair: it would pause only Fargate and Aurora compute while Redis, the ALB, WAF and the NAT Gateway keep billing.
 
 **Files (in `fleet-homelab-infra`):**
-- Create: `scripts/idle.sh`
-- Create: `scripts/resume.sh`
 - Create: `scripts/up.sh`
 - Create: `scripts/down.sh`
 - (`scripts/tf-apply.sh` already exists, written and committed in Task 3 — `up.sh` calls it, nothing to create here.)
@@ -1328,51 +1332,7 @@ Given the primary usage pattern is intermittent (evenings/weekends), `up.sh`/`do
 **Interfaces:**
 - Consumes: nothing beyond AWS CLI credentials and this repo's Terraform state.
 
-- [ ] **Step 1: Write `scripts/idle.sh`** — the service has an Application Auto Scaling target with `min_capacity = 1` (Task 3), which pulls a manually-set `desired-count 0` back up to 1. Fleet's own `addons/migrations/migrate.sh` works around exactly this by re-registering the scalable target at 0/0 before scaling down, so this does the same. (The reviewer's claim of this problem was confirmed by that upstream workaround; AWS's enforcement itself wasn't reproduced here.) Side effect: a `terraform apply` while idled re-registers min 1 and wakes the service.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "Scaling Fleet ECS service to 0 (autoscaling target first, or it scales straight back up)..."
-aws application-autoscaling register-scalable-target \
-  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
-  --resource-id service/fleet-homelab/fleet --min-capacity 0 --max-capacity 0 >/dev/null
-aws ecs update-service --cluster fleet-homelab --service fleet --desired-count 0 >/dev/null
-
-echo "Stopping Aurora cluster..."
-aws rds stop-db-cluster --db-cluster-identifier fleet-homelab >/dev/null
-
-echo "Idled. Redis, ALB, WAF, and NAT Gateway continue billing (they have no stop state)."
-echo "For real savings, use down.sh instead — this only pauses Fargate + Aurora compute."
-```
-
-- [ ] **Step 2: Write `scripts/resume.sh`**
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "Starting Aurora cluster..."
-aws rds start-db-cluster --db-cluster-identifier fleet-homelab >/dev/null
-echo "Waiting for Aurora to become available..."
-INSTANCE_ID=$(aws rds describe-db-instances \
-  --filters "Name=db-cluster-id,Values=fleet-homelab" \
-  --query 'DBInstances[0].DBInstanceIdentifier' --output text)
-aws rds wait db-instance-available --db-instance-identifier "$INSTANCE_ID"
-
-echo "Restoring the autoscaling range (matches fleet.tf: min 1 / max 2) and scaling Fleet to 1..."
-aws application-autoscaling register-scalable-target \
-  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
-  --resource-id service/fleet-homelab/fleet --min-capacity 1 --max-capacity 2 >/dev/null
-aws ecs update-service --cluster fleet-homelab --service fleet --desired-count 1 >/dev/null
-echo "Waiting for the service to stabilize..."
-aws ecs wait services-stable --cluster fleet-homelab --services fleet
-
-echo "Resumed. Check https://$(cd "$(dirname "$0")/.." && terraform output -raw fleet_url 2>/dev/null || echo '<your fleet subdomain>')/healthz"
-```
-
-- [ ] **Step 3: Write `scripts/up.sh`** — finds the latest teardown snapshot dynamically via the AWS API rather than a local file. An earlier draft of this task used a gitignored `.last-rds-snapshot` file written by `down.sh` — that breaks the moment either script runs somewhere other than the same persistent local checkout (e.g. a GitHub Actions runner, which starts fresh every run with no memory of a prior one — see Task 15). Querying AWS directly for the most recent snapshot matching this project's naming convention works identically whether run locally or in CI, so there's no reason to prefer the fragile version even for local-only use.
+- [x] **Step 1: Write `scripts/up.sh`** — finds the latest teardown snapshot dynamically via the AWS API rather than a local file. An earlier draft of this task used a gitignored `.last-rds-snapshot` file written by `down.sh` — that breaks the moment either script runs somewhere other than the same persistent local checkout (e.g. a GitHub Actions runner, which starts fresh every run with no memory of a prior one — see Task 15). Querying AWS directly for the most recent snapshot matching this project's naming convention works identically whether run locally or in CI, so there's no reason to prefer the fragile version even for local-only use.
 
 ```bash
 #!/usr/bin/env bash
@@ -1405,7 +1365,7 @@ terraform plan -input=false "${VAR_ARGS[@]}" -out=tfplan
 echo "Up. This can take 15-20 minutes for VPC/NAT/Aurora/ALB/ECS to fully stabilize even after apply returns."
 ```
 
-- [ ] **Step 4: Write `scripts/down.sh`** — snapshots Aurora before destroying it, and deliberately leaves `module.mdm`, the private-key secret, the software-installers bucket, `module.ses`, the Firehose/S3 buckets, Route 53/ACM, and the budget alert untouched. `module.fleet` now includes the VPC (it's the root module — see Task 3), so `-target=module.fleet` tears down the VPC, NAT Gateway, Aurora, Redis, ALB, and ECS together; no separate VPC target needed. The confirmation prompt is skippable via a `CONFIRM=destroy` environment variable, so the same script works unattended from Task 15's CI workflow without changing its logic.
+- [x] **Step 2: Write `scripts/down.sh`** — snapshots Aurora before destroying it, and deliberately leaves `module.mdm`, the private-key secret, the software-installers bucket, `module.ses`, the Firehose/S3 buckets, Route 53/ACM, and the budget alert untouched. `module.fleet` now includes the VPC (it's the root module — see Task 3), so `-target=module.fleet` tears down the VPC, NAT Gateway, Aurora, Redis, ALB, and ECS together; no separate VPC target needed. The confirmation prompt is skippable via a `CONFIRM=destroy` environment variable, so the same script works unattended from Task 15's CI workflow without changing its logic.
 
 ```bash
 #!/usr/bin/env bash
@@ -1467,33 +1427,28 @@ echo "--snapshot-type manual --query 'DBClusterSnapshots[].DBClusterSnapshotIden
 echo "then aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <id>."
 ```
 
-- [ ] **Step 5: Make them executable and verify**
+- [x] **Step 3: Make them executable and verify**
 
 Run: `chmod +x scripts/*.sh && ls -l scripts/`
-Expected: all five scripts (the four from this task, plus `tf-apply.sh` from Task 3) show the executable bit set.
+Expected: `up.sh`, `down.sh` and `tf-apply.sh` (from Task 3) show the executable bit set.
 
-- [ ] **Step 6: Smoke-test `idle.sh` / `resume.sh`** (safe — no data loss, seconds to reverse)
-
-Run: `./scripts/idle.sh` then `aws ecs describe-services --cluster fleet-homelab --services fleet --query 'services[0].desiredCount'`
-Expected: `0`
-Run: `./scripts/resume.sh` then re-run the same describe-services command.
-Expected: `1`, and `curl -sI https://<fleet_subdomain>/healthz` returns `HTTP/2 200` again.
-
-- [ ] **Step 7: Smoke-test `down.sh` / `up.sh`** — this is the one worth actually rehearsing, since it's the primary day-to-day pattern. Before running it, note the host count and org name in the Fleet UI so you have something concrete to check afterward.
+- [ ] **Step 4: Smoke-test `down.sh` / `up.sh`** (half done: `down.sh` ran for real on 2026-10-06 with `CONFIRM=destroy`: snapshot taken and tagged `ManagedBy=script`, 87 resources destroyed, log group cleaned up, two newest teardown snapshots kept, its own zero-check passed, and an independent AWS check agreed. `up.sh` is tested at the next bring-up.) — this is the one worth actually rehearsing, since it's the primary day-to-day pattern. Before running it, note the host count and org name in the Fleet UI so you have something concrete to check afterward.
 
 Run: `./scripts/down.sh` (type `destroy` to confirm), then `./scripts/up.sh`.
 Expected: `up.sh` reports restoring from the snapshot `down.sh` just took; once `terraform apply` finishes and the ECS service stabilizes (`aws ecs wait services-stable --cluster fleet-homelab --services fleet`), log into `https://<fleet_subdomain>` and confirm the org name, host count, and your break-glass/GitOps-CI accounts are all exactly as they were before teardown.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/
-git commit -m "Add idle/resume and up/down cost-control scripts with Aurora snapshot restore"
+git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 ```
 
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
+
+**Public Actions logs (this repo is public, so its workflow logs are too):** Terraform's plan, apply and destroy output prints resource IDs and ARNs, and ARNs contain the AWS account ID. Mask it at the start of every job before any AWS or Terraform step (`echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"`, a standard workflow command; verify it masks the ID inside longer strings during the first run), keep the Fleet URL and state bucket in secrets (GitHub masks secret values), and scan the first run's log for the ID, the hostname and the bucket name before relying on it. The Task 14 scripts already avoid printing the URL.
 
 **Consequence of the account-ID rule for CI (2026-10-04):** the workflows cannot hard-code the state bucket or the account ID. Pass the bucket at init from a repository secret (for example `terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"`), and take the role ARNs and account from secrets as well; also check the workflow logs for the account ID, since GitHub masks only values it knows are secrets (a secret is masked everywhere it appears, including inside a longer string). The plan and role outputs in Task 15 that say "substituted by hand into the two workflow files, same as the account ID in `backend.tf`" no longer hold: there is no literal account ID in the repo to mirror.
 

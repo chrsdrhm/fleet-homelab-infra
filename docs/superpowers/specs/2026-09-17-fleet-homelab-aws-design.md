@@ -230,23 +230,14 @@ This is essentially the original, pre-cost-cut design — see the "Why the
 reversal" note above. It only makes sense given the intermittent usage
 pattern below; **do not run this continuously** without revisiting sizing.
 
-### Pause tooling (manual, two tiers)
+### Teardown tooling (manual)
 
 My actual usage pattern is intermittent — evenings/weekends only —
-so **`up`/`down` (full teardown) is the primary mode**, not an occasional
-extra. `idle`/`resume` still exists for a same-session pause, but doesn't
-do much here since Redis, ALB, WAF, and (now) NAT Gateway have no "stopped"
-state — only `up`/`down` actually removes their cost.
+so **`up`/`down` (full teardown) is the only mode**. There is no
+idle/resume pause: Redis, the ALB, WAF and the NAT Gateway have no
+"stopped" state, so pausing only Fargate and Aurora compute saves little,
+and only `up`/`down` removes their cost.
 
-- **`idle` / `resume`** — set the ECS autoscaling target to 0/0 (otherwise
-  its min of 1 scales the service straight back up) and desired count to 0,
-  and stop the Aurora cluster; bring back up in seconds (resume restores
-  min 1 / max 2). A `terraform apply` while idled re-registers min 1 and
-  wakes the service. Ceiling savings ~$66–70/mo (Fargate's
-  $27 + Aurora compute's ~$53), since Redis + ALB + WAF + NAT
-  (~$79–81/mo) keep billing regardless. Note: AWS force-restarts a stopped
-  RDS/Aurora instance after 7 days if left stopped that long. Minor,
-  secondary tool given the primary pattern below.
 - **`up` / `down`** — full `terraform apply` / `terraform destroy` of the
   VPC+compute+db+cache+alb stack (now including the VPC/NAT Gateway, which
   wasn't torn down in the earlier no-NAT design), keeping the Route 53
@@ -293,7 +284,7 @@ state — only `up`/`down` actually removes their cost.
     targeting needed. Cheap and fast relative to Aurora/ALB, and nothing durable
     lives inside it (Route 53 and ACM are independent of the VPC).
 
-No automatic scheduling (Lambda/EventBridge) — `up`/`down`/`idle`/`resume`
+No automatic scheduling (Lambda/EventBridge) — `up`/`down`
 are always deliberately triggered, never time-based. What changes is *where
 from*: not my laptop except for testing (see Remote execution
 below).
@@ -429,7 +420,7 @@ Task 18.)
 
 - **`fleet-homelab-infra`** (this repo) — Terraform config referencing the
   `fleet-terraform` root module and addons, the
-  `idle`/`resume`/`up`/`down` operational scripts, and the two GitHub
+  `up`/`down` operational scripts, and the two GitHub
   Actions workflows (on-demand apply/destroy, PR plan checks) that drive
   them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own
