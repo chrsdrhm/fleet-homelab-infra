@@ -16,9 +16,14 @@ echo "This destroys the VPC (with the NAT Gateway), Aurora, Redis, the ALB, ECS,
 echo "Web ACL and the migrations runner, after snapshotting Aurora. Kept: Route 53, ACM,"
 echo "the Terraform state, the secrets, the S3 buckets, SES and the budget."
 if [ "${CONFIRM:-}" != "destroy" ]; then
-  read -r -p "Type 'destroy' to confirm: " CONFIRM
+  if [ -t 0 ]; then
+    read -r -p "Type 'destroy' to confirm: " CONFIRM || CONFIRM=""
+  else
+    echo "Not confirmed: set CONFIRM=destroy to run this without a terminal (in CI, the 'confirm' input)." >&2
+    exit 1
+  fi
 fi
-if [ "$CONFIRM" != "destroy" ]; then echo "Aborted."; exit 1; fi
+if [ "$CONFIRM" != "destroy" ]; then echo "Aborted: nothing was changed." >&2; exit 1; fi
 
 if aws rds describe-db-clusters --db-cluster-identifier fleet-homelab >/dev/null 2>&1; then
   SNAPSHOT_ID="fleet-homelab-teardown-$(date -u +%Y%m%d%H%M%S)"
