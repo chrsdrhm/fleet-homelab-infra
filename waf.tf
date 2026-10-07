@@ -21,7 +21,7 @@ resource "aws_wafv2_web_acl" "fleet_homelab" {
   # often outside the US and would be blocked by the rule below. It sends a secret
   # header instead (fleetctl --custom-header); this rule lets only those requests
   # skip the country check. Fleet still requires an API token on every call.
-  # Sampled requests are off so the header value is never stored in WAF samples.
+  # Sampled requests are off, since samples would record the header value.
   rule {
     name     = "allow-ci-header"
     priority = 0

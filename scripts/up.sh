@@ -52,7 +52,7 @@ rm -f "$LOG"
 
 echo "Apply finished. Waiting for the Fleet service to stabilize..."
 aws ecs wait services-stable --cluster fleet-homelab --services fleet
-URL=$(terraform output -raw fleet_url)   # never printed
+URL=$(terraform output -raw fleet_url)
 H=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$URL/healthz")
 ROOT=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$URL/")
 echo "Up. /healthz -> HTTP $H; / -> HTTP $ROOT (200 = data restored; a 307 to /setup means an empty database)."
