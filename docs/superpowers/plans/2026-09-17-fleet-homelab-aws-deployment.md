@@ -1453,6 +1453,14 @@ git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
 
+**Built 2026-10-07; the files in the repo supersede the code blocks below.** Differences from this design:
+- **Repo IDs:** owner and repo IDs come from `terraform.tfvars` locally and from the `github` context in CI; the repo ID changes whenever the repo is recreated, and the apply and plan trust subjects must then be re-applied (`oidc.tf`, locally).
+- **Secrets (8):** `AWS_ROLE_ARN` (the apply role, so the account ID stays masked), `TF_STATE_BUCKET` (written to `backend.hcl` at run time), `FLEET_SUBDOMAIN`, `FLEET_LICENSE_KEY`, `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN`, `BUDGET_ALERT_EMAIL`, `WAF_CI_HEADER_VALUE`; each set by piping from the local `terraform.tfvars`, `backend.hcl` or a Terraform output.
+- **Workflow:** actions pinned to commit SHAs (`checkout` v7.0.1, `configure-aws-credentials` v6.3.0 with `mask-aws-account-id: true`, `setup-terraform` v4.0.1); an extra step masks the account ID for every later step; `TF_CLI_ARGS=-no-color`; `NO_GITOPS=1` because this repo's token cannot start the GitOps repo's workflow; generated `terraform.tfvars` and `backend.hcl` written with `umask 077` and removed at the end.
+- **Scripts:** `tf-apply.sh`'s retry now passes `-input=false`, so a missing value fails instead of waiting on a prompt.
+- **Also added:** `.github/CODEOWNERS`, `.github/dependabot.yml` (weekly: GitHub Actions, and Terraform for `/` and `/okta`), and Dependabot security updates on both repos. Dependabot opened its first PRs straight away.
+- **Verified:** a CI `plan` run (manual, on `main`) assumed the apply role through OIDC and reported no changes; its public log contains no account ID, domain, state bucket, budget email, license key, Cloudflare token, WAF header or Okta org (79 values masked). **Not yet done:** the fork-PR test with a second GitHub account (Step 5), and real `up`/`down` runs from CI.
+
 **Public Actions logs (this repo is public, so its workflow logs are too):** Terraform's plan, apply and destroy output prints resource IDs and ARNs, and ARNs contain the AWS account ID. Mask it at the start of every job before any AWS or Terraform step (`echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"`, a standard workflow command; verify it masks the ID inside longer strings during the first run), keep the Fleet URL and state bucket in secrets (GitHub masks secret values), and scan the first run's log for the ID, the hostname and the bucket name before relying on it. The Task 14 scripts already avoid printing the URL.
 
 **Consequence of the account-ID rule for CI (2026-10-04):** the workflows cannot hard-code the state bucket or the account ID. Pass the bucket at init from a repository secret (for example `terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"`), and take the role ARNs and account from secrets as well; also check the workflow logs for the account ID, since GitHub masks only values it knows are secrets (a secret is masked everywhere it appears, including inside a longer string). The plan and role outputs in Task 15 that say "substituted by hand into the two workflow files, same as the account ID in `backend.tf`" no longer hold: there is no literal account ID in the repo to mirror.
@@ -1475,7 +1483,7 @@ Up to this task, every `terraform apply`/`plan`/`destroy` — including `up.sh`/
 - Consumes: `scripts/up.sh`, `scripts/down.sh` (Task 14) — the workflow calls these directly rather than duplicating their logic, so local and CI runs can never drift apart. Also the repo's numeric GitHub owner/repo IDs (Step 2 — this is why the repo gets pushed to GitHub *first* in this task, before `oidc.tf` is even written).
 - Produces: outputs `github_actions_apply_role_arn` and `github_actions_plan_role_arn` — substituted by hand into the two workflow files, same as the account ID in `backend.tf`.
 
-- [ ] **Step 1: Authenticate `gh`, pass the public-readiness gate, then push this repo to GitHub as a PUBLIC repo.** (If the repo was already published earlier in the project, skip to Step 2.) `gh` needs `gh auth login` (HTTPS + browser). The push has to happen before `oidc.tf` is written (see Step 2). **Creating a public repo is an outward-facing, effectively irreversible publish — confirm immediately before running the `gh repo create`.**
+- [x] **Step 1: Authenticate `gh`, pass the public-readiness gate, then push this repo to GitHub as a PUBLIC repo.** (If the repo was already published earlier in the project, skip to Step 2.) `gh` needs `gh auth login` (HTTPS + browser). The push has to happen before `oidc.tf` is written (see Step 2). **Creating a public repo is an outward-facing, effectively irreversible publish — confirm immediately before running the `gh repo create`.**
 
 **Public-readiness gate — every item must pass before the first push** (history can't be cleanly un-published afterwards):
 1. **Author email.** `git log --format='%ae %ce' | sort -u` must show only the GitHub noreply address (`<id>+<login>@users.noreply.github.com`; the numeric ID comes from `gh api user --jq .id`). If not, back up (`git bundle create ~/fleet-homelab-infra.bundle --all`), rewrite the history (no remote exists yet, so this is safe), and set `git config user.email` to the noreply address.
@@ -1488,7 +1496,7 @@ gh auth status || gh auth login
 gh repo create fleet-homelab-infra --public --source=. --push
 ```
 
-- [ ] **Step 2: Get this repo's immutable numeric owner/repo IDs, and add them as Terraform variables.** Checked during execution, not something the original draft accounted for: **GitHub Actions OIDC tokens for any repository created after July 15, 2026 use an immutable subject-claim format by default** — `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` instead of `repo:OWNER/REPO:...` — verified against GitHub's own changelog. This repo is created today, so it gets the new format with no opt-in. The old `repo:<owner>/fleet-homelab-infra:*` pattern would never match a real token.
+- [x] **Step 2: Get this repo's immutable numeric owner/repo IDs, and add them as Terraform variables.** Checked during execution, not something the original draft accounted for: **GitHub Actions OIDC tokens for any repository created after July 15, 2026 use an immutable subject-claim format by default** — `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` instead of `repo:OWNER/REPO:...` — verified against GitHub's own changelog. This repo is created today, so it gets the new format with no opt-in. The old `repo:<owner>/fleet-homelab-infra:*` pattern would never match a real token.
 
 ```bash
 gh api repos/<owner>/fleet-homelab-infra --jq '{owner_id: .owner.id, repo_id: .id}'
@@ -1515,7 +1523,7 @@ variable "github_repo_id" {
 
 And the three values to `terraform.tfvars` (gitignored). CI doesn't need them stored anywhere: the workflows read them from the `github` context (`github.repository_owner`, `github.repository_owner_id`, `github.repository_id` — all three verified in GitHub's contexts reference).
 
-- [ ] **Step 3: Write `oidc.tf`.** The standard recipe for federating GitHub Actions to AWS without static keys: a `tls_certificate` data source reads GitHub's OIDC thumbprint (thumbprint validation is still part of the provider resource in 2025–26). The apply role trusts exactly one `sub` (`workflow_dispatch` run on `main` — a dispatch from any other branch carries a different `sub` and is refused); the plan role trusts exactly the `pull_request` `sub`. Both `sub` formats follow GitHub's statement that the branch/PR context "still appears after the repository segment" of the new format; the `pull_request` form is inferred from that sentence and the legacy `repo:ORG/REPO:pull_request` shape, not seen in a real token — see the check in Step 9.
+- [x] **Step 3: Write `oidc.tf`.** The standard recipe for federating GitHub Actions to AWS without static keys: a `tls_certificate` data source reads GitHub's OIDC thumbprint (thumbprint validation is still part of the provider resource in 2025–26). The apply role trusts exactly one `sub` (`workflow_dispatch` run on `main` — a dispatch from any other branch carries a different `sub` and is refused); the plan role trusts exactly the `pull_request` `sub`. Both `sub` formats follow GitHub's statement that the branch/PR context "still appears after the repository segment" of the new format; the `pull_request` form is inferred from that sentence and the legacy `repo:ORG/REPO:pull_request` shape, not seen in a real token — see the check in Step 9.
 
 ```hcl
 data "tls_certificate" "github_actions" {
@@ -1845,7 +1853,7 @@ output "github_actions_plan_role_arn" {
 
 **What this is**: *scoped*, not formally least-privilege. Verified against IAM semantics: an earlier single-role draft (`iam:CreatePolicyVersion`/`PutRolePolicy`/`UpdateAssumeRolePolicy` on `*`, only `AttachRolePolicy` denied) let a compromised token rewrite its own policy — or any role's trust policy, including your SSO admin role — and become admin. What now closes that: IAM write limited to `fleet*`/`terraform-*` names, an explicit deny on changing either CI role or policy, no `sts:AssumeRole`, no IAM-user or OIDC-provider writes, `PassRole` limited to three consuming services, Secrets Manager and S3 scoped by name. **What remains, and can't be closed cheaply**: a compromised apply token can still create a new `fleet*`/`terraform-*` role with any policy and run code as it in an ECS task it also defines — closing that needs a permissions-boundary condition on every role it creates, and Fleet's modules expose no `permissions_boundary` input (grep of the whole repo finds none). It can also read the `fleet*` secrets and the state. The mitigation that fits is the trust policy: only a `workflow_dispatch` on `main` in your own private repo can assume it, and on a free GitHub plan private-repo branch protection isn't available, so anyone who can push to `main` (you) can change what it runs. An optional stronger gate, not built here: a GitHub Environment with a required reviewer, trusting `…:environment:<name>` instead of the `ref:refs/heads/main` subject, costs one approval click per run. Managed-policy size limit is 6,144 non-whitespace characters — this document is well under it, but check if you add to it.
 
-- [ ] **Step 4: Init, plan, and apply locally (as your admin SSO user), then record the ARNs.** This step adds the `tls` provider, so `terraform init` must run again before `validate` (a bare `validate` would fail with "provider not installed"). Regenerate the lock file for the platforms that will use it — you're on macOS, the runner is Linux, and a lock file with only macOS hashes can fail `terraform init` on the runner.
+- [x] **Step 4: Init, plan, and apply locally (as your admin SSO user), then record the ARNs.** This step adds the `tls` provider, so `terraform init` must run again before `validate` (a bare `validate` would fail with "provider not installed"). Regenerate the lock file for the platforms that will use it — you're on macOS, the runner is Linux, and a lock file with only macOS hashes can fail `terraform init` on the runner.
 
 ```bash
 terraform init -upgrade=false
@@ -1857,7 +1865,7 @@ terraform output github_actions_plan_role_arn
 
 Expected: two ARNs like `arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-actions` and `…-actions-plan` — save both for Step 7 and Task 16.
 
-- [ ] **Step 5: Lock down the public repo.** (Replaces the earlier Proxmox-runner provisioning: with a public repo, the risk to manage is fork PRs and Actions permissions, not a self-hosted machine.) In the repo's Settings — GitHub moves these labels around, so verify each at execution:
+- [x] **Step 5: Lock down the public repo.** (Replaces the earlier Proxmox-runner provisioning: with a public repo, the risk to manage is fork PRs and Actions permissions, not a self-hosted machine.) In the repo's Settings — GitHub moves these labels around, so verify each at execution:
   1. **Actions → General → Fork pull request workflows:** "Require approval for all outside collaborators". Leave "send write tokens" and "send secrets" to fork-PR workflows **off**.
   2. **Actions → General → Workflow permissions:** "Read repository contents" only, and untick "Allow GitHub Actions to create and approve pull requests". API equivalent (verify the endpoint at execution): `gh api -X PUT repos/<owner>/fleet-homelab-infra/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false`.
   3. **Actions → General → Actions permissions:** allow GitHub-owned actions plus only the `aws-actions/*` and `hashicorp/*` ones the workflows use; pin those third-party actions to full commit SHAs in the workflow files (Step 7), and add a Dependabot `github-actions` update config so the pins get refreshed.
@@ -1898,7 +1906,7 @@ gh api -X PATCH $R -F has_wiki=false -F has_projects=false
 
 Verify: `gh api repos/<owner>/fleet-homelab-infra --jq '{visibility, has_issues}'` shows `public`; the settings above read back correctly in the UI. The real proof of the fork-PR controls is a manual test with a second GitHub account (or a throwaway one): fork the repo, open a PR that edits `.github/workflows/`, and confirm the run sits waiting for your approval and that no secrets or AWS role are available to it. Do this once after Step 9.
 
-- [ ] **Step 6: Add `CODEOWNERS` and commit**
+- [x] **Step 6: Add `CODEOWNERS` and commit**
 
 ```bash
 mkdir -p .github && printf '* @<owner>\n' > .github/CODEOWNERS
@@ -1906,7 +1914,7 @@ git add .github/CODEOWNERS
 git commit -m "Add CODEOWNERS"
 ```
 
-- [ ] **Step 7: Write `.github/workflows/terraform.yml`** — `runs-on: ubuntu-latest` (GitHub-hosted). Action majors verified current at execution (`checkout` v7, `configure-aws-credentials` v6, `setup-terraform` v4) and, per Step 5, pinned to full commit SHAs (keep the tag as a trailing comment). `terraform_version` pinned to the 1.14.8 you run locally. Inputs reach the shell only through `env:`, never spliced into script text. The `terraform.tfvars` step builds the file from repo secrets plus the three GitHub IDs, all read from the `github` context (verified); `printf` writes it with no leading whitespace (an earlier heredoc version indented every line). The hosted VM is discarded after the run, but the file holding the license key is still deleted at the end whether the run succeeded or not (belt and braces).
+- [x] **Step 7: Write `.github/workflows/terraform.yml`** — `runs-on: ubuntu-latest` (GitHub-hosted). Action majors verified current at execution (`checkout` v7, `configure-aws-credentials` v6, `setup-terraform` v4) and, per Step 5, pinned to full commit SHAs (keep the tag as a trailing comment). `terraform_version` pinned to the 1.14.8 you run locally. Inputs reach the shell only through `env:`, never spliced into script text. The `terraform.tfvars` step builds the file from repo secrets plus the three GitHub IDs, all read from the `github` context (verified); `printf` writes it with no leading whitespace (an earlier heredoc version indented every line). The hosted VM is discarded after the run, but the file holding the license key is still deleted at the end whether the run succeeded or not (belt and braces).
 
 ```yaml
 name: Terraform
@@ -1997,7 +2005,7 @@ jobs:
 
 Substitute the real apply-role ARN from Step 4 in place of `<ACCOUNT_ID>` (your account is where `backend.tf` already points). `scripts/up.sh` and `scripts/down.sh` also need `-input=false` on their `terraform` calls so a missing variable fails fast instead of hanging on a prompt in CI.
 
-- [ ] **Step 8: Add the five GitHub Actions repo secrets this workflow needs**
+- [x] **Step 8: Add the five GitHub Actions repo secrets this workflow needs**
 
 ```bash
 gh secret set FLEET_SUBDOMAIN --body "<fleet_subdomain>"
@@ -2007,7 +2015,7 @@ gh secret set CLOUDFLARE_API_TOKEN   # prompts for the value so it never lands i
 gh secret set BUDGET_ALERT_EMAIL     # prompts; this repo is public, so the address must never be committed
 ```
 
-- [ ] **Step 9: Verify with a `plan` run**
+- [x] **Step 9: Verify with a `plan` run**
 
 Run: `gh workflow run Terraform -f action=plan && gh run watch`
 Expected: the run executes on a GitHub-hosted runner and its log shows a `terraform plan` with no unexpected changes (the stack already matches what Tasks 3-14 applied locally).
@@ -2020,7 +2028,7 @@ curl -sH "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TO
   | jq -r .value | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .sub
 ```
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add oidc.tf variables.tf .terraform.lock.hcl .github/workflows/terraform.yml
@@ -2030,6 +2038,8 @@ git commit -m "Add GitHub Actions OIDC roles (apply + read-only plan) and workfl
 ---
 
 ### Task 16: PR-triggered `terraform plan` checks — closing the GitOps loop for infra
+
+**Before building: do not post the raw plan as a PR comment.** GitHub masks secret values only in Actions logs; a comment created through the API is posted as written, and the plan text contains ARNs with the account ID, the hostname and domain, bucket names and the budget email. On this public repo that would publish them. Post a summary instead (the `Plan: X to add, Y to change, Z to destroy` line and the list of changing resource addresses, which are names from the code, not values) and leave the full plan in the masked run log. Pull requests from forks and from Dependabot run without secrets or an OIDC token, so the check must skip them cleanly (as the GitOps repo's check does) rather than fail, or Dependabot PRs could never pass a required check.
 
 The last piece: infra changes should go through a reviewed pull request that shows what would change, the same way the GitOps repo's PRs get a dry-run. This task adds that check without adding auto-apply-on-merge — see Task 15's opening note for why the latter is a bad fit here. The result: propose a `.tf` change → open a PR → CI shows the plan → merge → next time you run `up` (Task 15, on-demand), it deploys exactly what's on `main`. Git is the source of truth throughout; nothing ever applies from an uncommitted local change once this is in place.
 
