@@ -30,3 +30,14 @@ variable "budget_alert_email" {
   description = "Address that receives AWS Budget alerts. Kept out of Git (this repo is public); set in terraform.tfvars."
   type        = string
 }
+
+variable "waf_ci_header_value" {
+  description = "Secret value of the x-fleet-ci request header. The WAF allows requests carrying it regardless of country, so the GitOps workflow works from GitHub runners outside the US. Held in the gitignored terraform.tfvars and as a GitHub Actions secret; never committed."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.waf_ci_header_value) >= 32
+    error_message = "Use a long random value, for example: openssl rand -hex 32."
+  }
+}

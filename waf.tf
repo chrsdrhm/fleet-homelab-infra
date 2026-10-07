@@ -10,11 +10,49 @@
 # a default block is simpler, fits in one country code, and needs no upkeep.
 resource "aws_wafv2_web_acl" "fleet_homelab" {
   name        = "fleet-homelab"
-  description = "Allow US traffic only, block everything else by default"
+  description = "Allow US traffic and the CI header, block everything else by default"
   scope       = "REGIONAL"
 
   default_action {
     block {}
+  }
+
+  # GitHub-hosted runners run in Azure regions worldwide, so the GitOps workflow is
+  # often outside the US and would be blocked by the rule below. It sends a secret
+  # header instead (fleetctl --custom-header); this rule lets only those requests
+  # skip the country check. Fleet still requires an API token on every call.
+  # Sampled requests are off so the header value is never stored in WAF samples.
+  rule {
+    name     = "allow-ci-header"
+    priority = 0
+
+    action {
+      allow {}
+    }
+
+    statement {
+      byte_match_statement {
+        search_string         = var.waf_ci_header_value
+        positional_constraint = "EXACTLY"
+
+        field_to_match {
+          single_header {
+            name = "x-fleet-ci"
+          }
+        }
+
+        text_transformation {
+          priority = 0
+          type     = "NONE"
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "fleet-homelab-allow-ci-header"
+      sampled_requests_enabled   = false
+    }
   }
 
   rule {

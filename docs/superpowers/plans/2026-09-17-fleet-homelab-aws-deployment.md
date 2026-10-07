@@ -641,6 +641,8 @@ git commit -m "Deploy Fleet (VPC + Aurora + Redis + ALB + Fargate) via the root 
 
 ### Task 4: WAF on the ALB
 
+**Second rule, for CI (2026-10-06): `allow-ci-header` at priority 0, ahead of `allow-us`.** GitHub-hosted runners run in Azure regions worldwide, so the GitOps workflow was blocked whenever its runner was outside the US (seen: HTTP 403, WAF sample country MX). Requests whose `x-fleet-ci` header exactly matches `var.waf_ci_header_value` (sensitive, at least 32 characters, in the gitignored `terraform.tfvars`; also the GitOps repo secret `FLEET_CI_HEADER`) are allowed regardless of country; everything else still needs a US source, and Fleet still requires an API token. Sampled requests are off for that rule so the header value is never stored in WAF samples. Allow-listing GitHub's published runner ranges (about 7,000 CIDRs) was rejected: it would admit anyone using GitHub Actions and changes constantly. Verified: after the change a run succeeded and the rule's `AllowedRequests` metric counted its requests. **Rotate:** new value in `terraform.tfvars`, apply, then update the GitHub secret.
+
 **Files:**
 - Create: `waf.tf`
 
@@ -1033,6 +1035,8 @@ Everything Entra-side was destroyed on 2026-10-03 (all nine Terraform resources,
 
 ### Task 11: Fleet GitOps repository
 
+**Workflow additions (2026-10-06):** (1) a first step checks Fleet's `/healthz` (URL never printed): a **scheduled** run skips cleanly with a notice when the stack is torn down, while a push, pull request or manual run fails with "bring the stack up" (tested locally in all four cases, then live); (2) the health check, the action's version lookup and every `fleetctl` request send the `x-fleet-ci` header from the `FLEET_CI_HEADER` secret (`fleetctl config set --custom-header`), so runners outside the US get past the WAF (Task 4); (3) the action's `fleetctl config set` now reads the URL and token from the environment instead of interpolating them into the script. The infra repo's `up.sh` starts a run after each rebuild (Task 14).
+
 Requires the break-glass admin from Task 3 Step 8 (used below to create the API-only user). Layout verified against the templates `fleetctl new` ships in Fleet v4.92.0 (an earlier draft used the pre-4.7x `teams/` directory and a single top-level `default.yml` with `policies:`/`queries:` keys — neither matches the current scaffold).
 
 **This second repo is public too** (same portfolio reasoning as the infra repo), and it is locked down the same way (Task 15 Step 5). It is the higher-stakes of the two: its CI holds a Fleet API token with the `gitops` role, which can change Fleet's configuration — including scripts and software that run on every enrolled device. So the model is: **no secret value is ever written into a file** (every secret is a `$VARIABLE` that the workflow fills in from GitHub Actions secrets); only you can push or merge; fork PRs get no secrets and their workflows wait for your approval; and the apply job runs only on `main`. Step 5 has a pre-publish review before the first push, because history can't be un-published.
@@ -1320,6 +1324,7 @@ git commit -m "Add AWS Budget: alert every \$10 of actual spend up to \$100/mo"
 - **Both:** `AWS_REGION` defaults to `us-east-1` and the pager is off. The Fleet URL is read from `terraform output` and never printed (only HTTP status codes are), so the scripts are safe to run where logs are public.
 - **`up.sh` / `down.sh`:** stop with a clear message if Terraform is not initialized (`terraform init -backend-config=backend.hcl`; the backend is a partial configuration, see Task 1).
 - **`up.sh`:** after the apply it waits for the service to stabilize and reports `/healthz` and `/` status codes (200 on `/` means the data was restored; a 307 to `/setup` means an empty database). If the apply fails with `InsufficientDBInstanceCapacity`, it explains the options (retry later, `down.sh`, or another instance class of the same size) and warns not to change `azs` on a live or partial stack.
+- **`up.sh` starts a GitOps run** after a healthy rebuild (`gh workflow run` in the GitOps repo), so a change pushed while the stack was down is applied straight away. Best effort: it needs the GitHub CLI logged in locally (a CI token for this repo cannot dispatch another repo's workflow); `NO_GITOPS=1` skips it. Tested: it dispatched a run that succeeded.
 - **`down.sh`:** skips the snapshot if no Aurora cluster exists; tags the snapshot `ManagedBy=script`; deletes the Container Insights log group twice, 20 seconds apart (AWS re-creates it after Terraform deletes it); **prunes teardown snapshots automatically, keeping the newest `KEEP_SNAPSHOTS` (default 2)**, and only in a run that took a fresh snapshot; then **verifies** that no ECS cluster, Aurora, Redis, load balancer, NAT gateway, tagged VPC or WAF web ACL remains, exiting 2 if something does.
 
 The usage pattern is intermittent (evenings and weekends), so the scripts are `up.sh` and `down.sh`. There is deliberately no idle/resume pair: it would pause only Fargate and Aurora compute while Redis, the ALB, WAF and the NAT Gateway keep billing.
