@@ -320,7 +320,7 @@ only trusts `workflow_dispatch` on `main` in this repo's immutable ID.
 
 **The trust policy uses GitHub's newer immutable subject-claim format**
 (`repo:OWNER@OWNER-ID/REPO@REPO-ID:...`), not the older name-based one —
-checked during execution, not assumed: any repository created after
+checked during execution: any repository created after
 July 15, 2026 gets this format automatically (verified against GitHub's
 own changelog), and this repo is created fresh. The numeric owner/repo IDs
 don't exist until the repo is actually pushed to GitHub, which is why the

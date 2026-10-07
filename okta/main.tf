@@ -1,5 +1,5 @@
 # Who may sign in to Fleet, and with which role, is decided by membership of these two
-# groups. Membership is deliberately NOT managed by Terraform: it is set by hand in the
+# groups. Membership is not managed by Terraform: it is set by hand in the
 # Okta console and never read or written here. Do not add okta_group_memberships.
 resource "okta_group" "fleet_admins" {
   name        = "Fleet Admins"
