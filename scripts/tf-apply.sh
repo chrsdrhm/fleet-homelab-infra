@@ -39,7 +39,7 @@ if grep -qE "NoSuchEntity: The role with name .* cannot be found" "$OUT"; then
   echo "== IAM role-propagation race detected (role not yet visible to AttachRolePolicy). =="
   echo "== Waiting 20s, then re-planning and applying the remainder. =="
   sleep 20
-  exec terraform apply -auto-approve "${RETRY_ARGS[@]}"
+  exec terraform apply -input=false -auto-approve "${RETRY_ARGS[@]}"
 fi
 
 echo "Apply failed for a reason other than the known IAM race; not retrying." >&2

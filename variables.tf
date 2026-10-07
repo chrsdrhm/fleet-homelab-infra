@@ -41,3 +41,18 @@ variable "waf_ci_header_value" {
     error_message = "Use a long random value, for example: openssl rand -hex 32."
   }
 }
+
+variable "github_owner" {
+  description = "GitHub user or organization that owns this repo."
+  type        = string
+}
+
+variable "github_owner_id" {
+  description = "Numeric GitHub owner ID, part of the immutable OIDC subject format."
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID, part of the immutable OIDC subject format. Changes if the repo is ever recreated."
+  type        = string
+}
