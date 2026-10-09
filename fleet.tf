@@ -111,7 +111,7 @@ module "fleet" {
 # covers Fleet image bumps and the first boot after a snapshot restore.
 # Copied from upstream example/main.tf (tf-mod-addon-migrations-v2.3.0).
 module "migrations" {
-  source                   = "github.com/fleetdm/fleet-terraform/addons/migrations?depth=1&ref=tf-mod-addon-migrations-v2.3.0"
+  source                   = "github.com/fleetdm/fleet-terraform//addons/migrations?depth=1&ref=tf-mod-addon-migrations-v2.3.0"
   ecs_cluster              = module.fleet.byo-vpc.byo-db.byo-ecs.service.cluster
   task_definition          = module.fleet.byo-vpc.byo-db.byo-ecs.task_definition.family
   task_definition_revision = module.fleet.byo-vpc.byo-db.byo-ecs.task_definition.revision
