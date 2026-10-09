@@ -2040,6 +2040,14 @@ git commit -m "Add GitHub Actions OIDC roles (apply + read-only plan) and workfl
 
 ### Task 16: PR-triggered `terraform plan` checks — closing the GitOps loop for infra
 
+**Built 2026-10-09; the files in the repo supersede the code blocks below.** `.github/workflows/terraform-plan.yml` and `.github/scripts/plan_summary.py`:
+- **Runs on every pull request** (no path filter), because it is a required check on `main` and a required check that never runs blocks the merge.
+- **Read-only:** the plan role (`AWS_PLAN_ROLE_ARN` secret), `-lock=false`, `-detailed-exitcode`; the account ID is masked as in Task 15.
+- **The PR comment is a redacted summary, never the raw plan** (comments are not masked): the plan line and a table of changing resource addresses. Quoted `for_each` keys are replaced with `…` (they can contain the hostname: 15 such keys in a full rebuild plan), every secret value is masked, and the script refuses to post if any 12-digit number remains (an account ID nobody passed in). A failed plan is reported without its error text. One comment per PR, updated in place (`gh pr comment --edit-last --create-if-none`), so no extra action is needed.
+- **Forks** have no secrets, so the check skips with a notice. **Dependabot** PRs see only Dependabot secrets, so the eight plan inputs are also stored there (`gh secret set --app dependabot`); GitHub's docs confirm Dependabot runs honour the workflow's `permissions:` key but do not say whether that includes `id-token: write`, so the first Dependabot PR after this is the real test.
+- **Plan role fix:** the first run failed on `budgets:ListTagsForResource` (the refresh lists the budget's tags); added to the plan role and applied locally.
+- **Verified on its own PR (#3):** the plan role was assumed through OIDC with the `pull_request` subject, the plan matched the local one, the comment was updated in place on the second run, and both the public comment and the run log contained none of the sensitive values and no 12-digit numbers.
+
 **Before building: do not post the raw plan as a PR comment.** GitHub masks secret values only in Actions logs; a comment created through the API is posted as written, and the plan text contains ARNs with the account ID, the hostname and domain, bucket names and the budget email. On this public repo that would publish them. Post a summary instead (the `Plan: X to add, Y to change, Z to destroy` line and the list of changing resource addresses, which are names from the code, not values) and leave the full plan in the masked run log. Pull requests from forks and from Dependabot run without secrets or an OIDC token, so the check must skip them cleanly (as the GitOps repo's check does) rather than fail, or Dependabot PRs could never pass a required check.
 
 The last piece: infra changes should go through a reviewed pull request that shows what would change, the same way the GitOps repo's PRs get a dry-run. This task adds that check without adding auto-apply-on-merge — see Task 15's opening note for why the latter is a bad fit here. The result: propose a `.tf` change → open a PR → CI shows the plan → merge → next time you run `up` (Task 15, on-demand), it deploys exactly what's on `main`. Git is the source of truth throughout; nothing ever applies from an uncommitted local change once this is in place.
@@ -2052,7 +2060,7 @@ This workflow assumes the **read-only plan role** from Task 15, not the apply ro
 **Interfaces:**
 - Consumes: `github_actions_plan_role_arn` (Task 15). Runs on GitHub-hosted runners like the apply workflow.
 
-- [ ] **Step 1: Write `.github/workflows/terraform-plan.yml`.** Fixes from an independent review: the plan text used to be interpolated straight into the JavaScript source (`${{ steps.plan.outputs.stdout }}` inside a template literal), so a plan containing a backtick or `${` could inject code — it now travels through an environment variable and is read at runtime as data. `terraform_wrapper: false` means no dependency on a system `node` (the wrapper is what would have exposed `steps.<id>.outputs.stdout`), so output is captured to a file instead. `-lock=false` keeps the read-only role from needing any S3 write access (the lock file is a write) and stops a PR plan from blocking a running `up`; the tradeoff is a plan can occasionally read mid-apply state, which is harmless for a preview.
+- [x] **Step 1: Write `.github/workflows/terraform-plan.yml`.** Fixes from an independent review: the plan text used to be interpolated straight into the JavaScript source (`${{ steps.plan.outputs.stdout }}` inside a template literal), so a plan containing a backtick or `${` could inject code — it now travels through an environment variable and is read at runtime as data. `terraform_wrapper: false` means no dependency on a system `node` (the wrapper is what would have exposed `steps.<id>.outputs.stdout`), so output is captured to a file instead. `-lock=false` keeps the read-only role from needing any S3 write access (the lock file is a write) and stops a PR plan from blocking a running `up`; the tradeoff is a plan can occasionally read mid-apply state, which is harmless for a preview.
 
 ```yaml
 name: Terraform Plan
@@ -2147,7 +2155,7 @@ jobs:
 
 Substitute the real plan-role ARN from Task 15 Step 4 for `<ACCOUNT_ID>`. The 65000-character slice guards GitHub's comment size limit; `github-script@v9` is ESM-only, so the script above deliberately uses no `require()` — only the injected `github`/`context` objects and `process.env`.
 
-- [ ] **Step 2: Verify with a real PR**
+- [x] **Step 2: Verify with a real PR**
 
 ```bash
 git checkout -b test-plan-check

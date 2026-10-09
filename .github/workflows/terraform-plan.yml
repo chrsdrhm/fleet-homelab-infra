@@ -1,4 +1,4 @@
-# Runs a read-only terraform plan on every pull request that touches Terraform, and
+# Runs a read-only terraform plan on every pull request, and
 # keeps one comment on the PR with a REDACTED summary: the plan line and the list of
 # changing resource addresses. The full plan stays in this run's log, where GitHub
 # masks secret values; a PR comment is not masked, so the raw plan is never posted.
@@ -7,12 +7,10 @@
 # Dependabot secrets, so the same values are stored there too.
 name: Terraform Plan
 
+# Runs on every pull request (no path filter): it is a required check on main, and a
+# required check that never runs leaves a pull request waiting forever.
 on:
   pull_request:
-    paths:
-      - "**.tf"
-      - ".terraform.lock.hcl"
-      - ".github/workflows/terraform-plan.yml"
 
 permissions:
   id-token: write
