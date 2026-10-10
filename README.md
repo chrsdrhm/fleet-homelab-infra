@@ -28,7 +28,7 @@ Left running, the stack would cost about **$7 a day, or about $200 a month** (ro
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
-That works because what has to survive a teardown is kept outside it: the database (through the snapshot, including Apple MDM's push certificate and keys, which Fleet stores there), the Fleet server key that encrypts data in that database, the Windows MDM certificate (kept in Secrets Manager), the software-installers bucket, DNS and the TLS certificate, and the email sending identity.
+The teardown only removes the parts that cost money to run; everything that holds state stays. The database is snapshotted before it's deleted and restored on the way back up, and Apple MDM's push certificate and keys are stored in it. The Fleet server key that encrypts it, the Windows MDM certificate (in Secrets Manager), the software-installers bucket, DNS, the TLS certificate and the email sending identity are never torn down.
 
 ## Sized for a homelab
 
@@ -39,10 +39,6 @@ Fleet's Terraform module is used as published (pinned to a release tag), with sm
 Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, and the role attribute) is Terraform in [`okta/`](okta/), applied from my terminal with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
 
 **Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. I use Okta because it makes the lab more like a real deployment, where people sign in through the company's identity provider and get their Fleet role from it. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (its README says how). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
-
-## Status
-
-Built task by task from a written plan; [`docs/plans/`](docs/plans/) tracks each task and what was verified.
 
 ## Repo layout
 
