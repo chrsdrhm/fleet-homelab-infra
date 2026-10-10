@@ -2848,7 +2848,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - **Load balancer:** about 1,800 requests, no target 5xx; 6 load-balancer 5xx in a single minute during the first rebuild attempt, when the ALB was up and the task was not.
 - **Aurora:** CPU averaged 13% (maximum 57%); memory minimum about 1.2 GB; at most 18 connections. The CPU credit balance touched 0 right after instance creation (restore and migrations) and then climbed past 100, with no surplus credits charged.
 - **Fargate:** CPU averaged 3% (spiked to 100% at boot); memory maximum 41%. **Redis:** no evictions, negligible CPU.
-- **WAF:** about 4,000 allowed and about 31,500 blocked over 3 days (the US-only rule blocks foreign scanners). **SES:** 6 sends in 24 hours, no bounces or complaints, status healthy (sandbox). **Certificate:** issued, renews automatically, expires April 2027. **DNS:** delegation and the alias record resolve. **Budget:** about $6.70 spent against a $100 limit, forecast about $14. **GitHub:** the latest gitops run succeeded and there are no Dependabot or secret-scanning alerts.
+- **WAF:** about 4,000 allowed and about 31,500 blocked over 3 days (the US-only rule blocks foreign scanners). **SES:** 6 sends in 24 hours, no bounces or complaints, status healthy (sandbox). **Certificate:** issued, renews automatically, expires April 2027. **DNS:** delegation and the alias record resolve. **Budget:** well under the limit. **GitHub:** the latest gitops run succeeded and there are no Dependabot or secret-scanning alerts.
 
 **Possible follow-ups, not built:** keep Fleet's app logs beyond teardown (a subscription to S3, or a named log group kept outside the teardown), alarms on the error rate, and a scheduled version of this scan.
 
