@@ -55,11 +55,9 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 
 ## Security notes
 
-- No secrets are committed. Real values live in gitignored files or GitHub secrets; Terraform state is in a private, versioned S3 bucket.
-- CI reaches AWS with short-lived OIDC credentials, with no long-lived AWS keys in GitHub. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role.
-- `main` accepts changes only through pull requests whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public.
-- Pull requests from forks get no secrets, workflow runs from outside contributors need my approval, actions are pinned to commit SHAs, and Dependabot keeps them and the providers current.
-- Secret scanning with push protection, and private vulnerability reporting: if you spot something that looks like a security problem, please use this repo's **Security** tab to report it privately instead of opening a public issue.
+- **No AWS keys in GitHub.** CI reaches AWS through OIDC. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role.
+- **No shortcuts to `main`.** Every change goes through a pull request whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public.
+- **Found a problem?** Please report it privately through this repo's **Security** tab instead of opening a public issue.
 
 ## Built with AI assistance
 
