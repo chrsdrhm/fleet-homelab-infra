@@ -1,7 +1,10 @@
 # Terraform for this stack, in three jobs:
-#  - lint:  on every pull request, no secrets or AWS: fmt, validate (both roots), shellcheck.
+#  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
+#           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
 #  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
 #           summary and the full plan, masked (comments are public and NOT masked by GitHub).
+#           A plan that destroys or replaces a resource holding data fails the check unless
+#           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
 #  - apply: started by hand (never on push): up or down with the apply role.
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
 # main, so a pull request cannot get it even by editing this file. Values that identify
@@ -12,6 +15,8 @@ run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0
 
 on:
   pull_request:
+    # labeled/unlabeled: re-check when the `allow-destroy` label is added or removed.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       action:
@@ -54,6 +59,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the private-values check diffs against the base branch
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -61,19 +67,38 @@ jobs:
           terraform_version: "1.14.8"
           terraform_wrapper: false
 
-      - name: terraform fmt
-        run: terraform fmt -check -recursive -diff
+      # Everything else lives in checks/ (see checks/README.md): the same script runs
+      # locally. Without checks/, the fallback below still runs fmt and validate.
+      - name: Install check tools
+        if: hashFiles('checks/install-tools.sh') != ''
+        run: checks/install-tools.sh
 
-      - name: terraform validate (both roots)
+      - name: Run checks
+        if: hashFiles('checks/run.sh') != ''
+        env:
+          PRIVATE_HASHES: ${{ secrets.PRIVATE_HASHES }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          export FLEET_HOMELAB_PRIVATE_HASHES="$RUNNER_TEMP/private-hashes"
+          printf '%s\n' "$PRIVATE_HASHES" > "$FLEET_HOMELAB_PRIVATE_HASHES"
+          if [ -z "$PRIVATE_HASHES" ]; then
+            echo "::notice title=Patterns only::No PRIVATE_HASHES secret here (for example, a fork), so the private-values check uses its patterns only."
+          fi
+          checks/run.sh
+
+      - name: terraform fmt and validate (without checks/)
+        if: hashFiles('checks/run.sh') == ''
+        run: |
+          terraform fmt -check -recursive -diff
           for dir in . okta; do
-            echo "== $dir"
             terraform -chdir="$dir" init -input=false -backend=false > /dev/null
             terraform -chdir="$dir" validate
           done
-
-      - name: shellcheck
-        run: shellcheck scripts/*.sh
 
   plan:
     name: terraform-plan
@@ -132,11 +157,21 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set +e
-          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars > plan.txt 2>&1
+          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars -out=tfplan > plan.txt 2>&1
           code=$?
           set -e
           cat plan.txt
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+          # Data-loss guard (checks/data-loss-guard.sh, if present): resources this plan
+          # would destroy or replace that hold data or identity.
+          : > data-loss.txt
+          if [ "$code" = "2" ] && [ -x checks/data-loss-guard.sh ]; then
+            checks/data-loss-guard.sh tfplan > data-loss.txt
+          fi
+          if [ -s data-loss.txt ]; then
+            echo "::warning title=Data at risk::this plan destroys or replaces $(wc -l < data-loss.txt | tr -d ' ') resource(s) that hold data; see the PR comment."
+          fi
 
       # The comment is public and GitHub does NOT mask it, so every secret value and the
       # account ID are replaced first (the same masking the run log gets). The summary
@@ -174,6 +209,8 @@ jobs:
             summary="**The plan failed.** The error is in the full output below."
           else
             headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || echo "No plan line found.")
+            # The backticks in the sed replacements are Markdown code spans, not shell.
+            # shellcheck disable=SC2016
             rows=$(grep -E '^[[:space:]]*# .* (will be created|will be updated in-place|will be destroyed|must be replaced|will be replaced|will be read during apply)$' plan.txt \
               | sed -E 's/^[[:space:]]*# //; s/\["[^"]*"\]/["…"]/g' \
               | sed -E 's/^(.*) will be created$/| create | `\1` |/; s/^(.*) will be updated in-place$/| update | `\1` |/; s/^(.*) will be destroyed$/| destroy | `\1` |/; s/^(.*) (must|will) be replaced$/| replace | `\1` |/; s/^(.*) will be read during apply$/| read | `\1` |/' \
@@ -187,7 +224,14 @@ jobs:
             exit 1
           fi
 
-          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary"
+          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'
+          if [ -s data-loss.txt ]; then
+            caution=$'> [!CAUTION]\n> **This plan destroys or replaces resources that hold data:**\n'
+            while IFS= read -r line; do caution+=$'> - `'"$line"$'`\n'; done < data-loss.txt
+            caution+=$'>\n> The check fails unless this pull request has the `allow-destroy` label.\n\n'
+            head+=$(mask "$caution")$'\n\n'
+          fi
+          head+="$summary"
           foot=$'\n\n_The full log is in the [workflow job]('"$job_url"$')._\n'
           # Only the plan itself: drop the refresh and read progress lines (they stay in the
           # job log), keeping drift notes, the plan, warnings and errors.
@@ -227,9 +271,22 @@ jobs:
           echo "::error title=Plan failed::terraform plan returned an error; see the 'terraform plan' step log."
           exit 1
 
+      - name: Fail if the plan destroys data without allow-destroy
+        if: steps.gate.outputs.run == 'true'
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          [ -s data-loss.txt ] || exit 0
+          if [[ ",$LABELS," == *",allow-destroy,"* ]]; then
+            echo "::notice title=Data loss accepted::the allow-destroy label is on this pull request."
+          else
+            echo "::error title=Data at risk::this plan destroys or replaces resources that hold data. Add the allow-destroy label if that is intended."
+            exit 1
+          fi
+
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md
+        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md tfplan data-loss.txt
 
   apply:
     name: terraform-apply

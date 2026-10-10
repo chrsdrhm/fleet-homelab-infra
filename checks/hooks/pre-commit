@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Optional: blocks a commit whose staged changes contain a private value: an AWS account
+# ID, Okta org or app ID, personal email or signed token (patterns, no setup needed), or
+# any value listed as a hash in FLEET_HOMELAB_PRIVATE_HASHES (default
+# ~/.config/fleet-homelab/private-hashes; hashes only, never plaintext).
+# Turn on with:  git config core.hooksPath checks/hooks
+# CI runs the same check on every pull request.
+set -uo pipefail
+check="$(git rev-parse --show-toplevel)/checks/private-values/check.py"
+fail=0
+git diff --cached --name-only | python3 "$check" "staged file names" || fail=1
+while IFS= read -r f; do
+  git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | python3 "$check" "staged lines of $f" || fail=1
+done < <(git diff --cached --name-only --diff-filter=d)
+[ "$fail" -eq 0 ] || echo "Commit blocked. Remove the private value(s) and stage again." >&2
+exit "$fail"

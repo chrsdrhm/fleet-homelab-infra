@@ -1,0 +1,6 @@
+# zizmor configuration (https://docs.zizmor.sh/configuration/).
+rules:
+  self-repository:
+    # GitHub's `uses: $/...` syntax (July 2026) is not supported by actionlint 1.7.12 yet,
+    # which rejects it as an invalid action reference. Keep `./...` until it is.
+    disable: true

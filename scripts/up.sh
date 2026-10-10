@@ -60,6 +60,12 @@ H=$(curl -s -o /dev/null -m 20 -w '%{http_code}' ${HDR[@]+"${HDR[@]}"} "$URL/hea
 ROOT=$(curl -s -o /dev/null -m 20 -w '%{http_code}' ${HDR[@]+"${HDR[@]}"} "$URL/")
 echo "Up. /healthz -> HTTP $H; / -> HTTP $ROOT (200 = data restored; a 307 to /setup means an empty database)."
 
+# SSO smoke check (checks/sso-smoke.sh, if present). A warning, not a failure: the
+# rebuild itself succeeded.
+if [ "$H" = "200" ] && [ -x checks/sso-smoke.sh ]; then
+  FLEET_CI_HEADER="${FLEET_CI_HEADER:-}" checks/sso-smoke.sh "$URL" || true
+fi
+
 # Start a GitOps run, so a config change pushed while the stack was down is applied now.
 # Best effort: needs the GitHub CLI with access to that repo (locally your own login; in
 # CI a GitHub App token as GH_TOKEN). NO_GITOPS=1 skips it.

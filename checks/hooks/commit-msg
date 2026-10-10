@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Optional: blocks a commit message that contains a private value. See pre-commit.
+set -uo pipefail
+check="$(git rev-parse --show-toplevel)/checks/private-values/check.py"
+if ! grep -v '^#' "$1" | python3 "$check" "the commit message"; then
+  echo "Commit blocked. Edit the message to remove the private value." >&2
+  exit 1
+fi

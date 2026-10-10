@@ -1,3 +1,5 @@
+# Placeholders only, not real values. Copy to terraform.tfvars (gitignored) and fill
+# in your own. example.com is reserved for documentation (RFC 2606).
 fleet_subdomain      = "fleet.example.com"
 fleet_license_key    = "replace-with-real-license-key"
 cloudflare_api_token = "replace-with-scoped-cloudflare-token"
