@@ -10,11 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-fleet-homelab-aws-design.md`
 
-**Status as of 2026-10-05** (checkboxes reconciled against git history, Terraform state and live AWS; steps that cannot be verified from here stay open):
-- **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), and 13 (budget; Step 5, checking the inbox, is open).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Tasks 14 (scripts), 15 (CI/OIDC), 16 (PR plan checks), 17 (Grafana plus alerting), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
+**Status as of 2026-10-10:**
+- **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
-- **Running state:** the stack is torn down and rebuilt by hand with the snapshot pattern in Task 14's notes (no scripts yet), and `okta/` is applied locally.
+- **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
 
 ## Global Constraints
@@ -23,7 +23,7 @@
 
 - Region: `us-east-1`.
 - NAT Gateway present (single gateway, module default). Fargate task in a **private** subnet with egress via NAT; Aurora and Redis stay in database/elasticache subnets with no internet route regardless.
-- Database: **Aurora MySQL**, `db.t4g.medium`, `replicas = 1` — in `byo-vpc` this is the **total instance count** (`if index < config.replicas`), so `1` = one writer instance and no reader; `0` would create a cluster with **no instances at all** (verified against the module source; an earlier draft had `0`). Instance identifier is `fleet-homelab-one`, cluster identifier `fleet-homelab`.
+- Database: **Aurora MySQL**, `db.t3.medium` (`db.t4g.medium` until 2026-10-04; see Task 3's notes on capacity), `replicas = 1` — in `byo-vpc` this is the **total instance count** (`if index < config.replicas`), so `1` = one writer instance and no reader; `0` would create a cluster with **no instances at all** (verified against the module source; an earlier draft had `0`). Instance identifier is `fleet-homelab-one`, cluster identifier `fleet-homelab`.
 - Redis: `cache.t4g.small`, `cluster_size = 1`, no automatic failover.
 - Fargate: `cpu = 512`, `mem = 4096` (vulnerability scanning stays on — my explicit choice).
 - **No read replicas, no Redis failover, `autoscaling.min_capacity = 1`** — deliberately skipped regardless of cost, since my priority is "if it breaks, I rebuild it," not uptime during an incident. This is a separate axis from the Aurora/Redis-size decisions above.
@@ -1455,7 +1455,9 @@ git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 
 **Built 2026-10-07; the files in the repo supersede the code blocks below.** Differences from this design:
 - **Repo IDs:** owner and repo IDs come from `terraform.tfvars` locally and from the `github` context in CI; the repo ID changes whenever the repo is recreated, and the apply and plan trust subjects must then be re-applied (`oidc.tf`, locally).
-- **Secrets (8):** `AWS_ROLE_ARN` (the apply role, so the account ID stays masked), `TF_STATE_BUCKET` (written to `backend.hcl` at run time), `FLEET_SUBDOMAIN`, `FLEET_LICENSE_KEY`, `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN`, `BUDGET_ALERT_EMAIL`, `WAF_CI_HEADER_VALUE`; each set by piping from the local `terraform.tfvars`, `backend.hcl` or a Terraform output.
+- **Secrets (10):** `AWS_ROLE_ARN` (the apply role, so the account ID stays masked), `TF_STATE_BUCKET` (written to `backend.hcl` at run time), `FLEET_SUBDOMAIN`, `FLEET_LICENSE_KEY`, `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN`, `BUDGET_ALERT_EMAIL`, `WAF_CI_HEADER_VALUE`; each set by piping from the local `terraform.tfvars`, `backend.hcl` or a Terraform output. Also `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY`, from the GitHub App below. (Task 16 adds `AWS_PLAN_ROLE_ARN`.)
+- **GitHub App for the GitOps run (2026-10-10):** created under the account's **Settings → Developer settings → GitHub Apps**, not under either repo. Webhook off; one repository permission, **Actions: Read and write** (Metadata read-only is added automatically); installable only on this account; installed on the GitOps repo only. Its Client ID and a generated private key are this repo's two `GITOPS_APP_*` secrets (the key piped in from the downloaded `.pem`, which is then deleted). Nothing expires; a leaked key is replaced by generating a new one on the app page and revoking the old one. Chosen over a fine-grained personal access token, which expires and is tied to a user.
+- **Run view (2026-10-10):** `run-name` titles each run "Terraform up", "Terraform down" or "Terraform plan: <PR title>"; every action step has a readable name instead of "Run <action>@<sha>"; every checkout sets `persist-credentials: false`, since no step uses git after checkout (the GitOps repo too).
 - **Workflow:** actions pinned to commit SHAs (`checkout` v7.0.1, `configure-aws-credentials` v6.3.0 with `mask-aws-account-id: true`, `setup-terraform` v4.0.1); an extra step masks the account ID for every later step; `TF_CLI_ARGS=-no-color`; before `up`, `actions/create-github-app-token` (v3.2.0) uses a private GitHub App (Actions read and write, installed on the GitOps repo only; secrets `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY`) to get a token limited to the GitOps repo and Actions write, revoked when the job ends, which `up.sh` uses as `GH_TOKEN` to start the GitOps run (nothing expires, unlike a personal access token; the step is best effort, so a missing app only gives a warning), and the WAF header so its health check passes from runners outside the US; generated `terraform.tfvars` and `backend.hcl` written with `umask 077` and removed at the end.
 - **Scripts:** `tf-apply.sh`'s retry now passes `-input=false`, so a missing value fails instead of waiting on a prompt.
 - **Module source format:** Dependabot reads a GitHub module source without the `//` subdirectory separator as a repository URL. The migrations module was written as `github.com/fleetdm/fleet-terraform/addons/migrations?...` (Terraform accepts it), which failed Dependabot's update job with `git_dependencies_not_reachable`; it is now `fleet-terraform//addons/migrations?...`, like the SES and MDM modules. Same module and tag, no resource changes (the plan is unchanged).
@@ -2847,7 +2849,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
 - Device enrollment (Windows/macOS/Linux): Tasks 7-8 (Windows via WSTEP secret + `windows_enabled_and_configured` in Task 11; macOS via APNs cert uploaded in the Fleet UI), Task 11 fleet enroll secret covers Linux via `fleetd`. ✓
-- Infra sizing (root module, NAT on, Aurora `db.t4g.medium` no replica, Redis `t4g.small`, Fargate 512/4096): Task 3. ✓
+- Infra sizing (root module, NAT on, Aurora `db.t3.medium` no replica, Redis `t4g.small`, Fargate 512/4096): Task 3. ✓
 - WAF: Task 4. SES: Task 6. ✓ (Monitoring folded into Task 17's native Grafana alerting — see Task 5.)
 - DNS/TLS: Task 2. ✓
 - GitOps: Task 11. ✓

@@ -139,14 +139,14 @@ Non-goals above.
 
 | Component | Decision |
 |---|---|
-| VPC | 3 AZs (module requirement for subnet groups; us-east-1a, 1f and 1c — db.t4g.medium Aurora is only orderable in 1c and 1f, see the plan's Task 3); public, private, database, and elasticache subnets. **NAT Gateway restored** (single gateway, module default) — Fargate now runs in a private subnet with egress via NAT, not a public subnet. |
-| Database | **Aurora MySQL** via the root module's built-in `rds_config`, `db.t4g.medium`, single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
+| VPC | 3 AZs (module requirement for subnet groups; us-east-1a, 1f and 1c, chosen when Aurora was `db.t4g.medium`, orderable only in 1c and 1f; see the plan's Task 3); public, private, database, and elasticache subnets. **NAT Gateway restored** (single gateway, module default) — Fargate now runs in a private subnet with egress via NAT, not a public subnet. |
+| Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
 | Image | `fleetdm/fleet` (or the `quay.io` mirror to avoid Docker Hub rate limits) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
-| WAF | `addons/waf-alb` in `blocklist` mode, attached to the ALB — this addon is geo/IP-based (default blocked-country list), not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
-| MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Pause tooling. |
+| WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
+| MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
 | Monitoring | No standalone CloudWatch-alarm addon — superseded by Grafana's own native alerting on the same metrics (see Dashboard), delivered via a dedicated SES-SMTP IAM user |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Pause tooling). AWS-managed KMS keys (no CMKs) throughout. |
@@ -175,16 +175,22 @@ GitHub.
   `controls.windows_enabled_and_configured`.
 - `fleets/workstations.yml` (scaffold's current layout; older docs say
   `teams/`) — a single fleet covering all my devices
-  (Windows/macOS/Linux) with its enroll secret under `settings.secrets`; one
-  fleet is sufficient at this scale. The scaffold's second
+  (Windows/macOS/Linux); one fleet is sufficient at this scale. The scaffold's second
   `personal-mobile-devices` fleet is deleted. Note `default.yml` containing
   `org_settings` makes the workflow delete any Fleet not defined in the repo.
 - GitHub Actions workflow (from the `fleetctl new` scaffold): push to `main`
   → apply; pull request → dry-run only; nightly cron → drift correction.
+  Every run first checks Fleet's `/healthz`; when the stack is torn down it
+  skips with a warning instead of failing. Each `up` starts a run, so changes
+  merged while the stack was down are applied after the rebuild (see Remote
+  execution).
+- Enroll secrets are not in Git: Fleet's GitOps excepts them by default
+  (`gitops.exceptions.secrets: true`) and they are managed in Fleet.
 - Repo secrets: `FLEET_URL`, `FLEET_API_TOKEN` (the GitOps-role API user),
-  `FLEET_OKTA_METADATA_URL`, and the enroll secrets — the last three must
-  also be added to the scaffolded workflow's `env:` block, which only
-  forwards `FLEET_URL` and `FLEET_API_TOKEN` by default.
+  `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL`, and `FLEET_CI_HEADER`
+  (the WAF's `x-fleet-ci` value). The two Okta values are forwarded through
+  the workflow's `env:` block, which only forwards `FLEET_URL` and
+  `FLEET_API_TOKEN` by default.
 
 ## Logging
 
@@ -212,7 +218,7 @@ Target, `us-east-1`, running continuously:
 
 | Item | $/mo |
 |---|---|
-| Aurora MySQL `db.t4g.medium`, single instance | ~$55 |
+| Aurora MySQL `db.t3.medium`, single instance | ~$55–60 |
 | ElastiCache `cache.t4g.small`, 1 node | ~$23 |
 | Fargate (512 CPU / 4096MB, vuln scanning on) | ~$27 |
 | NAT Gateway | ~$33 |
@@ -224,7 +230,7 @@ Target, `us-east-1`, running continuously:
 | SES | ~$0.50 |
 | Firehose + S3 (osquery/audit logs, 10-host volume) | ~$1 |
 | AWS Budgets | $0 (within free tier) |
-| **Total (always on)** | **~$169–171/mo** |
+| **Total (always on)** | **~$170–176/mo** |
 
 This is essentially the original, pre-cost-cut design — see the "Why the
 reversal" note above. It only makes sense given the intermittent usage
@@ -250,15 +256,16 @@ and only `up`/`down` removes their cost.
   become available).
 
   At roughly one weekend a month of actual use (~7% uptime), this averages
-  to **~$12–15/mo** rather than the ~$169–171/mo always-on figure — this is
+  to **~$12–15/mo** rather than the ~$170–176/mo always-on figure — this is
   the number that actually matters for this deployment, not the always-on
   total.
 
   **Teardown preserves actual state, not just infrastructure:**
   - `down` takes an Aurora **cluster** snapshot (`aws rds
     create-db-cluster-snapshot`) immediately before destroying the cluster;
-    `up` can restore from it (via `rds_config.snapshot_identifier`) instead
-    of creating an empty database, so hosts, policies, query results, and
+    `up` finds the newest teardown snapshot and restores from it (via
+    `rds_config.snapshot_identifier`) instead of creating an empty database
+    (`up --fresh` starts empty), so hosts, policies, query results, and
     user accounts survive a teardown/rebuild cycle.
   - The Fleet server's private-key secret (used to encrypt sensitive data at
     rest in the DB) is created and owned outside `module.fleet`, specifically
@@ -274,7 +281,7 @@ and only `up`/`down` removes their cost.
     own bucket is `force_destroy = true` and would be wiped on teardown);
     the task role is granted access via `extra_iam_policies`.
   - Each teardown leaves a manual Aurora snapshot that bills until deleted;
-    `down` prints a prune reminder.
+    `down` keeps the newest two and deletes older teardown snapshots.
   - Redis needs none of this — it's cache/live-query pub-sub, not durable
     app state, so losing it on teardown is fine.
   - The VPC (including NAT Gateway) is destroyed and recreated each cycle
@@ -291,11 +298,11 @@ below).
 
 ## Remote execution (GitHub Actions, OIDC, GitHub-hosted runners)
 
-`up`/`down`/`plan` are triggered via a `workflow_dispatch` GitHub Actions
-workflow in the infra repo, runnable from GitHub's UI, its mobile app, or
+`up`/`down` are triggered via a `workflow_dispatch` GitHub Actions
+workflow in the infra repo (pull requests run `plan`; see below), runnable from GitHub's UI, its mobile app, or
 `gh workflow run` from anywhere — not tied to my laptop. The infra
 repo is **public** (a portfolio piece), so the workflow runs on
-**GitHub-hosted runners** (`ubuntu-latest`), which are free and unlimited
+**GitHub-hosted runners** (pinned to `ubuntu-24.04`), which are free and unlimited
 for public repos. A self-hosted runner (the original design: an LXC
 container on my Proxmox server) was dropped because GitHub
 explicitly warns against self-hosted runners on public repos — a fork pull
@@ -312,7 +319,11 @@ can open a PR from a fork, but fork PRs get no Actions secrets and a
 read-only token, and outside-collaborator workflow runs require approval.
 Secret scanning with push protection is on, Actions permissions are
 read-only by default, third-party actions are pinned to commit SHAs, and
-`main` is protected by a ruleset. Nothing personal or secret is committed:
+`main` is protected by a ruleset with no bypass, not even for the owner:
+every change, docs included, goes through a pull request whose
+`terraform-lint` and `terraform-plan` checks pass (the GitOps repo likewise
+requires its `fleet-gitops` check). Dependabot keeps actions and providers
+current, and its pull requests get a plan too. Nothing personal or secret is committed:
 the commit author is the GitHub noreply address, and the budget-alert email,
 license key and Cloudflare token live only in gitignored `terraform.tfvars`
 and GitHub secrets. The AWS trust policy is the second lock: the apply role
@@ -337,7 +348,7 @@ comment (mirroring the dry-run behavior the GitOps repo already has for
 Fleet config), so merging to `main` is always an informed decision — the
 apply itself just waits for the next manual `up` trigger rather than firing
 immediately. Two IAM roles serve this, not one: an **apply role**
-(assumable only by a `workflow_dispatch` run on `main`) for `up`/`down`/`plan`,
+(assumable only by a `workflow_dispatch` run on `main`) for `up`/`down`,
 and a **read-only plan role** (assumable only from the `pull_request` context)
 for the PR checks — a PR workflow runs the file from the PR's own branch, so it
 gets no write access. The apply role is scoped by AWS service (EC2/VPC, RDS,
@@ -368,6 +379,18 @@ state. The mitigation that fits is the trust policy — only a manual dispatch o
 `main` of a private single-user repo can assume the role — with an optional
 stronger gate (a GitHub Environment with a required reviewer) not built here.
 It would need revisiting in any shared or production account.
+
+**Starting the GitOps run after `up`.** A workflow's own token is limited to
+its repo, so the infra workflow cannot start the GitOps repo's workflow with
+it. A private **GitHub App** fills that gap: created on the owner's account,
+with one permission (Actions: read and write) and installed on the GitOps repo
+only. Before `up`, the job uses the app's client ID and private key (two
+secrets) to get an installation token limited to that repo and Actions write,
+revoked when the job ends. Chosen over a fine-grained personal access token,
+which expires and is tied to a user; the app's key does not expire and can do
+nothing beyond starting workflows in one repo. The step is best effort: if it
+fails, the rebuild still succeeds with a warning, and the nightly GitOps run
+catches up.
 
 ## Dashboard (Grafana)
 
@@ -420,8 +443,8 @@ Task 18.)
 
 - **`fleet-homelab-infra`** (this repo) — Terraform config referencing the
   `fleet-terraform` root module and addons, the
-  `up`/`down` operational scripts, and the two GitHub
-  Actions workflows (on-demand apply/destroy, PR plan checks) that drive
-  them remotely.
+  `up`/`down` operational scripts, and one GitHub Actions workflow
+  (`terraform.yml`: `lint` and `plan` on pull requests, `apply` for on-demand
+  up/down) with a shared setup action, that drives them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own
   GitHub repo, driving Fleet server config via GitHub Actions.
