@@ -6,6 +6,10 @@
 # The policy JSON from aws_iam_policy_document is mocked, so the tests check the
 # statements as written in oidc.tf, not AWS's rendering of them. prevent_destroy is
 # not visible to tests; the plan check's data-loss guard covers those resources.
+#
+# Every value in this file is a placeholder, not real data: 123456789012 is the example
+# account ID from AWS's documentation, example.com is reserved for documentation
+# (RFC 2606), "octo"/1/2 are made-up GitHub IDs, and the keys and tokens are dummies.
 
 mock_provider "aws" {
   mock_data "aws_caller_identity" {

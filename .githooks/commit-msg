@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Optional: blocks a commit message that contains a private string. See pre-commit.
+# Optional: blocks a commit message that contains a private value. See pre-commit.
 set -uo pipefail
-patterns="${FLEET_HOMELAB_PRIVATE_STRINGS:-$HOME/.config/fleet-homelab/private-strings}"
-[ -f "$patterns" ] || exit 0
-check="$(git rev-parse --show-toplevel)/scripts/check-private-strings.sh"
-if ! grep -v '^#' "$1" | "$check" "$patterns" "the commit message"; then
+check="$(git rev-parse --show-toplevel)/scripts/check-private-values.py"
+if ! grep -v '^#' "$1" | python3 "$check" "the commit message"; then
   echo "Commit blocked. Edit the message to remove the private value." >&2
   exit 1
 fi

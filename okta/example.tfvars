@@ -1,3 +1,5 @@
+# Placeholders only, not real values. Copy to terraform.tfvars (gitignored) and fill
+# in your own. example.com is reserved for documentation (RFC 2606).
 fleet_subdomain       = "fleet.example.com"
 okta_org_name         = "trial-0000000"
 okta_client_id        = "0oaXXXXXXXXXXXXXXXXX"
