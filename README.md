@@ -19,7 +19,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 ## Cost
 
-Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer and its public IPv4 addresses. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana dashboard stays up all the time and adds about **$10 a month**, so about **$25 a month** with it. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
+Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana dashboard stays up all the time and adds about **$10 a month**, so about **$25 a month** with it. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
 ## Sized for a homelab
 
@@ -38,7 +38,7 @@ What has to survive a teardown is kept outside it: the database (through the sna
 
 Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, and the role attribute) is Terraform in [`okta/`](okta/), applied from my laptop with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
 
-**Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. I use Okta because it makes the lab more like a real deployment, where people sign in through the company's identity provider and get their Fleet role from it. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (`enable_sso: false`). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
+**Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. I use Okta because it makes the lab more like a real deployment, where people sign in through the company's identity provider and get their Fleet role from it. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (its README says how). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
 
 ## Status
 
@@ -50,6 +50,7 @@ Built task by task from a written plan; [`docs/plans/`](docs/plans/) tracks each
 |---|---|
 | `*.tf` | The AWS and Cloudflare Terraform configuration |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
+| `grafana/` | Optional. The Amazon Managed Grafana workspace, its IAM role and alert topic (its own Terraform root, applied locally) |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |
