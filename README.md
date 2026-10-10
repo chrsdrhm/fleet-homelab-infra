@@ -21,10 +21,6 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana dashboard stays up all the time and adds about **$10 a month**, so about **$25 a month** with it. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
-## Sized for a homelab
-
-Fleet's Terraform module is used as published (pinned to a release tag), with smaller inputs. Its defaults and Fleet's own [reference architectures](https://fleetdm.com/docs/deploy/reference-architectures) are built for thousands of hosts, with database replicas, three Redis nodes and several Fleet servers. This homelab has about ten hosts, so it runs one Fleet server (autoscaling to two at most), one Aurora instance of the size Fleet recommends for up to 5,000 hosts, and one Redis node. That's plenty of performance at this scale; what it gives up is failover, which a homelab doesn't need, since the recovery plan is a rebuild from the snapshot. It's also most of why the stack costs about $200 a month left running instead of several times that. The [design spec](docs/specs/fleet-homelab-aws-design.md#sizing-compared-with-fleets-defaults-and-guidance) has the side-by-side comparison.
-
 ## Teardown and rebuild
 
 **A rebuilt Fleet picks up where you left off: the same users, hosts, settings and SSO.** Nothing starts fresh. Two scripts do it, and the same scripts run from my terminal or from GitHub Actions:
@@ -32,17 +28,17 @@ Fleet's Terraform module is used as published (pinned to a release tag), with sm
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
-That works because what has to survive a teardown is kept outside it: the database (through the snapshot, including Apple MDM's push certificate and keys, which Fleet stores there), the Fleet server key that encrypts data in that database, the Windows MDM certificate (kept in Secrets Manager), the software-installers bucket, DNS and the TLS certificate, and the email sending identity.
+The teardown only removes the expensive parts; everything that holds state stays. The database is snapshotted before it's deleted and restored on the way back up, and Apple MDM's push certificate and keys are stored in it. The Fleet server key that encrypts it, the Windows MDM certificate (in Secrets Manager), the software-installers bucket, DNS, the TLS certificate and the email sending identity are never torn down.
+
+## Sized for a homelab
+
+Fleet's Terraform module is used as published (pinned to a release tag), with smaller inputs. Its defaults and Fleet's own [reference architectures](https://fleetdm.com/docs/deploy/reference-architectures) are built for thousands of hosts, with database replicas, three Redis nodes and several Fleet servers. This homelab has about ten hosts, so it runs one Fleet server (autoscaling to two at most), one Aurora instance of the size Fleet recommends for up to 5,000 hosts, and one Redis node. That's plenty of performance at this scale; what it gives up is failover, which a homelab doesn't need, since the recovery plan is a rebuild from the snapshot. It's also most of why the stack costs about $200 a month left running instead of several times that. The [design spec](docs/specs/fleet-homelab-aws-design.md#sizing-compared-with-fleets-defaults-and-guidance) has the side-by-side comparison.
 
 ## Identity: an Okta free tenant
 
 Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, and the role attribute) is Terraform in [`okta/`](okta/), applied from my terminal with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
 
 **Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. I use Okta because it makes the lab more like a real deployment, where people sign in through the company's identity provider and get their Fleet role from it. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (its README says how). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
-
-## Status
-
-Built task by task from a written plan; [`docs/plans/`](docs/plans/) tracks each task and what was verified.
 
 ## Repo layout
 
