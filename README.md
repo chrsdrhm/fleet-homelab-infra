@@ -14,7 +14,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **DNS and TLS:** a Route 53 hosted zone for a subdomain, delegated from Cloudflare (also managed in Terraform), with an ACM certificate.
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
-- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub.
+- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned.
 - **Observability (optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out; it stays up all the time for about $10 a month.
 
 ## Cost
@@ -47,7 +47,9 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `*.tf` | The AWS and Cloudflare Terraform configuration |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
 | `grafana/` | Optional. The Amazon Managed Grafana workspace, its IAM role and alert topic (its own Terraform root, applied locally) |
-| `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
+| `scripts/` | `up.sh`, `down.sh`, `tf-apply.sh` (apply with one known retry) and the private-strings check |
+| `tests/` | `terraform test` files: the CI roles' trust, WAF rules, public bucket scope and budget, against mocked providers |
+| `.githooks/` | Optional local hooks that block commits containing private strings (`git config core.hooksPath .githooks`) |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |
 | `docs/plans/` | The implementation plan, including problems found and fixed while running it |

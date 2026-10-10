@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Optional: blocks a commit whose staged changes contain a private string (the hostname,
+# account ID, Okta org and so on). Turn on with:  git config core.hooksPath .githooks
+# Patterns live outside the repo, one per line, in the file named by
+# FLEET_HOMELAB_PRIVATE_STRINGS (default ~/.config/fleet-homelab/private-strings).
+# Without that file the hook does nothing. CI runs the same check on every pull request.
+set -uo pipefail
+patterns="${FLEET_HOMELAB_PRIVATE_STRINGS:-$HOME/.config/fleet-homelab/private-strings}"
+[ -f "$patterns" ] || exit 0
+check="$(git rev-parse --show-toplevel)/scripts/check-private-strings.sh"
+fail=0
+git diff --cached --name-only | "$check" "$patterns" "staged file names" || fail=1
+while IFS= read -r f; do
+  git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | "$check" "$patterns" "staged lines of $f" || fail=1
+done < <(git diff --cached --name-only --diff-filter=d)
+[ "$fail" -eq 0 ] || echo "Commit blocked. Remove the private value(s) and stage again." >&2
+exit "$fail"

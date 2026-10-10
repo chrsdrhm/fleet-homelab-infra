@@ -1,5 +1,6 @@
 # Terraform for this stack, in three jobs:
-#  - lint:  on every pull request, no secrets or AWS: fmt, validate (both roots), shellcheck.
+#  - lint:  on every pull request, no AWS: private-strings check, fmt, validate, terraform test,
+#           shellcheck, actionlint, zizmor, tflint.
 #  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
 #           summary and the full plan, masked (comments are public and NOT masked by GitHub).
 #  - apply: started by hand (never on push): up or down with the apply role.
@@ -54,6 +55,39 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the private-strings check diffs against the base branch
+
+      # Fails if the pull request adds any string from the PRIVATE_STRINGS secret (the
+      # hostname, account ID, Okta org and so on; one per line) in a changed line, a file
+      # name, a commit message, or its title and body. Reports where, never the value.
+      # Runs without the secret (forks) as a skip with a notice.
+      - name: Check for private strings
+        env:
+          PRIVATE_STRINGS: ${{ secrets.PRIVATE_STRINGS }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "$PRIVATE_STRINGS" ]; then
+            echo "::notice title=Private-strings check skipped::This pull request runs without the PRIVATE_STRINGS secret (for example, from a fork)."
+            exit 0
+          fi
+          patterns="$RUNNER_TEMP/private-strings"
+          printf '%s\n' "$PRIVATE_STRINGS" > "$patterns"
+          fail=0
+          check() { scripts/check-private-strings.sh "$patterns" "$1" || fail=1; }
+          git diff --name-only "$BASE...$HEAD" | check "the changed file names"
+          while IFS= read -r f; do
+            git diff -U0 "$BASE...$HEAD" -- "$f" | grep '^+' | grep -v '^+++' | check "the added lines of $f"
+          done < <(git diff --name-only --diff-filter=d "$BASE...$HEAD")
+          git log --format=%B "$BASE..$HEAD" | check "the commit messages"
+          printf '%s\n%s\n' "$TITLE" "$BODY" | check "the pull request title and body"
+          rm -f "$patterns"
+          if [ "$fail" -ne 0 ]; then
+            echo "::error title=Private string found::Remove it from the pull request (and from the history of its commits)."
+          fi
+          exit "$fail"
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -78,7 +112,7 @@ jobs:
         run: terraform test
 
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh .githooks/*
 
       # Release binaries, pinned and checked against their published SHA-256 checksums,
       # so no third-party action is needed. Dependabot cannot update these: bump the
