@@ -19,7 +19,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 ## Cost
 
-Left running, the stack costs about **$170–176 a month** (roughly $0.24 an hour), mostly Aurora, the NAT Gateway, Fargate, Redis and the load balancer. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**. Torn down, it costs about **$1–2 a month**. At roughly a weekend a month of use, that averages out to around **$12–15 a month**. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down.
+Left running, the stack would cost about **$6.45 a day, or about $196 a month** (roughly $0.27 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer and its public IPv4 addresses. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**. Torn down, it costs about **$1.40 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
 ## Teardown and rebuild
 

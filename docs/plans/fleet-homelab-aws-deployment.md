@@ -1295,11 +1295,11 @@ resource "aws_budgets_budget" "fleet_homelab" {
 }
 ```
 
-**Alerts every $10, not the original 20/40/60/80/100%** — chosen so a forgotten stack is noticed sooner (a running stack costs ~$5.50/day). Ten alerts on one budget was accepted by AWS (verified by applying it; an earlier recollection of a five-per-budget limit was wrong, and the AWS quotas page lists no such limit). **Budget data only refreshes up to about three times a day, 8–12 hours apart** (AWS docs), so this is a "within about a day" alarm, not a real-time one — the real protection is still running `down.sh`. Budgets without actions are free; the "2 free" quota applies to budgets *with* actions. The account also has an older `Monthly Budget` ($1, one forecast alert), which is independent of this one and left alone.
+**Alerts every $10, not the original 20/40/60/80/100%** — chosen so a forgotten stack is noticed sooner (a running stack costs about $6.45/day). Ten alerts on one budget was accepted by AWS (verified by applying it; an earlier recollection of a five-per-budget limit was wrong, and the AWS quotas page lists no such limit). **Budget data only refreshes up to about three times a day, 8–12 hours apart** (AWS docs), so this is a "within about a day" alarm, not a real-time one — the real protection is still running `down.sh`. Budgets without actions are free; the "2 free" quota applies to budgets *with* actions. The account also has an older `Monthly Budget` ($1, one forecast alert), which is independent of this one and left alone.
 
 `budget_alert_email` is a sensitive-by-privacy variable (add it to `variables.tf` as `type = string`, to `example.tfvars` as a placeholder, and to the real `terraform.tfvars`; Task 15's workflow supplies it from a `BUDGET_ALERT_EMAIL` repo secret). It stays out of Git because this repo is public.
 
-Given the actual usage pattern (torn down most of the time, averaging ~$12–15/mo per the spec), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
+Given the actual usage pattern (torn down most of the time, averaging about $15/mo per the spec), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
 
 - [x] **Step 2: Validate and plan**
 

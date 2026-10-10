@@ -228,8 +228,8 @@ Two separate log streams, not one (the second is planned, plan Task 12, not buil
 
 One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target: well above the expected ~$12–15/mo, so in practice the alerts
-catch a stack left running (about $5.70 a day). Budget data refreshes only a
+$100/mo target: well above the expected ~$15/mo, so in practice the alerts
+catch a stack left running (about $6.45 a day). Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
 without actions are free.
 
@@ -239,34 +239,43 @@ The stack is built to be torn down when not in use, so there are three
 numbers: what it costs while it runs, what is left while it is down, and the
 monthly average that results.
 
-**While running** (`us-east-1`, estimates from AWS list prices):
+**While running** (`us-east-1` prices, matching what this stack is billed;
+hourly items × 730 hours):
 
-| Item | $/mo if left running |
-|---|---|
-| Aurora MySQL `db.t3.medium`, single instance | ~$55–60 |
-| NAT Gateway | ~$33 |
-| Fargate (512 CPU / 4096MB, vuln scanning on) | ~$27 |
-| ElastiCache `cache.t4g.small`, 1 node | ~$23 |
-| ALB | ~$17 |
-| WAF | ~$6–8 |
-| CloudWatch (logs) | ~$3 |
-| Secrets Manager (~5 secrets) | ~$2 |
-| Route 53 hosted zone | ~$0.50 |
-| SES | ~$0.50 |
-| Firehose + S3 (osquery logs, once Task 12 is built) | ~$1 |
-| **Total** | **~$170–176/mo, about $0.24/hour or $5.70/day** |
+| Item | Rate | Per day | Per month |
+|---|---|---|---|
+| Aurora MySQL `db.t3.medium`, one instance | $0.082/h | $1.97 | $59.86 |
+| Aurora I/O and storage (light use) | ~$0.009/h | ~$0.21 | ~$6.40 |
+| NAT Gateway | $0.045/h | $1.08 | $32.85 |
+| NAT Gateway data processed (light use) | $0.045/GB | ~$0.12 | ~$3.50 |
+| Fargate, 0.5 vCPU and 4 GB | $0.0380/h | $0.91 | $27.75 |
+| ElastiCache `cache.t4g.small`, one node | $0.032/h | $0.77 | $23.36 |
+| Application Load Balancer | $0.0225/h | $0.54 | $16.43 |
+| Public IPv4 addresses (NAT Gateway plus three for the load balancer) | 4 × $0.005/h | $0.48 | $14.60 |
+| WAF (one Web ACL, two rules) | $7/month | $0.23 | $7.00 |
+| Data transfer, CloudWatch logs (light use) | — | ~$0.08 | ~$2.40 |
+| Secrets Manager (three secrets while up) | $0.40/secret/month | $0.04 | $1.20 |
+| Route 53 hosted zone | $0.50/month | $0.02 | $0.50 |
+| **Total** | **~$0.27/h** | **~$6.45** | **~$196** |
 
-**While torn down:** about **$1–2/mo**. What stays: the Route 53 zone
-($0.50), Secrets Manager (the Fleet server key and the MDM secret, about
-$0.40 each), the Aurora teardown snapshots (the newest two; storage for a
-small database, cents), the S3 buckets (state, software installers, IdP logo;
-cents), and free items (the ACM certificate, the SES identity, the budget).
-Okta's Free Plan and GitHub Actions on public repos cost nothing.
+Fixed by the resources: everything priced per hour. Estimated from light
+homelab use: Aurora I/O, NAT data, data transfer and logs, which grow with
+enrolled hosts and traffic. Not in the total yet: Firehose and S3 for osquery
+logs (about $1/mo at 10 hosts, once plan Task 12 is built) and SES (cents).
+The public IPv4 charge, which AWS added in 2024, is easy to miss: it costs more
+than the WAF.
+
+**While torn down:** about **$1.40/mo (about $0.05/day)**. What stays: the
+Route 53 zone ($0.50), two secrets (the Fleet server key and the MDM secret,
+$0.40 each), the two newest Aurora teardown snapshots (storage for a small
+database, cents), and the S3 buckets (state, software installers, IdP logo;
+cents). Free: the ACM certificate, the SES identity and the budget. Okta's
+Free Plan and GitHub Actions on public repos cost nothing.
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
-hours), **~$12–15/mo**, the number that matters for this deployment. Real
-data point: on 2026-10-05, after the first days of building, AWS Budgets
-showed about $6.70 spent that month with a forecast of about $14.
+hours), 50 × $0.27 + $1.40 ≈ **$15/mo**, the number that matters for this
+deployment. Each extra hour up adds about $0.27; each full day left running
+adds about $6.45.
 
 This is essentially the original, pre-cost-cut sizing — see the "Why the
 reversal" note above. It only makes sense given the intermittent usage
