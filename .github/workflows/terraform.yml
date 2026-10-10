@@ -184,8 +184,10 @@ jobs:
           details=$'\n\n<details><summary>Full plan (secret values masked)</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
           if has12 "$full"; then
             details=$'\n\n_The full plan is not shown here because it contains a 12-digit number, which could be an account ID. See the [workflow job]('"$job_url"$')._'
+            foot=$'\n'
           elif [ $(( ${#head} + ${#details} + ${#foot} )) -gt 60000 ]; then
             details=$'\n\n_The full plan is too long for a comment. See it in the [workflow job]('"$job_url"$')._'
+            foot=$'\n'
           fi
 
           printf '%s' "$head$details$foot" > comment.md
