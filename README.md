@@ -32,7 +32,7 @@ Two scripts do it, and the same scripts run from my laptop or from GitHub Action
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
-What has to survive a teardown is kept outside it: the database (through the snapshot), the Fleet server key that encrypts data in that database, the Windows MDM certificate, the software-installers bucket, DNS and the TLS certificate. A rebuilt Fleet comes back with the same users, hosts, settings and SSO.
+What has to survive a teardown is kept outside it: the database (through the snapshot), the Fleet server key that encrypts data in that database, the Windows MDM certificate, the software-installers bucket, DNS and the TLS certificate. **A rebuilt Fleet comes back with the same users, hosts, settings and SSO.**
 
 ## Identity: an Okta free tenant
 
