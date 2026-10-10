@@ -8,7 +8,7 @@
 
 **Tech Stack:** Terraform >= 1.12.0, AWS provider >= 6.37.0, `fleetdm/fleet-terraform` (root module + addons), `fleetctl`, GitHub Actions (OIDC-federated, no stored AWS credentials).
 
-**Spec:** `docs/superpowers/specs/2026-09-17-fleet-homelab-aws-design.md`
+**Spec:** `docs/specs/2026-09-17-fleet-homelab-aws-design.md`
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).

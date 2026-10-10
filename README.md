@@ -30,8 +30,8 @@ Work in progress, built task by task from a written plan. Running and verified s
 | Path | What it is |
 |---|---|
 | `*.tf` | The Terraform configuration |
-| `docs/superpowers/specs/` | Design spec: decisions and reasoning |
-| `docs/superpowers/plans/` | The implementation plan, including problems found and fixed while running it |
+| `docs/specs/` | Design spec: decisions and reasoning |
+| `docs/plans/` | The implementation plan, including problems found and fixed while running it |
 | `example.tfvars` | Placeholder values; real values live in a gitignored `terraform.tfvars` |
 
 ## Security notes
