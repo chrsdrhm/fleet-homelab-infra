@@ -72,6 +72,11 @@ jobs:
             terraform -chdir="$dir" validate
           done
 
+      # tests/*.tftest.hcl: a plan against mocked providers (no AWS or credentials) that
+      # pins down the CI roles' trust, the WAF rules, the logo bucket and the budget.
+      - name: terraform test
+        run: terraform test
+
       - name: shellcheck
         run: shellcheck scripts/*.sh
 
