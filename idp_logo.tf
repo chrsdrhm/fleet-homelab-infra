@@ -15,7 +15,7 @@ locals {
 data "aws_region" "current" {}
 
 resource "aws_s3_bucket" "idp_logo" {
-  bucket = "fleet-homelab-idp-logo-${data.aws_caller_identity.current.account_id}"
+  bucket = "fleet-homelab-idp-logo-test-${data.aws_caller_identity.current.account_id}"
 }
 
 # Only the two "public policy" settings are relaxed, and only on this bucket. ACLs stay
