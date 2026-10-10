@@ -21,6 +21,10 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer and its public IPv4 addresses. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**. Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana dashboard stays up all the time and adds about **$10 a month**, so about **$25 a month** with everything planned built; the other planned pieces (osquery logs, an activities webhook) cost under a dollar a month. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
+## Sized for a homelab
+
+Fleet's Terraform module is used as published (pinned to a release tag), with smaller inputs. Its defaults and Fleet's own [reference architectures](https://fleetdm.com/docs/deploy/reference-architectures) are built for thousands of hosts, with database replicas, three Redis nodes and several Fleet servers. This homelab has about ten hosts, so it runs one Fleet server (autoscaling to two at most), one Aurora instance of the size Fleet recommends for up to 5,000 hosts, and one Redis node. That's plenty of performance at this scale; what it gives up is failover, which a homelab doesn't need, since the recovery plan is a rebuild from the snapshot. It's also most of why the stack costs about $200 a month left running instead of several times that. The [design spec](docs/specs/fleet-homelab-aws-design.md#sizing-compared-with-fleets-defaults-and-guidance) has the side-by-side comparison.
+
 ## Teardown and rebuild
 
 Two scripts do it, and the same scripts run from my laptop or from GitHub Actions:

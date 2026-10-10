@@ -172,6 +172,40 @@ Non-goals above.
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
 | Terraform state | S3 backend with native locking (`use_lockfile = true`) — no DynamoDB table; `dynamodb_table` was deprecated in Terraform 1.11 in favor of S3's own conditional-write locking |
 
+### Sizing compared with Fleet's defaults and guidance
+
+Fleet's root module defaults suit a production deployment, and Fleet's own
+[reference architectures](https://fleetdm.com/docs/deploy/reference-architectures)
+start at "up to 5,000 hosts". This homelab has about ten hosts, so it uses the
+same building blocks at a much smaller scale. Each difference is an input to
+Fleet's module (`fleet.tf`), not a change to the module itself.
+
+| Component | Fleet module default | Fleet's smallest published tier (≤ 5,000 hosts) | This homelab (~10 hosts) |
+|---|---|---|---|
+| Region | us-east-2 (its `vpc.azs` default) | — | us-east-1; any region works |
+| Availability zones | 3 | — | 3 |
+| NAT Gateway | one, shared | — | one, shared (default kept) |
+| Fleet server (Fargate) | 512 CPU / 4 GB; autoscaling 1–5 tasks at 80% CPU or memory | 6 tasks, 1024 CPU / 4 GB | 512 CPU / 4 GB; autoscaling 1–2 tasks |
+| Aurora MySQL | `db.t4g.large`, 2 instances (writer and reader, automatic failover) | `db.t4g.medium`, 2 instances | `db.t3.medium` (same 2 vCPU / 4 GB as `db.t4g.medium`), 1 instance |
+| Redis | `cache.m5.large`, 3 nodes | `cache.t4g.small`, 3 nodes | `cache.t4g.small`, 1 node |
+| MySQL connections per task | — | `FLEET_MYSQL_MAX_OPEN_CONNS=10` | 10 |
+
+**Why this doesn't hurt the experience at this scale:** one Fleet task and
+one database instance of the size Fleet recommends for up to 5,000 hosts are
+far more than ten hosts need (the health scan in plan Task 21 saw Aurora
+average 13% CPU and the Fleet task 3%). The 4 GB of task memory is kept on
+purpose, for vulnerability processing. Autoscaling still exists: it can add a
+second task under load.
+
+**What it gives up is resilience, not speed:** no Aurora reader to fail over
+to, a single Redis node, and a single Fleet task, so a zone failure or a task
+replacement means a short outage, and nothing is multi-region (Fleet's module
+does not do multi-region; it would be a second deployment). For a homelab the
+recovery plan is to rebuild from the snapshot. These choices are most of the
+reason the stack costs about $200 a month when left running instead of
+several times that, and each one is a single input to turn back up (see
+Non-goals).
+
 ### DNS / TLS
 
 My domain's DNS is hosted on Cloudflare. A Route 53 hosted zone is
