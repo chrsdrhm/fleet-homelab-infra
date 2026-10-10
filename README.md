@@ -12,7 +12,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 - **Infrastructure:** Fleet's own [`fleet-terraform`](https://github.com/fleetdm/fleet-terraform) root module (VPC, Aurora MySQL, Redis, ALB, ECS Fargate), pinned to a release tag rather than reimplemented.
 - **DNS and TLS:** a Route 53 hosted zone for a subdomain, delegated from Cloudflare (also managed in Terraform), with an ACM certificate.
-- **Identity:** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups.
+- **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub.
 - **Observability (planned, optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out; it stays up all the time for about $10 a month.
