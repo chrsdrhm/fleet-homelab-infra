@@ -38,6 +38,8 @@ What has to survive a teardown is kept outside it: the database (through the sna
 
 Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, and the role attribute) is Terraform in [`okta/`](okta/), applied from my laptop with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
 
+**Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (`enable_sso: false`). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
+
 ## Status
 
 Work in progress, built task by task from a written plan. Running and verified: the core Fleet stack, a US-only WAF, outbound mail through SES, Windows MDM, Okta SAML single sign-on with just-in-time provisioning and group-based roles, email MFA on the break-glass admin, the teardown and rebuild scripts, and CI for this repo (lint and a plan on every pull request; rebuild and teardown on demand). Fleet's configuration is managed from a separate GitOps repo. Still to come: osquery logs to S3, a Grafana dashboard, end-user SSO at device enrollment, and Apple MDM.
@@ -47,7 +49,7 @@ Work in progress, built task by task from a written plan. Running and verified: 
 | Path | What it is |
 |---|---|
 | `*.tf` | The AWS and Cloudflare Terraform configuration |
-| `okta/` | The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
+| `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |

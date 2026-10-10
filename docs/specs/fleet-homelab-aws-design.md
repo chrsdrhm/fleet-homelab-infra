@@ -25,6 +25,12 @@ AWS cost, since this is for personal homelab learning, not production scale.
 
 ## Identity & access
 
+- **SSO is optional.** Fleet works without it: users sign in with a password,
+  starting with the break-glass admin. Leaving it out means not applying
+  `okta/`, setting `enable_sso: false` in the GitOps repo's `default.yml`, and
+  optionally deleting the IdP logo bucket (`idp_logo.tf`), which exists only
+  for the SSO login button. Fleet's SSO is generic SAML, so another IdP can
+  replace Okta. Nothing in the AWS stack depends on Okta.
 - **Primary IdP: Okta** (changed from Entra ID on 2026-10-03). Entra was built
   and worked, but could not meet the requirement that nobody holds a Fleet
   role unless explicitly assigned: Fleet creates a new SSO user with no role

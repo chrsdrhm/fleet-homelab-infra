@@ -960,6 +960,8 @@ Also confirm the *sender* address Fleet uses (Task 6) is a verified identity or 
 
 ### Task 10: Okta SSO — Terraform (`okta/`): SAML app, groups, role attribute
 
+**Optional for anyone reusing this repo.** The AWS stack does not depend on Okta: without this task Fleet uses password logins (the break-glass admin from Task 3 Step 8 and anyone it invites). To skip it, don't apply `okta/`, set `enable_sso: false` in the GitOps repo's `default.yml` (Task 11) and drop its two Okta secrets, and delete `idp_logo.tf` if the logo bucket isn't wanted. Another SAML IdP can take Okta's place; Fleet's SSO is generic SAML.
+
 **Replaces the Entra design (decided 2026-10-03).** The Entra build worked end to end (assertion captured, Fleet login, role sync), then failed the one rule that matters: **nobody gets a Fleet role unless explicitly assigned.** Two defaults compounded, both verified:
 - **Fleet (v4.92.0, `ee/server/service/users.go`):** with JIT on, a new user whose assertion carries no role is created as **global observer** ("If no roles are set in the SSO attributes, default to setting user as a global observer"). There is no setting that refuses such a login, and for an existing user a missing role leaves the old role untouched.
 - **Entra:** Global Administrators sign in to an app regardless of "assignment required" (Microsoft's `application-properties.md`: "Users with a Global Administrator role can sign in to applications, regardless of the assignment required settings"). Live result: an unassigned Global Administrator got in and became observer. The only Entra control that holds a Global Administrator is a Conditional Access policy, which was built, tested, and then removed at my request.
