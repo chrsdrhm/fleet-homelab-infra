@@ -1,6 +1,7 @@
-# Terraform for this stack, in two jobs:
-#  - plan:  on every pull request, a read-only plan with the plan role, and one PR comment
-#          holding a redacted summary (comments are public and NOT masked).
+# Terraform for this stack, in three jobs:
+#  - lint:  on every pull request, no secrets or AWS: fmt, validate (both roots), shellcheck.
+#  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
+#           summary and the full plan, masked (comments are public and NOT masked by GitHub).
 #  - apply: started by hand (never on push): up or down with the apply role.
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
 # main, so a pull request cannot get it even by editing this file. Values that identify
@@ -37,8 +38,41 @@ defaults:
     shell: bash
 
 jobs:
+  lint:
+    name: terraform-lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: terraform-lint-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.14.8"
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (both roots)
+        run: |
+          for dir in . okta; do
+            echo "== $dir"
+            terraform -chdir="$dir" init -input=false -backend=false > /dev/null
+            terraform -chdir="$dir" validate
+          done
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
   plan:
     name: terraform-plan
+    needs: lint
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 20
@@ -46,6 +80,7 @@ jobs:
       id-token: write
       contents: read
       pull-requests: write
+      actions: read
     concurrency:
       group: terraform-plan-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -82,13 +117,6 @@ jobs:
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
 
-      # Fast checks first: formatting (both Terraform roots) and validity.
-      - name: terraform fmt and validate
-        if: steps.gate.outputs.run == 'true'
-        run: |
-          terraform fmt -check -recursive -diff
-          terraform validate
-
       # -lock=false: the plan role is read-only and cannot write the S3 lock file.
       # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
       - name: terraform plan
@@ -102,15 +130,16 @@ jobs:
           cat plan.txt
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
 
-      # The comment is public and NOT masked, so it gets a summary, never the raw plan:
-      # the plan line and the changing resource addresses. Quoted for_each keys can hold
-      # the hostname, so they are blanked; secret values are replaced; and nothing is
-      # posted if a 12-digit number (an account ID) is left.
-      - name: Build the redacted summary
+      # The comment is public and GitHub does NOT mask it, so every secret value and the
+      # account ID are replaced first (the same masking the run log gets). The summary
+      # (plan line + changing resources) must pass a 12-digit check or nothing is posted.
+      # The full plan is added only if the whole comment stays within 60,000 characters
+      # and it holds no 12-digit number; otherwise the comment links to this job instead.
+      - name: Build the plan comment
         if: steps.gate.outputs.run == 'true'
         env:
           EXITCODE: ${{ steps.plan.outputs.exitcode }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
           S1: ${{ secrets.FLEET_SUBDOMAIN }}
           S2: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
           S3: ${{ secrets.TF_STATE_BUCKET }}
@@ -119,27 +148,47 @@ jobs:
           S6: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           S7: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "terraform-plan") | .html_url' | head -1)
+          [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          mask() {
+            local text="$1" v
+            for v in "$S1" "$S2" "$S3" "$S4" "$S5" "$S6" "$S7" "$account"; do
+              [ -n "$v" ] && text=${text//"$v"/***}
+            done
+            printf '%s' "$text"
+          }
+          has12() { printf '%s' "$1" | grep -qE '(^|[^0-9])[0-9]{12}([^0-9]|$)'; }
+
           if [ "$EXITCODE" = "1" ]; then
-            body="**The plan failed.** The error is in the run log, not here, because error text can include identifiers."
+            summary="**The plan failed.** The error is in the full output below."
           else
             headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || echo "No plan line found.")
             rows=$(grep -E '^[[:space:]]*# .* (will be created|will be updated in-place|will be destroyed|must be replaced|will be replaced|will be read during apply)$' plan.txt \
               | sed -E 's/^[[:space:]]*# //; s/\["[^"]*"\]/["…"]/g' \
               | sed -E 's/^(.*) will be created$/| create | `\1` |/; s/^(.*) will be updated in-place$/| update | `\1` |/; s/^(.*) will be destroyed$/| destroy | `\1` |/; s/^(.*) (must|will) be replaced$/| replace | `\1` |/; s/^(.*) will be read during apply$/| read | `\1` |/' \
               | head -100 || true)
-            body="**${headline}**"
-            [ -n "$rows" ] && body+=$'\n\n| Action | Resource |\n|---|---|\n'"$rows"
+            summary="**${headline}**"
+            [ -n "$rows" ] && summary+=$'\n\n| Action | Resource |\n|---|---|\n'"$rows"
           fi
-          body=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$body"$'\n\nFull plan, with secret values masked: [run log]('"$RUN_URL"').\n'
-          account=$(aws sts get-caller-identity --query Account --output text)
-          for v in "$S1" "$S2" "$S3" "$S4" "$S5" "$S6" "$S7" "$account"; do
-            [ -n "$v" ] && body=${body//"$v"/***}
-          done
-          if printf '%s' "$body" | grep -qE '(^|[^0-9])[0-9]{12}([^0-9]|$)'; then
+          summary=$(mask "$summary")
+          if has12 "$summary"; then
             echo "::error title=Not posted::the summary still contains a 12-digit number (an account ID?)"
             exit 1
           fi
-          printf '%s' "$body" > summary.md
+
+          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary"
+          foot=$'\n\n[Workflow job]('"$job_url"$')\n'
+          full=$(mask "$(cat plan.txt)")
+          details=$'\n\n<details><summary>Full plan (secret values masked)</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
+          if has12 "$full"; then
+            details=$'\n\n_The full plan is not shown here because it contains a 12-digit number, which could be an account ID. See the [workflow job]('"$job_url"$')._'
+          elif [ $(( ${#head} + ${#details} + ${#foot} )) -gt 60000 ]; then
+            details=$'\n\n_The full plan is too long for a comment. See it in the [workflow job]('"$job_url"$')._'
+          fi
+
+          printf '%s' "$head$details$foot" > comment.md
 
       - name: Comment on the pull request
         if: steps.gate.outputs.run == 'true'
@@ -147,7 +196,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none --body-file summary.md
+          # Update this workflow's earlier comment (found by its marker) instead of adding one.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- terraform-plan -->"))) | .id' | tail -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md > /dev/null
+            echo "Updated the plan comment."
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
 
       - name: Fail if the plan failed
         if: steps.gate.outputs.run == 'true' && steps.plan.outputs.exitcode == '1'
@@ -157,7 +214,7 @@ jobs:
 
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl plan.txt summary.md
+        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md
 
   apply:
     name: terraform-apply
