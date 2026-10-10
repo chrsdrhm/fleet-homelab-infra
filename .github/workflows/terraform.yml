@@ -1,7 +1,7 @@
 # Terraform for this stack, in two jobs:
-#  - plan: on every pull request, a read-only plan with the plan role, and one PR comment
+#  - plan:  on every pull request, a read-only plan with the plan role, and one PR comment
 #          holding a redacted summary (comments are public and NOT masked).
-#  - run:  started by hand (never on push): plan, up or down with the apply role.
+#  - apply: started by hand (never on push): plan, up or down with the apply role.
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
 # main, so a pull request cannot get it even by editing this file. Values that identify
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
@@ -185,8 +185,8 @@ jobs:
         if: always()
         run: rm -f terraform.tfvars backend.hcl plan.txt summary.md
 
-  run:
-    name: terraform-run
+  apply:
+    name: terraform-apply
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
