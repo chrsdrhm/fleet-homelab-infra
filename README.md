@@ -32,7 +32,7 @@ Fleet's Terraform module is used as published (pinned to a release tag), with sm
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
-That works because what has to survive a teardown is kept outside it: the database (through the snapshot), the Fleet server key that encrypts data in that database, the Windows MDM certificate, the software-installers bucket, DNS and the TLS certificate.
+That works because what has to survive a teardown is kept outside it: the database (through the snapshot, including Apple MDM's push certificate and keys, which Fleet stores there), the Fleet server key that encrypts data in that database, the Windows MDM certificate (kept in Secrets Manager), the software-installers bucket, DNS and the TLS certificate, and the email sending identity.
 
 ## Identity: an Okta free tenant
 
