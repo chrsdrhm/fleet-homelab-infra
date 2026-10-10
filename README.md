@@ -4,7 +4,7 @@
 
 Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project for learning and experimentation.
 
-> **This is a personal learning project, not production guidance.** It runs in my own AWS account, is torn down when I'm not using it, and is here so I can work through the tooling in the open. Take ideas from it, but don't treat it as a hardened reference architecture.
+> **This is a personal learning project, not production guidance.** It runs in my own AWS account, is torn down when I'm not using it, and is here so I can work through the tooling in the open. Fleet's own configuration (SSO, fleets, policies) lives in a separate repo: [`fleet-homelab-gitops`](https://github.com/chrsdrhm/fleet-homelab-gitops). Take ideas from it, but don't treat it as a hardened reference architecture.
 
 ## What this is
 
