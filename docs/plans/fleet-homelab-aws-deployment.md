@@ -1181,6 +1181,8 @@ Note for later: because the Aurora snapshot/restore mechanism preserves the data
 
 ### Task 12: Osquery log destination — Firehose → S3
 
+**Cost:** under $1/month at homelab volume. Firehose bills $0.029/GB ingested with each record rounded up to 5 KB, and only while hosts check in (so only while the stack is up). The three buckets expire objects after 30 days and stay outside the teardown.
+
 **Files:**
 - Create: `logging.tf`
 - Modify: `fleet.tf` (merge the addon's outputs into `fleet_config`)
@@ -1299,7 +1301,7 @@ resource "aws_budgets_budget" "fleet_homelab" {
 
 `budget_alert_email` is a sensitive-by-privacy variable (add it to `variables.tf` as `type = string`, to `example.tfvars` as a placeholder, and to the real `terraform.tfvars`; Task 15's workflow supplies it from a `BUDGET_ALERT_EMAIL` repo secret). It stays out of Git because this repo is public.
 
-Given the actual usage pattern (torn down most of the time, averaging about $15/mo per the spec), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
+Given the actual usage pattern (torn down most of the time, averaging about $15/mo per the spec, or about $25/mo with the optional Grafana workspace), this $100/mo target gives generous headroom — it's really a safety net against forgetting to run `down.sh`, not a tight budget line.
 
 - [x] **Step 2: Validate and plan**
 
@@ -2209,7 +2211,7 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
 
 **Optional by design.** Everything lives in a separate Terraform root, `grafana/`, with its own state key (`fleet-homelab/grafana.tfstate`), like `okta/`. Someone cloning the repo who does not want Grafana simply never applies it: the main stack, `up`/`down` and CI do not reference it. The Okta side is optional the same way: `okta/` creates the Grafana SAML app only when `grafana_workspace_endpoint` is set (empty by default).
 
-**Always on, not torn down.** AMG bills per active user per month, with a minimum of one editor licence per workspace: about **$9/month** for one admin (me), whether or not the Fleet stack is up. Deleting and re-creating it each session would not reliably save money and would lose anything not in code, so `down.sh` never touches it. While the stack is down, CloudWatch history (kept 15 months) stays visible and the Fleet panels show no data. API keys and service accounts are billed like users, so this design uses none: no Grafana provider in Terraform, panels built by hand. AWS offers a 90-day free trial for up to five users.
+**Always on, not torn down.** AMG bills per active user per month, with a minimum of one editor licence per workspace: about **$9/month** for one admin (me), whether or not the Fleet stack is up. Deleting and re-creating it each session would not reliably save money and would lose anything not in code, so `down.sh` never touches it. While the stack is down, CloudWatch history (kept 15 months) stays visible and the Fleet panels show no data. API keys and service accounts are billed like users, so this design uses none: no Grafana provider in Terraform, panels built by hand. AWS offers a 90-day free trial for up to five users. **CloudWatch queries cost extra and never fall in the free tier:** `GetMetricData` is $0.01 per 1,000 metrics, so evaluate alert rules every 5 minutes (about $0.50/month for ~5 rules; every minute is about $2) and don't leave a dashboard open on a 1-minute auto-refresh (about $5–6/month). The spec's Cost section has the totals: about $25/month on average with Grafana, versus $15 without.
 
 **Verified before writing (2026-10-10):**
 - `aws_grafana_workspace` (AWS provider docs): `account_access_type = "CURRENT_ACCOUNT"`, `authentication_providers = ["SAML"]`, `permission_type` (`SERVICE_MANAGED` or `CUSTOMER_MANAGED`), `role_arn`, `notification_destinations = ["SNS"]`, `grafana_version` (`9.4`, `10.4`, `12.4`, `13.2`), and `configuration` as JSON, where `plugins.pluginAdminEnabled = true` turns on plugin management (needed for the Infinity plugin). Exports `endpoint`.

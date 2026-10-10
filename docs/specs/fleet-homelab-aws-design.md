@@ -228,7 +228,8 @@ Two separate log streams, not one (the second is planned, plan Task 12, not buil
 
 One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target: well above the expected ~$15/mo, so in practice the alerts
+$100/mo target: well above the expected ~$15/mo (~$25 with the optional
+Grafana workspace), so in practice the alerts
 catch a stack left running (about $6.45 a day). Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
 without actions are free.
@@ -270,13 +271,36 @@ Route 53 zone ($0.50), two secrets (the Fleet server key and the MDM secret,
 $0.40 each), the two newest Aurora teardown snapshots (storage for a small
 database, cents), and the S3 buckets (state, software installers, IdP logo;
 cents). Free: the ACM certificate, the SES identity and the budget. Okta's
-Free Plan and GitHub Actions on public repos cost nothing. The optional
-Grafana workspace adds about $9/month, always on (see Dashboard).
+Free Plan and GitHub Actions on public repos cost nothing.
+
+**Planned additions** (plan tasks not built yet):
+
+| Addition | Task | When it bills | ~$/month |
+|---|---|---|---|
+| Amazon Managed Grafana, one admin (optional) | 17 | Always on | $9.00 |
+| Grafana's CloudWatch queries (`GetMetricData`, $0.01 per 1,000 metrics, never in the free tier) | 17 | Always on: ~5 alert rules every 5 minutes ≈ 43,000 metrics | ~$0.50 |
+| SNS email for Grafana alerts | 17 | Per email; the first 1,000 a month are free | $0 |
+| Firehose and S3 for osquery logs (Firehose $0.029/GB, each record rounded up to 5 KB) | 12 | Only while hosts check in, so only while up | <$1 |
+| Activities webhook: API Gateway, Lambda, DynamoDB | 19 | Always on, per request; Lambda and DynamoDB stay in the free tier at this volume | ~$0 |
+| End-user SSO (a second Okta app); Apple push certificate | 20, 8B | — | $0 |
+
+Watch two Grafana costs: evaluating alert rules every minute instead of every
+five roughly quadruples the query cost (~$2/mo), and a dashboard left open
+and auto-refreshing every minute adds about $5–6/mo in queries. Each extra
+active Grafana user adds $9 (editor) or $5 (viewer) a month.
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
-hours), 50 × $0.27 + $1.40 ≈ **$15/mo**, the number that matters for this
-deployment. Each extra hour up adds about $0.27; each full day left running
-adds about $6.45.
+hours):
+- **Stack only:** 50 × $0.27 + $1.40 ≈ **$15/mo**, the number that matters for
+  this deployment.
+- **With everything planned**, Grafana included: the always-on part rises to
+  about $11/mo (about $0.37/day torn down), so 50 × $0.27 + $11 ≈ **$25/mo**.
+  The hourly cost while up stays about $0.27, since the additions are almost
+  all fixed monthly charges; left running for a whole month, everything comes
+  to about $207.
+
+Each extra hour up adds about $0.27; each full day left running adds about
+$6.45.
 
 This is essentially the original, pre-cost-cut sizing — see the "Why the
 reversal" note above. It only makes sense given the intermittent usage
