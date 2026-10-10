@@ -62,14 +62,14 @@ echo "Up. /healthz -> HTTP $H; / -> HTTP $ROOT (200 = data restored; a 307 to /s
 
 # Start a GitOps run, so a config change pushed while the stack was down is applied now.
 # Best effort: needs the GitHub CLI with access to that repo (locally your own login; in
-# CI the GITOPS_DISPATCH_TOKEN secret as GH_TOKEN). NO_GITOPS=1 skips it.
+# CI a GitHub App token as GH_TOKEN). NO_GITOPS=1 skips it.
 GITOPS_REPO="${GITOPS_REPO:-chrsdrhm/fleet-homelab-gitops}"
 if [ "$H" = "200" ] && [ -z "${NO_GITOPS:-}" ]; then
   if command -v gh >/dev/null 2>&1 && gh workflow run workflow.yml --repo "$GITOPS_REPO" --ref main >/dev/null 2>&1; then
     echo "Started a GitOps run in $GITOPS_REPO (follow it with: gh run watch --repo $GITOPS_REPO)."
   else
     if [ -n "${GITHUB_ACTIONS:-}" ]; then
-      echo "::warning title=GitOps run not started::Check the GITOPS_DISPATCH_TOKEN secret (missing, expired, or lacking Actions write on $GITOPS_REPO)."
+      echo "::warning title=GitOps run not started::Check the GitHub App: the GITOPS_APP_CLIENT_ID and GITOPS_APP_PRIVATE_KEY secrets, and that the app is installed on $GITOPS_REPO with Actions write."
     fi
     echo "Could not start a GitOps run (gh missing, not logged in, or no access). Start it by hand:" >&2
     echo "  gh workflow run workflow.yml --repo $GITOPS_REPO --ref main" >&2

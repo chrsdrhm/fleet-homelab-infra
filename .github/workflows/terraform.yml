@@ -259,13 +259,26 @@ jobs:
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
 
-      # GH_TOKEN: a fine-grained token limited to the GitOps repo (Actions: read and
-      # write), so up.sh can start its workflow; this run's own token cannot.
+      # A GitHub App token (GitOps repo only, Actions write, revoked when the job ends)
+      # lets up.sh start the GitOps workflow; this run's own token cannot. Best effort:
+      # without it, up.sh still rebuilds and warns that the GitOps run did not start.
+      - name: Get a token for the GitOps repo
+        id: gitops-token
+        if: inputs.action == 'up'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GITOPS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: fleet-homelab-gitops
+          permission-actions: write
+
       # FLEET_CI_HEADER gets up.sh's health check past the WAF's US-only rule.
       - name: Up
         if: inputs.action == 'up'
         env:
-          GH_TOKEN: ${{ secrets.GITOPS_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: ./scripts/up.sh
 
