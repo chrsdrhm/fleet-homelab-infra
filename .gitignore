@@ -17,3 +17,4 @@ tfaz*
 backend.hcl
 
 __pycache__/
+.check-tools/

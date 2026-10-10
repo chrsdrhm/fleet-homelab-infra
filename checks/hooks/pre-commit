@@ -3,10 +3,10 @@
 # ID, Okta org or app ID, personal email or signed token (patterns, no setup needed), or
 # any value listed as a hash in FLEET_HOMELAB_PRIVATE_HASHES (default
 # ~/.config/fleet-homelab/private-hashes; hashes only, never plaintext).
-# Turn on with:  git config core.hooksPath .githooks
+# Turn on with:  git config core.hooksPath checks/hooks
 # CI runs the same check on every pull request.
 set -uo pipefail
-check="$(git rev-parse --show-toplevel)/scripts/check-private-values.py"
+check="$(git rev-parse --show-toplevel)/checks/private-values/check.py"
 fail=0
 git diff --cached --name-only | python3 "$check" "staged file names" || fail=1
 while IFS= read -r f; do

@@ -1,10 +1,10 @@
 # Terraform for this stack, in three jobs:
-#  - lint:  on every pull request, no AWS: private-values check, fmt, validate, terraform test,
-#           shellcheck, actionlint, zizmor, tflint.
+#  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
+#           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
 #  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
 #           summary and the full plan, masked (comments are public and NOT masked by GitHub).
 #           A plan that destroys or replaces a resource holding data fails the check unless
-#           the pull request has the `allow-destroy` label.
+#           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
 #  - apply: started by hand (never on push): up or down with the apply role.
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
 # main, so a pull request cannot get it even by editing this file. Values that identify
@@ -61,102 +61,43 @@ jobs:
           persist-credentials: false
           fetch-depth: 0 # the private-values check diffs against the base branch
 
-      # Fails if the pull request adds a private value in a changed line, a file name, a
-      # commit message, or its title and body: AWS account IDs, Okta org and app IDs,
-      # personal emails and signed tokens by pattern (always), plus any value listed by
-      # SHA-256 hash in the PRIVATE_HASHES secret (when set; no plaintext anywhere).
-      # Reports where, never the value.
-      - name: Check for private values
-        env:
-          PRIVATE_HASHES: ${{ secrets.PRIVATE_HASHES }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          TITLE: ${{ github.event.pull_request.title }}
-          BODY: ${{ github.event.pull_request.body }}
-        run: |
-          python3 scripts/test_check_private_values.py
-          export FLEET_HOMELAB_PRIVATE_HASHES="$RUNNER_TEMP/private-hashes"
-          printf '%s\n' "$PRIVATE_HASHES" > "$FLEET_HOMELAB_PRIVATE_HASHES"
-          if [ -z "$PRIVATE_HASHES" ]; then
-            echo "::notice title=Patterns only::No PRIVATE_HASHES secret here (for example, a fork), so only the pattern rules run."
-          fi
-          fail=0
-          check() { python3 scripts/check-private-values.py "$1" || fail=1; }
-          git diff --name-only "$BASE...$HEAD" | check "the changed file names"
-          while IFS= read -r f; do
-            git diff -U0 "$BASE...$HEAD" -- "$f" | grep '^+' | grep -v '^+++' | check "the added lines of $f"
-          done < <(git diff --name-only --diff-filter=d "$BASE...$HEAD")
-          git log --format=%B "$BASE..$HEAD" | check "the commit messages"
-          printf '%s\n%s\n' "$TITLE" "$BODY" | check "the pull request title and body"
-          rm -f "$FLEET_HOMELAB_PRIVATE_HASHES"
-          if [ "$fail" -ne 0 ]; then
-            echo "::error title=Private value found::Remove it from the pull request (and from the history of its commits)."
-          fi
-          exit "$fail"
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: "1.14.8"
           terraform_wrapper: false
 
-      - name: terraform fmt
-        run: terraform fmt -check -recursive -diff
+      # Everything else lives in checks/ (see checks/README.md): the same script runs
+      # locally. Without checks/, the fallback below still runs fmt and validate.
+      - name: Install check tools
+        if: hashFiles('checks/install-tools.sh') != ''
+        run: checks/install-tools.sh
 
-      - name: terraform validate (both roots)
-        run: |
-          for dir in . okta; do
-            echo "== $dir"
-            terraform -chdir="$dir" init -input=false -backend=false > /dev/null
-            terraform -chdir="$dir" validate
-          done
-
-      # tests/*.tftest.hcl: a plan against mocked providers (no AWS or credentials) that
-      # pins down the CI roles' trust, the WAF rules, the logo bucket and the budget.
-      - name: terraform test
-        run: terraform test
-
-      - name: shellcheck
-        run: shellcheck scripts/*.sh .githooks/*
-
-      # Release binaries, pinned and checked against their published SHA-256 checksums,
-      # so no third-party action is needed. Dependabot cannot update these: bump the
-      # version and checksum together by hand.
-      - name: Install actionlint and tflint
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -fsSLo actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
-          tar xzf actionlint.tar.gz -C bin actionlint
-          curl -fsSLo tflint.zip https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip
-          echo "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537  tflint.zip" | sha256sum -c -
-          unzip -q tflint.zip -d bin
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      # Workflow files, including the shell in run: blocks (actionlint runs shellcheck).
-      - name: actionlint
-        run: actionlint
-
-      # Security audit of the workflows and actions. The official image, pinned by digest.
-      - name: zizmor
+      - name: Run checks
+        if: hashFiles('checks/run.sh') != ''
         env:
+          PRIVATE_HASHES: ${{ secrets.PRIVATE_HASHES }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          docker run --rm -v "$PWD:/repo:ro" -w /repo -e GH_TOKEN \
-            ghcr.io/zizmorcore/zizmor@sha256:a2eb396d886c053073405c7a980f2139ba2248ec172243cfa3841e57196e8101 \
-            --no-progress --format github .
-
-      # Our own Terraform (not Fleet's modules) against the AWS ruleset pinned in .tflint.hcl.
-      # tflint --init downloads the ruleset and verifies its signature.
-      - name: tflint (both roots)
-        env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          tflint --init --config="$PWD/.tflint.hcl"
+          export FLEET_HOMELAB_PRIVATE_HASHES="$RUNNER_TEMP/private-hashes"
+          printf '%s\n' "$PRIVATE_HASHES" > "$FLEET_HOMELAB_PRIVATE_HASHES"
+          if [ -z "$PRIVATE_HASHES" ]; then
+            echo "::notice title=Patterns only::No PRIVATE_HASHES secret here (for example, a fork), so the private-values check uses its patterns only."
+          fi
+          checks/run.sh
+
+      - name: terraform fmt and validate (without checks/)
+        if: hashFiles('checks/run.sh') == ''
+        run: |
+          terraform fmt -check -recursive -diff
           for dir in . okta; do
-            echo "== $dir"
-            tflint --chdir="$dir" --config="$PWD/.tflint.hcl" --format=compact
+            terraform -chdir="$dir" init -input=false -backend=false > /dev/null
+            terraform -chdir="$dir" validate
           done
 
   plan:
@@ -222,19 +163,11 @@ jobs:
           cat plan.txt
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
 
-          # Resources that hold data or identity and must not be destroyed or replaced by
-          # accident: the database, the server key that decrypts it, secrets, buckets, the
-          # DNS zone, the certificate and the email identity.
+          # Data-loss guard (checks/data-loss-guard.sh, if present): resources this plan
+          # would destroy or replace that hold data or identity.
           : > data-loss.txt
-          if [ "$code" = "2" ]; then
-            terraform show -json tfplan > plan.json
-            jq -r '.resource_changes[]
-              | select(.change.actions | index("delete"))
-              | select((.type | IN("aws_rds_cluster", "aws_secretsmanager_secret", "aws_s3_bucket",
-                  "aws_route53_zone", "aws_acm_certificate", "aws_ses_domain_identity"))
-                or .address == "random_password.fleet_server_private_key")
-              | "\(.address) (\(if (.change.actions | index("create")) then "replace" else "destroy" end))"' plan.json \
-              | sed -E 's/\["[^"]*"\]/["…"]/g' > data-loss.txt
+          if [ "$code" = "2" ] && [ -x checks/data-loss-guard.sh ]; then
+            checks/data-loss-guard.sh tfplan > data-loss.txt
           fi
           if [ -s data-loss.txt ]; then
             echo "::warning title=Data at risk::this plan destroys or replaces $(wc -l < data-loss.txt | tr -d ' ') resource(s) that hold data; see the PR comment."
@@ -353,7 +286,7 @@ jobs:
 
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md tfplan plan.json data-loss.txt
+        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md tfplan data-loss.txt
 
   apply:
     name: terraform-apply

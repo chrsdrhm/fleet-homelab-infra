@@ -14,7 +14,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **DNS and TLS:** a Route 53 hosted zone for a subdomain, delegated from Cloudflare (also managed in Terraform), with an ACM certificate.
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
-- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned.
+- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned; the checks live in [`checks/`](checks/README.md).
 - **Observability (optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out; it stays up all the time for about $10 a month.
 
 ## Cost
@@ -47,9 +47,8 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `*.tf` | The AWS and Cloudflare Terraform configuration |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
 | `grafana/` | Optional. The Amazon Managed Grafana workspace, its IAM role and alert topic (its own Terraform root, applied locally) |
-| `scripts/` | `up.sh`, `down.sh`, `tf-apply.sh` (apply with one known retry), and the private-values check, its self-test and sync script |
-| `tests/` | `terraform test` files: the CI roles' trust, WAF rules, public bucket scope and budget, against mocked providers |
-| `.githooks/` | Optional local hooks that block commits containing private values (`git config core.hooksPath .githooks`) |
+| `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
+| `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |
 | `docs/plans/` | The implementation plan, including problems found and fixed while running it |
@@ -59,7 +58,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 
 - **No AWS keys in GitHub.** CI reaches AWS through OIDC. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role.
 - **No shortcuts to `main`.** Every change goes through a pull request whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public. A plan that would destroy or replace something holding data (the database, a secret, a bucket, DNS, the certificate) fails its check unless the pull request has the `allow-destroy` label.
-- **No private values in the repo.** Every pull request is checked for AWS account IDs, Okta org and app IDs, personal email addresses and signed tokens, by pattern. Values a pattern can't describe (like my hostname) are checked against a list of their SHA-256 hashes in a repository secret, so the list itself contains no plaintext. It reports where it found something, never the value. Values that look real in examples and tests (`123456789012`, `example.com`) are standard placeholders. **If you reuse this repo:** the patterns work with no setup; to check your own values too, add their hashes with `scripts/check-private-values.py --add`, sync them with `scripts/sync-private-hashes.sh`, and optionally turn on the local hooks.
+- **No private values in the repo.** Every pull request is checked for AWS account IDs, Okta org and app IDs, personal email addresses and signed tokens, by pattern. Values a pattern can't describe (like my hostname) are checked against a list of their SHA-256 hashes in a repository secret, so the list contains no plaintext. It reports where it found something, never the value. Values that look real in examples and tests (`123456789012`, `example.com`) are standard placeholders. **If you reuse this repo:** the patterns work with no setup, and [`checks/README.md`](checks/README.md) explains adding your own values, the optional local hooks, and how to remove the checks entirely.
 - **Found a problem?** Please [report it privately](https://github.com/chrsdrhm/fleet-homelab-infra/security/advisories/new) through this repo's **Security** tab instead of opening a public issue.
 
 ## Built with AI assistance

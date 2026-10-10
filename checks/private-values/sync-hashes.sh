@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Copies the local hash list (the one source of truth; SHA-256 hashes only, no
-# plaintext) to the PRIVATE_HASHES secret in both repos, for Actions and Dependabot,
-# so CI checks the same list as the local hooks. Add a value first with:
-#   scripts/check-private-values.py --add
+# Copies the local hash list (the one source of truth: SHA-256 hashes with plain labels,
+# no plaintext values) to the PRIVATE_HASHES secret in both repos, for Actions and
+# Dependabot, so CI checks the same list as the local hooks. GitHub never shows a secret
+# again, so this is the only way to update it. Change the list first with
+# checks/private-values/check.py (--from-tfvars, --add LABEL, --remove LABEL); see
+# checks/README.md for when.
 set -euo pipefail
 hashes="${FLEET_HOMELAB_PRIVATE_HASHES:-$HOME/.config/fleet-homelab/private-hashes}"
 owner="${GITHUB_OWNER:-chrsdrhm}"
 repos=(fleet-homelab-infra fleet-homelab-gitops)
 
 [ -f "$hashes" ] || { echo "No hash list at $hashes" >&2; exit 1; }
-list=$(grep -E '^[[:space:]]*[0-9a-fA-F]{64}[[:space:]]*$' "$hashes" || true)
+list=$(grep -E '^[[:space:]]*[0-9a-fA-F]{64}([[:space:]]|$)' "$hashes" || true)
 [ -n "$list" ] || { echo "No hashes in $hashes; nothing set." >&2; exit 1; }
 
 for repo in "${repos[@]}"; do
