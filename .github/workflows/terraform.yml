@@ -148,13 +148,13 @@ jobs:
         env:
           EXITCODE: ${{ steps.plan.outputs.exitcode }}
           GH_TOKEN: ${{ github.token }}
-          S1: ${{ secrets.FLEET_SUBDOMAIN }}
-          S2: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
-          S3: ${{ secrets.TF_STATE_BUCKET }}
-          S4: ${{ secrets.BUDGET_ALERT_EMAIL }}
-          S5: ${{ secrets.FLEET_LICENSE_KEY }}
-          S6: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          S7: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
+          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: |
           account=$(aws sts get-caller-identity --query Account --output text)
           job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
@@ -162,7 +162,8 @@ jobs:
           [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           mask() {
             local text="$1" v
-            for v in "$S1" "$S2" "$S3" "$S4" "$S5" "$S6" "$S7" "$account"; do
+            for v in "$FLEET_SUBDOMAIN" "$CLOUDFLARE_ZONE_NAME" "$TF_STATE_BUCKET" "$BUDGET_ALERT_EMAIL" \
+                     "$FLEET_LICENSE_KEY" "$CLOUDFLARE_API_TOKEN" "$WAF_CI_HEADER_VALUE" "$account"; do
               [ -n "$v" ] && text=${text//"$v"/***}
             done
             printf '%s' "$text"
