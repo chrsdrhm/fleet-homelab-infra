@@ -1,7 +1,7 @@
 # Fleet Premium on AWS — homelab deployment design
 
-Date: 2026-09-17
-Status: approved, ready for implementation plan
+Started: 2026-09-17
+Status: built and running (Tasks 12, 17, 19 and 20 in the plan are still open); kept up to date as the build changes
 
 ## Goal
 
@@ -30,14 +30,30 @@ AWS cost, since this is for personal homelab learning, not production scale.
   role unless explicitly assigned: Fleet creates a new SSO user with no role
   claim as a global observer, and Entra lets Global Administrators sign in
   to any app regardless of "assignment required" (only a Conditional Access
-  policy holds them). Okta is documented to refuse unassigned users, super
-  admins included, which is **still to be verified in the build (Task 10
-  Step 5)**. The org is an Okta Workforce
-  Identity free trial, which converts after 30 days to a Free Plan (up to 10
-  users, no support, can end on 45 days of inactivity). The Integrator Free
-  plan was rejected because its terms exclude production use, and paid
-  Starter ($1,500 annual minimum) is far over budget. Fleet's SSO is
-  generic SAML, so nothing in the AWS infrastructure changes.
+  policy holds them). Okta refuses unassigned users, super
+  admins included (verified in the build, plan Task 10 Step 5). Fleet's SSO is
+  generic SAML, so nothing in the AWS infrastructure changed.
+- **The Okta org: a Workforce Identity free trial that becomes a Free Plan.**
+  Signed up at okta.com/free-trial (work email, name, phone and country); the
+  org gets a generated `trial-<number>.okta.com` address. The trial runs 30
+  days with everything on, then converts automatically to a Free Plan: up to
+  10 users, single sign-on, Universal Directory and MFA, no support, and Okta
+  may end an org after 45 days of inactivity, so an admin signs in at least
+  monthly (a calendar reminder). Cost: $0. Rejected: the Integrator Free plan,
+  whose terms exclude production use, and paid Starter ($1,500 annual minimum).
+  If Okta ever ends the org, the SSO setup is Terraform and rebuilds in a new
+  org quickly.
+- **Terraform's access to Okta** is an OAuth 2.0 **API Services** app (in this
+  org's console it is under Create App Integration → **Classic experience**),
+  using client credentials with a key pair: the provider signs a short-lived
+  assertion with the private key and gets a one-hour access token on each run.
+  The app is granted the `okta.apps.manage` and `okta.groups.manage` scopes and
+  the **Super Administrator** role (Organization Administrator was not enough to
+  create the SAML app). The private key, shown once, lives in a file outside
+  the repo; the client ID, key ID and the key's path are in the gitignored
+  `okta/terraform.tfvars`. Better than an API token, which Okta revokes after
+  30 days unused, but still a static credential, which is one reason `okta/`
+  is applied locally and never from CI.
 - **JIT provisioning + group-based role mapping** (Premium): SAML SSO
   configured via Fleet GitOps `org_settings.sso_settings` (`entity_id`,
   `idp_name`, `metadata_url`, `enable_sso_idp_login`, `enable_jit_provisioning`).
@@ -49,7 +65,10 @@ AWS cost, since this is for personal homelab learning, not production scale.
   Fleet-side mapping table: two Okta groups ("Fleet Admins", "Fleet Observers")
   are assigned to the Okta SAML app, and an attribute statement emits `admin`
   or `observer` from group membership (admin wins if a user is in both,
-  which avoids Fleet silently taking the last role value it is sent). The Okta
+  which avoids Fleet silently taking the last role value it is sent), and
+  `unassigned` otherwise: Fleet rejects that invalid value, so a user who
+  reaches the app without either group (for example by a direct assignment)
+  cannot sign in instead of keeping or getting a role. The Okta
   side is Terraform (`okta/`, separate state, applied locally, never from CI),
   except **group membership, which is never managed by Terraform** and is set
   by hand in the Okta console. Per-team role mapping
@@ -72,7 +91,7 @@ AWS cost, since this is for personal homelab learning, not production scale.
   in my personal password manager — deliberately *not* AWS Secrets
   Manager, so an IAM/AWS-side problem can't also lock out the break-glass
   path. JIT provisioning has no effect on this account since it isn't
-  SSO-authenticated. **MFA (optional, recommended, enabled last)**: it's the one account
+  SSO-authenticated. **MFA (enabled 2026-10-04, after SSO was proven)**: it's the one account
   protected by a password alone (SSO users get the IdP's own MFA), so it can get
   Fleet's email-based MFA (Premium, needs SMTP — provided by the SES addon).
   Enabled only *after* SSO is verified as a second way in, because MFA users
@@ -128,7 +147,7 @@ verbatim.
 per-hour-billed resource here (RDS, Redis, Fargate, NAT, ALB) was sized down
 specifically to minimize an *always-on* monthly bill. But my actual
 usage pattern is intermittent — running mostly evenings/weekends via full
-`terraform destroy`/`apply` cycles (see Pause tooling below), not
+`terraform destroy`/`apply` cycles (see Teardown tooling below), not
 continuously. Under that pattern, the delta between the cheap and the
 "real"/recommended sizing shrinks to a few dollars a month, so there's
 little reason to carry the operational downsides of the cheapest tier
@@ -143,14 +162,14 @@ Non-goals above.
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
-| Image | `fleetdm/fleet` (or the `quay.io` mirror to avoid Docker Hub rate limits) |
+| Image | `fleetdm/fleet:v4.92.0`, pinned (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon — superseded by Grafana's own native alerting on the same metrics (see Dashboard), delivered via a dedicated SES-SMTP IAM user |
+| Monitoring | No standalone CloudWatch-alarm addon — to be superseded by Grafana's own native alerting on the same metrics (see Dashboard, planned), delivered via a dedicated SES-SMTP IAM user. Until then, a read-only health scan runbook (plan Task 21) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
-| Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Pause tooling). AWS-managed KMS keys (no CMKs) throughout. |
-| License | `FLEET_LICENSE_KEY` supplied as an environment variable / Secrets Manager entry to the ECS task |
+| Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
+| License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
 | Terraform state | S3 backend with native locking (`use_lockfile = true`) — no DynamoDB table; `dynamodb_table` was deprecated in Terraform 1.11 in favor of S3's own conditional-write locking |
 
 ### DNS / TLS
@@ -194,7 +213,7 @@ GitHub.
 
 ## Logging
 
-Two separate log streams, not one:
+Two separate log streams, not one (the second is planned, plan Task 12, not built yet):
 
 - **Server logs** (Fleet's own operational stdout/stderr) — already handled
   by the module's default `awslogs` CloudWatch driver on the ECS task.
@@ -209,64 +228,95 @@ Two separate log streams, not one:
 
 One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target — comfortable headroom above the ~$84–86/mo estimate before
-alerting. First AWS Budget is free (2 free per account).
+$100/mo target: well above the expected ~$12–15/mo, so in practice the alerts
+catch a stack left running (about $5.70 a day). Budget data refreshes only a
+few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
+without actions are free.
 
 ## Cost
 
-Target, `us-east-1`, running continuously:
+The stack is built to be torn down when not in use, so there are three
+numbers: what it costs while it runs, what is left while it is down, and the
+monthly average that results.
 
-| Item | $/mo |
+**While running** (`us-east-1`, estimates from AWS list prices):
+
+| Item | $/mo if left running |
 |---|---|
 | Aurora MySQL `db.t3.medium`, single instance | ~$55–60 |
-| ElastiCache `cache.t4g.small`, 1 node | ~$23 |
-| Fargate (512 CPU / 4096MB, vuln scanning on) | ~$27 |
 | NAT Gateway | ~$33 |
+| Fargate (512 CPU / 4096MB, vuln scanning on) | ~$27 |
+| ElastiCache `cache.t4g.small`, 1 node | ~$23 |
 | ALB | ~$17 |
 | WAF | ~$6–8 |
+| CloudWatch (logs) | ~$3 |
 | Secrets Manager (~5 secrets) | ~$2 |
 | Route 53 hosted zone | ~$0.50 |
-| CloudWatch (logs only — alerting now happens in Grafana, not as billed CloudWatch alarms) | ~$3 |
 | SES | ~$0.50 |
-| Firehose + S3 (osquery/audit logs, 10-host volume) | ~$1 |
-| AWS Budgets | $0 (within free tier) |
-| **Total (always on)** | **~$170–176/mo** |
+| Firehose + S3 (osquery logs, once Task 12 is built) | ~$1 |
+| **Total** | **~$170–176/mo, about $0.24/hour or $5.70/day** |
 
-This is essentially the original, pre-cost-cut design — see the "Why the
+**While torn down:** about **$1–2/mo**. What stays: the Route 53 zone
+($0.50), Secrets Manager (the Fleet server key and the MDM secret, about
+$0.40 each), the Aurora teardown snapshots (the newest two; storage for a
+small database, cents), the S3 buckets (state, software installers, IdP logo;
+cents), and free items (the ACM certificate, the SES identity, the budget).
+Okta's Free Plan and GitHub Actions on public repos cost nothing.
+
+**Average:** at roughly one weekend a month of use (~7% uptime, about 50
+hours), **~$12–15/mo**, the number that matters for this deployment. Real
+data point: on 2026-10-05, after the first days of building, AWS Budgets
+showed about $6.70 spent that month with a forecast of about $14.
+
+This is essentially the original, pre-cost-cut sizing — see the "Why the
 reversal" note above. It only makes sense given the intermittent usage
-pattern below; **do not run this continuously** without revisiting sizing.
+pattern; **do not run this continuously** without revisiting sizing.
 
-### Teardown tooling (manual)
+### Teardown tooling (`up` and `down`)
 
 My actual usage pattern is intermittent — evenings/weekends only —
 so **`up`/`down` (full teardown) is the only mode**. There is no
 idle/resume pause: Redis, the ALB, WAF and the NAT Gateway have no
 "stopped" state, so pausing only Fargate and Aurora compute saves little,
-and only `up`/`down` removes their cost.
+and only `up`/`down` removes their cost. No automatic scheduling
+(Lambda/EventBridge) either: `up` and `down` are always started deliberately,
+from my laptop (`scripts/up.sh`, `scripts/down.sh`) or from the infra repo's
+GitHub Actions workflow (see Remote execution), which runs the same scripts.
 
-- **`up` / `down`** — full `terraform apply` / `terraform destroy` of the
-  VPC+compute+db+cache+alb stack (now including the VPC/NAT Gateway, which
-  wasn't torn down in the earlier no-NAT design), keeping the Route 53
-  hosted zone, Terraform state backend (S3, natively-locked), MDM secrets,
-  the software-installers bucket, the SES identity (free at rest, avoids
-  re-verification each session), Firehose/S3 log buckets, and the budget
-  alert intact. Gets cost down to
-  ~$1–2/mo while torn down. ~15–20 min turnaround to bring back up (Aurora +
-  NAT Gateway provisioning dominate — NAT alone takes a few minutes to
-  become available).
+**How long it takes** (measured on CI runs): `up` about **22 minutes**, `down`
+about **18–20 minutes**. Aurora dominates both: restoring the cluster and
+creating its instance on the way up, the snapshot and the deletion on the way
+down; the NAT Gateway and the migrations task add a few minutes.
 
-  At roughly one weekend a month of actual use (~7% uptime), this averages
-  to **~$12–15/mo** rather than the ~$170–176/mo always-on figure — this is
-  the number that actually matters for this deployment, not the always-on
-  total.
+**`down`** (`scripts/down.sh`, asks for `destroy` to confirm; in CI the
+`confirm` input):
+1. Takes an Aurora **cluster** snapshot, `fleet-homelab-teardown-<time>`, and
+   waits until it is available.
+2. Runs a targeted `terraform destroy` of the expensive part: `module.fleet`
+   (VPC with the NAT Gateway, Aurora, Redis, ALB, ECS), the migrations runner,
+   the WAF Web ACL and the DNS alias record.
+3. Deletes the Container Insights log group, which AWS re-creates as the
+   cluster shuts down (left behind, it breaks the next `up`).
+4. Deletes older teardown snapshots, keeping the newest two.
+5. Checks that no ECS cluster, Aurora, Redis, load balancer, NAT Gateway,
+   tagged VPC or WAF Web ACL is left, and fails if one is.
 
-  **Teardown preserves actual state, not just infrastructure:**
-  - `down` takes an Aurora **cluster** snapshot (`aws rds
-    create-db-cluster-snapshot`) immediately before destroying the cluster;
-    `up` finds the newest teardown snapshot and restores from it (via
-    `rds_config.snapshot_identifier`) instead of creating an empty database
-    (`up --fresh` starts empty), so hosts, policies, query results, and
-    user accounts survive a teardown/rebuild cycle.
+**`up`** (`scripts/up.sh`):
+1. Finds the newest teardown snapshot through the AWS API (so it works the
+   same on a fresh CI runner) and restores Aurora from it; `--fresh` starts
+   with an empty database instead.
+2. Plans and applies, retrying once on a known IAM propagation race
+   (`scripts/tf-apply.sh`).
+3. Waits for the ECS service to settle and checks `/healthz` and `/` (200 on
+   `/` means the data came back; a redirect to `/setup` means an empty
+   database).
+4. Starts a run of the GitOps repo's workflow, so Fleet's configuration from
+   `main` is applied straight after the rebuild.
+
+**What survives a teardown**, and why:
+  - **The database**, through the snapshot: hosts, policies, query results,
+    users (including the break-glass admin and its MFA setting) and Apple MDM
+    state.
   - The Fleet server's private-key secret (used to encrypt sensitive data at
     rest in the DB) is created and owned outside `module.fleet`, specifically
     so destroying that module doesn't destroy the key — a rebuilt server
@@ -274,27 +324,19 @@ and only `up`/`down` removes their cost.
     snapshot.
   - `module.mdm` (the `fleet-scep` secret holding the Windows WSTEP pair) is
     deliberately **not** in `down`'s destroy targets — losing it would lose
-    access to BitLocker keys escrowed under that certificate. (Apple MDM state
-    lives in the database and survives via the Aurora snapshot.) Left
-    provisioned, this costs ~$0.40/mo while torn down.
+    access to BitLocker keys escrowed under that certificate.
   - The software-installers bucket lives outside `module.fleet` (the module's
     own bucket is `force_destroy = true` and would be wiped on teardown);
     the task role is granted access via `extra_iam_policies`.
-  - Each teardown leaves a manual Aurora snapshot that bills until deleted;
-    `down` keeps the newest two and deletes older teardown snapshots.
+  - The Route 53 zone and ACM certificate (so the nameserver delegation and
+    the certificate stay valid), the SES identity (avoids re-verification),
+    the Terraform state bucket, the IdP logo bucket and the budget.
   - Redis needs none of this — it's cache/live-query pub-sub, not durable
     app state, so losing it on teardown is fine.
   - The VPC (including NAT Gateway) is destroyed and recreated each cycle
-    too — it's part of the same root module call as everything else now
-    (see AWS infrastructure above), so `-target=module.fleet`
-    (plus migrations, and the WAF Web ACL) handles it alongside Aurora/Redis/ALB/ECS, no separate
-    targeting needed. Cheap and fast relative to Aurora/ALB, and nothing durable
-    lives inside it (Route 53 and ACM are independent of the VPC).
-
-No automatic scheduling (Lambda/EventBridge) — `up`/`down`
-are always deliberately triggered, never time-based. What changes is *where
-from*: not my laptop except for testing (see Remote execution
-below).
+    too — it's part of the same root module call as everything else, so
+    `-target=module.fleet` handles it with no separate targeting. Nothing
+    durable lives inside it.
 
 ## Remote execution (GitHub Actions, OIDC, GitHub-hosted runners)
 
@@ -376,7 +418,7 @@ it in an ECS task it also defines. Closing that needs a permissions-boundary
 condition on every role it creates, and Fleet's modules expose no
 `permissions_boundary` input. It can also read the `fleet*` secrets and the
 state. The mitigation that fits is the trust policy — only a manual dispatch on
-`main` of a private single-user repo can assume the role — with an optional
+`main` of this single-owner repo can assume the role — with an optional
 stronger gate (a GitHub Environment with a required reviewer) not built here.
 It would need revisiting in any shared or production account.
 
@@ -393,6 +435,8 @@ fails, the rebuild still succeeds with a warning, and the nightly GitOps run
 catches up.
 
 ## Dashboard (Grafana)
+
+*Planned (plan Task 17), not built yet.*
 
 A Grafana instance on Proxmox, in its own LXC container — no new AWS cost, and it stays reachable even while the
 Fleet stack itself is torn down, since every one of its data sources is a
@@ -442,7 +486,8 @@ Task 18.)
 ## Repositories
 
 - **`fleet-homelab-infra`** (this repo) — Terraform config referencing the
-  `fleet-terraform` root module and addons, the
+  `fleet-terraform` root module and addons, the separate `okta/` root for the
+  Okta side (applied locally), the
   `up`/`down` operational scripts, and one GitHub Actions workflow
   (`terraform.yml`: `lint` and `plan` on pull requests, `apply` for on-demand
   up/down) with a shared setup action, that drives them remotely.
