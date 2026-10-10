@@ -188,7 +188,11 @@ jobs:
 
           head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary"
           foot=$'\n\n[Workflow job]('"$job_url"$')\n'
-          full=$(mask "$(cat plan.txt)")
+          # Only the plan itself: drop the refresh and read progress lines (they stay in the
+          # job log), keeping drift notes, the plan, warnings and errors.
+          full=$(grep -vE ': (Refreshing state\.\.\.|Reading\.\.\.|Read complete after |Still (reading|refreshing)\.\.\.)' plan.txt \
+            | sed -e '/./,$!d' || true)
+          full=$(mask "$full")
           details=$'\n\n<details><summary>Full plan (secret values masked)</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
           if has12 "$full"; then
             details=$'\n\n_The full plan is not shown here because it contains a 12-digit number, which could be an account ID. See the [workflow job]('"$job_url"$')._'
