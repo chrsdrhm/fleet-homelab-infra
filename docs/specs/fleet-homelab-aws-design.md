@@ -1,7 +1,7 @@
 # Fleet Premium on AWS — homelab deployment design
 
 Started: 2026-09-17
-Status: built and running (Tasks 12, 17, 19 and 20 in the plan are still open); kept up to date as the build changes
+Status: living design document, kept up to date as the build changes
 
 ## Goal
 
@@ -86,8 +86,7 @@ AWS cost, since this is for personal homelab learning, not production scale.
   authenticate with a second Okta app (the
   `/mdm/sso/callback` URL, NameID mapped to email) during MDM enrollment, so
   each host carries a verified IdP identity. Fleet requires two IdP apps if
-  both are used; roles and JIT apply only to the admin side. Not built until
-  the admin SSO is proven and there is a device to enroll.
+  both are used; roles and JIT apply only to the admin side.
 - **Break-glass account**: one Fleet global admin created via
   `fleetctl setup` — Fleet's first-run bootstrap, immediately after the first
   deploy (a fresh Fleet has no users, and `fleetctl user create` needs an
@@ -172,7 +171,7 @@ Non-goals above.
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon: alerting is planned in Grafana on the same metrics (see Dashboard, optional), delivered through SNS. Until then, a read-only health scan runbook (plan Task 21) |
+| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional), delivered through SNS, plus a read-only health scan runbook (plan Task 21) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
@@ -253,7 +252,7 @@ GitHub.
 
 ## Logging
 
-Two separate log streams, not one (the second is planned, plan Task 12, not built yet):
+Two separate log streams, not one:
 
 - **Server logs** (Fleet's own operational stdout/stderr) — already handled
   by the module's default `awslogs` CloudWatch driver on the ECS task.
@@ -268,7 +267,7 @@ Two separate log streams, not one (the second is planned, plan Task 12, not buil
 
 One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target: well above the expected ~$15/mo (~$25 with the optional
+$100/mo target: well above the expected ~$25/mo (~$15 without the optional
 Grafana workspace), so in practice the alerts
 catch a stack left running (about $6.45 a day). Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
@@ -301,8 +300,9 @@ hourly items × 730 hours):
 
 Fixed by the resources: everything priced per hour. Estimated from light
 homelab use: Aurora I/O, NAT data, data transfer and logs, which grow with
-enrolled hosts and traffic. Not in the total yet: Firehose and S3 for osquery
-logs (about $1/mo at 10 hosts, once plan Task 12 is built) and SES (cents).
+enrolled hosts and traffic. Also while up: Firehose for osquery logs
+(under $1/mo at 10 hosts; $0.029/GB with each record rounded up to 5 KB) and
+SES (cents).
 The public IPv4 charge, which AWS added in 2024, is easy to miss: it costs more
 than the WAF.
 
@@ -313,16 +313,17 @@ database, cents), and the S3 buckets (state, software installers, IdP logo;
 cents). Free: the ACM certificate, the SES identity and the budget. Okta's
 Free Plan and GitHub Actions on public repos cost nothing.
 
-**Planned additions** (plan tasks not built yet):
+**Always on, whether the stack is up or not:**
 
-| Addition | Task | When it bills | ~$/month |
-|---|---|---|---|
-| Amazon Managed Grafana, one admin (optional) | 17 | Always on | $9.00 |
-| Grafana's CloudWatch queries (`GetMetricData`, $0.01 per 1,000 metrics, never in the free tier) | 17 | Always on: ~5 alert rules every 5 minutes ≈ 43,000 metrics | ~$0.50 |
-| SNS email for Grafana alerts | 17 | Per email; the first 1,000 a month are free | $0 |
-| Firehose and S3 for osquery logs (Firehose $0.029/GB, each record rounded up to 5 KB) | 12 | Only while hosts check in, so only while up | <$1 |
-| Activities webhook: API Gateway, Lambda, DynamoDB | 19 | Always on, per request; Lambda and DynamoDB stay in the free tier at this volume | ~$0 |
-| End-user SSO (a second Okta app); Apple push certificate | 20, 8B | — | $0 |
+| Item | ~$/month |
+|---|---|
+| What the teardown leaves (above) | $1.40 |
+| Amazon Managed Grafana, one admin (optional) | $9.00 |
+| Grafana's CloudWatch queries (`GetMetricData`, $0.01 per 1,000 metrics, never in the free tier): ~5 alert rules every 5 minutes ≈ 43,000 metrics | ~$0.50 |
+| SNS email for Grafana alerts (the first 1,000 a month are free) | $0 |
+| Activities webhook: API Gateway, Lambda, DynamoDB (per request; Lambda and DynamoDB stay in the free tier at this volume) | ~$0 |
+| End-user SSO (a second Okta app); Apple push certificate | $0 |
+| **Total** | **~$11 (about $0.37/day); ~$2 without Grafana** |
 
 Watch two Grafana costs: evaluating alert rules every minute instead of every
 five roughly quadruples the query cost (~$2/mo), and a dashboard left open
@@ -331,13 +332,13 @@ active Grafana user adds $9 (editor) or $5 (viewer) a month.
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
-- **Stack only:** 50 × $0.27 + $1.40 ≈ **$15/mo**, the number that matters for
-  this deployment.
-- **With everything planned**, Grafana included: the always-on part rises to
-  about $11/mo (about $0.37/day torn down), so 50 × $0.27 + $11 ≈ **$25/mo**.
-  The hourly cost while up stays about $0.27, since the additions are almost
-  all fixed monthly charges; left running for a whole month, everything comes
-  to about $207.
+- **With Grafana:** 50 × $0.27 + $11 ≈ **$25/mo**, the number that matters
+  for this deployment.
+- **Without the optional Grafana:** 50 × $0.27 + $1.40 ≈ **$15/mo**.
+
+The hourly cost while up stays about $0.27, since Grafana and the webhook are
+fixed monthly charges; left running for a whole month, everything comes to
+about $207.
 
 Each extra hour up adds about $0.27; each full day left running adds about
 $6.45.
@@ -509,9 +510,6 @@ fails, the rebuild still succeeds with a warning, and the nightly GitOps run
 catches up.
 
 ## Dashboard (Grafana) — optional
-
-*Planned (plan Task 17), not built yet. Redesigned 2026-10-10 from a Proxmox
-container to Amazon Managed Grafana.*
 
 **Amazon Managed Grafana (AMG)**, in its own Terraform root (`grafana/`, own
 state key, applied locally like `okta/`). It is **optional**: the main stack,
