@@ -1890,7 +1890,7 @@ Expected: two ARNs like `arn:aws:iam::<ACCOUNT_ID>:role/fleet-homelab-github-act
   6. **Collaborators:** confirm Settings → Collaborators lists nobody but you. Outsiders can still *open* PRs from forks — that can't be turned off on a public repo as far as verified (GitHub's interaction limits can restrict it to collaborators for up to 6 months; check for any newer "restrict pull requests" setting) — but they can't merge, approve, run unapproved workflows, or read secrets.
   7. **Optional, not recommended here:** a `production` environment with a required reviewer. Setting `environment:` on a job changes the OIDC `sub` claim to the `...:environment:production` form, so `oidc.tf`'s trust condition would have to change with it.
 
-**Applied and verified via the API** (the repo was published and locked down in one session; these endpoints and payloads were run and read back, not just written down). `R=repos/<owner>/fleet-homelab-infra`:
+**Current reference: [`docs/github-setup.md`](../github-setup.md)** has every GitHub setting for both repos as they are now (including the required checks the JSON below predates). **Applied and verified via the API** (the repo was published and locked down in one session; these endpoints and payloads were run and read back, not just written down). `R=repos/<owner>/fleet-homelab-infra`:
 
 ```bash
 # 1. approval required for all outside contributors' fork-PR workflows
