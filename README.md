@@ -15,7 +15,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **Identity:** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups.
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub.
-- **Observability (planned):** a Grafana dashboard on my Proxmox server showing infrastructure health and Fleet asset data.
+- **Observability (planned, optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out; it stays up all the time for about $9 a month.
 
 ## Cost
 

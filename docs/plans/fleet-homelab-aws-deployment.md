@@ -4,7 +4,7 @@
 
 **Goal:** Stand up a publicly-accessible, Okta-SSO-federated, GitOps-managed Fleet Premium instance in my AWS account (`us-east-1`), matching Fleet's own recommended reference architecture as closely as possible, run intermittently (evenings/weekends) via full teardown/rebuild rather than continuously.
 
-**Architecture:** Terraform calls Fleet's own **root module** directly — one module call provisions the VPC, Aurora MySQL, Redis, an ALB, and an ECS Fargate service together, wiring their connection info and security groups automatically. This is a change from an earlier draft of this plan that called the nested `byo-vpc` module and hand-wrote a separate VPC — that split only existed to support NAT-off/public-subnet Fargate, a configuration this plan no longer uses (NAT is on, Fargate is private, which is the root module's own hardcoded default). Using the root module directly is simpler and closer to Fleet's own reference example. SES, MDM, and (planned) Firehose log delivery are added as Fleet's own addon modules; the WAF is a small custom Web ACL (Task 4), and monitoring moved into Grafana (Tasks 5 and 17). A separate `fleetctl new`-scaffolded repo drives Fleet's application config (SSO, teams, policies) via GitHub Actions GitOps. `up`/`down` scripts fully tear down and rebuild the stack each session, preserving actual Fleet data (not just infrastructure) via an Aurora snapshot and an externalized encryption key. The infra repo itself closes its own GitOps loop too (Tasks 15–16): `up`/`down` run on demand from a GitHub Actions workflow assuming an AWS role through OIDC (no long-lived AWS keys in GitHub), never on push, and every pull request gets a lint check and a `terraform plan` posted as a comment before merge — git is the source of truth for infra the same way it is for Fleet's own config, without forcing an apply every time something merges. A Grafana instance on Proxmox (Task 17) rounds this out with a dashboard over both CloudWatch infra metrics and Fleet's own asset data (hosts, policy compliance, vulnerabilities) — the one place a long-lived AWS credential exists in this whole plan, since Grafana runs outside AWS with no OIDC-equivalent federation path available to it.
+**Architecture:** Terraform calls Fleet's own **root module** directly — one module call provisions the VPC, Aurora MySQL, Redis, an ALB, and an ECS Fargate service together, wiring their connection info and security groups automatically. This is a change from an earlier draft of this plan that called the nested `byo-vpc` module and hand-wrote a separate VPC — that split only existed to support NAT-off/public-subnet Fargate, a configuration this plan no longer uses (NAT is on, Fargate is private, which is the root module's own hardcoded default). Using the root module directly is simpler and closer to Fleet's own reference example. SES, MDM, and (planned) Firehose log delivery are added as Fleet's own addon modules; the WAF is a small custom Web ACL (Task 4), and monitoring moved into Grafana (Tasks 5 and 17). A separate `fleetctl new`-scaffolded repo drives Fleet's application config (SSO, teams, policies) via GitHub Actions GitOps. `up`/`down` scripts fully tear down and rebuild the stack each session, preserving actual Fleet data (not just infrastructure) via an Aurora snapshot and an externalized encryption key. The infra repo itself closes its own GitOps loop too (Tasks 15–16): `up`/`down` run on demand from a GitHub Actions workflow assuming an AWS role through OIDC (no long-lived AWS keys in GitHub), never on push, and every pull request gets a lint check and a `terraform plan` posted as a comment before merge — git is the source of truth for infra the same way it is for Fleet's own config, without forcing an apply every time something merges. An optional Amazon Managed Grafana workspace (Task 17, its own Terraform root, always on, about $9/month) rounds this out with a dashboard and alerts over both CloudWatch infra metrics and Fleet's own asset data (hosts, policy compliance, vulnerabilities), reading CloudWatch through an IAM role rather than a stored key.
 
 **Tech Stack:** Terraform 1.14.8 (>= 1.12.0 required), AWS provider 6.x (>= 6.37.0), Cloudflare provider 5.x, Okta provider 7.x, `fleetdm/fleet-terraform` (root module + addons), Fleet and `fleetctl` 4.92, GitHub Actions (OIDC-federated, no stored AWS credentials), Okta Workforce Identity (free trial converting to the Free Plan).
 
@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -278,7 +278,7 @@ resource "cloudflare_dns_record" "fleet_ns" {
 
 **Create the API token yourself** (Cloudflare dashboard → My Profile → API Tokens → Create Token → "Edit zone DNS" template → Zone Resources: Include → Specific zone → your domain). Never use the global API key. Put the token and zone name in `terraform.tfvars` (gitignored) by editing the file directly, not by pasting the token into a chat. NS records have no proxy toggle, so there is nothing to set there. This delegates only the subdomain; the rest of the domain stays on Cloudflare untouched.
 
-This is a deliberate exception to "no long-lived credentials" (like the Grafana CloudWatch user in Task 17): Cloudflare has no OIDC federation for this. Task 15 stores it as a GitHub secret.
+This is a deliberate exception to "no long-lived credentials": Cloudflare has no OIDC federation for this. Task 15 stores it as a GitHub secret.
 
 - [x] **Step 7: Apply the rest and verify cert validation**
 
@@ -728,7 +728,7 @@ git commit -m "Attach a US-only AWS WAF Web ACL to the Fleet ALB"
 
 ### Task 5: Monitoring addon
 
-**Superseded — folded into Task 17, not a separate task to execute.** Originally a standalone CloudWatch-alarms-plus-SNS design. Reconsidered after I pointed out the overlap with the Grafana dashboard (Task 17): Grafana OSS has its own native alerting (verified against Grafana's own docs — not Enterprise-gated, and CloudWatch is an explicitly supported data source for Grafana-managed alert rules), so a second, separate CloudWatch-alarm system alongside it would be redundant. Task 17 now builds alerting directly on the same CloudWatch queries the dashboard already uses, with email delivered through Task 6's SES domain identity (a dedicated SES-SMTP IAM user, distinct from Fleet's own SES/API sending path). See Task 17 Steps 11-16.
+**Superseded — folded into Task 17, not a separate task to execute.** Originally a standalone CloudWatch-alarms-plus-SNS design. Reconsidered after I pointed out the overlap with the Grafana dashboard (Task 17): Grafana OSS has its own native alerting (verified against Grafana's own docs — not Enterprise-gated, and CloudWatch is an explicitly supported data source for Grafana-managed alert rules), so a second, separate CloudWatch-alarm system alongside it would be redundant. Task 17 now builds alerting directly on the same CloudWatch queries the dashboard already uses, with email delivered through an SNS topic (Task 17's Amazon Managed Grafana design; it replaced an SES-SMTP IAM user from the earlier Proxmox design). See Task 17 Step 8.
 
 ---
 
@@ -2203,259 +2203,52 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
 
 ---
 
-### Task 17: Grafana dashboard on Proxmox
+### Task 17: Grafana dashboard and alerting — Amazon Managed Grafana (optional)
 
-Infra health (ALB/ECS/Aurora/Redis) plus Fleet asset data (host counts, policy compliance, vulnerabilities), visualized rather than just alarmed on. Runs on Proxmox in its own LXC container — no new AWS compute cost, and the dashboard stays reachable even when the Fleet stack itself is torn down, since both data sources it queries (CloudWatch, Fleet's REST API) are public AWS/HTTPS endpoints, not something inside the VPC. This task sets up the plumbing (the container, the two data sources, the credentials each needs); the actual dashboard panels are left for you to build hands-on, since "learn how Grafana works" was the actual goal here, not a pre-built dashboard. **It also builds alerting** (Steps 11-16) — Grafana's own native alerting on the same CloudWatch queries the dashboard uses, replacing what an earlier draft had as a separate Task 5 (standalone CloudWatch alarms + SNS). One monitoring system instead of two: an alert shows up next to the metric that fired it, and there's no second notification channel to maintain.
+**Redesigned 2026-10-10: Amazon Managed Grafana (AMG) instead of a Proxmox container, and optional.** The Proxmox design only worked for someone with my Proxmox host, needed a static IAM access key for CloudWatch (the plan's one long-lived AWS credential), and a second IAM user for SES SMTP. In AMG, CloudWatch is read through an IAM role, alerts go out through SNS, AWS runs TLS, upgrades and patching, and the whole thing is Terraform anyone can apply. The goal is unchanged: learn Grafana hands-on; the plumbing is code, the panels and alert rules are built by hand.
 
-**A deliberate exception to this whole plan's "no long-lived credentials" pattern**: Grafana runs outside AWS with no equivalent to GitHub's OIDC federation available to it, so its CloudWatch data source needs a real, static AWS access key. Mitigated by scoping it to CloudWatch read-only actions alone (Step 3) — it cannot create, modify, or delete anything. (Task 18 would have added a second one, an Entra client secret; it was retired with Entra.)
+**Optional by design.** Everything lives in a separate Terraform root, `grafana/`, with its own state key (`fleet-homelab/grafana.tfstate`), like `okta/`. Someone cloning the repo who does not want Grafana simply never applies it: the main stack, `up`/`down` and CI do not reference it. The Okta side is optional the same way: `okta/` creates the Grafana SAML app only when `grafana_workspace_endpoint` is set (empty by default).
+
+**Always on, not torn down.** AMG bills per active user per month, with a minimum of one editor licence per workspace: about **$9/month** for one admin (me), whether or not the Fleet stack is up. Deleting and re-creating it each session would not reliably save money and would lose anything not in code, so `down.sh` never touches it. While the stack is down, CloudWatch history (kept 15 months) stays visible and the Fleet panels show no data. API keys and service accounts are billed like users, so this design uses none: no Grafana provider in Terraform, panels built by hand. AWS offers a 90-day free trial for up to five users.
+
+**Verified before writing (2026-10-10):**
+- `aws_grafana_workspace` (AWS provider docs): `account_access_type = "CURRENT_ACCOUNT"`, `authentication_providers = ["SAML"]`, `permission_type` (`SERVICE_MANAGED` or `CUSTOMER_MANAGED`), `role_arn`, `notification_destinations = ["SNS"]`, `grafana_version` (`9.4`, `10.4`, `12.4`, `13.2`), and `configuration` as JSON, where `plugins.pluginAdminEnabled = true` turns on plugin management (needed for the Infinity plugin). Exports `endpoint`.
+- `aws_grafana_workspace_saml_configuration`: `workspace_id`, `idp_metadata_url`, `editor_role_values` (required), `admin_role_values`, `role_assertion`, plus email, login and name assertions.
+- AMG alert contact points are **Amazon SNS, PagerDuty, Slack and VictorOps only**; there is no email/SMTP contact point (AMG docs, Grafana 12). Email therefore goes Grafana → SNS topic → email subscription.
+- Okta: AWS documents the Okta catalog app **"Amazon Managed Grafana"** (Sign On → Advanced Sign-on Settings: Name Space = workspace ID, Region), then pasting Okta's IdP metadata URL into AMG. By default Okta sends `displayName` as the name and `mail` as email and login.
 
 **Files:**
-- Create: `scripts/proxmox/create-grafana-lxc.sh`
-- Create: `scripts/proxmox/bootstrap-grafana.sh`
-- Create: `grafana-cloudwatch.tf`
-- Create: `grafana-alerting.tf`
+- Create: `grafana/providers.tf`, `grafana/backend.tf` (partial S3 backend, key `fleet-homelab/grafana.tfstate`), `grafana/backend.example.hcl`, `grafana/variables.tf`, `grafana/main.tf`, `grafana/outputs.tf`, `grafana/example.tfvars`
+- Modify: `okta/variables.tf`, `okta/main.tf` (or a new `okta/grafana.tf`), `okta/outputs.tf`
+- Modify: `.github/workflows/terraform.yml` (lint: validate the `grafana/` root too), `.github/dependabot.yml` (add `/grafana`)
 
 **Interfaces:**
-- Consumes: nothing from earlier Terraform state directly — talks to CloudWatch and Fleet's API as an external client, the same way you would from a browser or `curl`.
-- Produces: `aws_iam_access_key.grafana_cloudwatch` (Step 3's sensitive outputs, retrieved in Step 4 and pasted into Grafana's UI in Step 6), a read-only Fleet API token (created in Step 5, pasted into Grafana's UI in Step 7), and `aws_iam_access_key.grafana_ses_smtp` (Step 12's sensitive outputs, converted to an SES SMTP password in Step 13 and pasted into Grafana's own SMTP config in Step 14).
+- Consumes: CloudWatch metrics from the main stack (by name and dimension, not from its state); Fleet's API (`https://<fleet_subdomain>`) for the Infinity panels.
+- Produces: output `grafana_url`; output `workspace_endpoint` (input to `okta/`); from `okta/`, output `grafana_metadata_url` (input back to `grafana/`).
 
-- [ ] **Step 1: Write `scripts/proxmox/create-grafana-lxc.sh`** — run on the Proxmox host to create the container. (Grafana is the only thing on Proxmox now — the CI runner moved to GitHub-hosted in Task 15 when the repo went public.)
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Adjust these for your Proxmox environment (storage pool, template and bridge names are specific to your Proxmox host).
-VMID=901
-HOSTNAME=fleet-homelab-grafana
-TEMPLATE=local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst
-STORAGE=local-lvm
-BRIDGE=vmbr0
-CORES=2
-MEMORY=2048
-DISK_GB=10
-
-pct create "$VMID" "$TEMPLATE" \
-  --hostname "$HOSTNAME" \
-  --cores "$CORES" \
-  --memory "$MEMORY" \
-  --rootfs "${STORAGE}:${DISK_GB}" \
-  --net0 name=eth0,bridge="$BRIDGE",ip=dhcp \
-  --unprivileged 1 \
-  --onboot 1 \
-  --start 1
-
-echo "Container $VMID created and started. Waiting for network..."
-sleep 10
-pct exec "$VMID" -- bash -c "apt update && apt install -y curl gnupg sudo"
-
-echo "LXC $VMID is ready. Push and run the bootstrap script:"
-echo "  pct push $VMID scripts/proxmox/bootstrap-grafana.sh /root/bootstrap-grafana.sh"
-echo "  pct exec $VMID -- bash /root/bootstrap-grafana.sh"
-```
-
-- [ ] **Step 2: Write `scripts/proxmox/bootstrap-grafana.sh`** — installs Grafana OSS from its official apt repository, installs the Infinity plugin (Grafana Labs' own plugin for querying arbitrary REST/JSON APIs — not bundled with OSS core, confirmed via Grafana's own plugin docs), and starts it as a systemd service.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "Adding the Grafana apt repository..."
-apt update && apt install -y apt-transport-https software-properties-common wget gnupg
-mkdir -p /etc/apt/keyrings
-wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
-echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
-  | tee /etc/apt/sources.list.d/grafana.list
-
-echo "Installing Grafana..."
-apt update && apt install -y grafana
-
-echo "Installing the Infinity data source plugin..."
-grafana-cli plugins install yesoreyeram-infinity-datasource
-
-echo "Starting Grafana..."
-systemctl enable --now grafana-server
-
-echo "Grafana is up on port 3000. Check its status: systemctl status grafana-server"
-echo "Reach it at http://<this container's IP>:3000 (default login admin/admin, changes on first login)."
-```
-
-- [ ] **Step 3: Write `grafana-cloudwatch.tf`** — the scoped, read-only IAM user for Grafana's CloudWatch data source.
-
-```hcl
-resource "aws_iam_user" "grafana_cloudwatch" {
-  name = "fleet-homelab-grafana-cloudwatch"
-}
-
-resource "aws_iam_user_policy" "grafana_cloudwatch" {
-  name = "cloudwatch-read-only"
-  user = aws_iam_user.grafana_cloudwatch.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "cloudwatch:GetMetricData",
-        "cloudwatch:GetMetricStatistics",
-        "cloudwatch:ListMetrics",
-        "cloudwatch:DescribeAlarms",
-        "cloudwatch:DescribeAlarmsForMetric",
-        "cloudwatch:GetDashboard",
-        "cloudwatch:ListDashboards",
-        "tag:GetResources"
-      ]
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_access_key" "grafana_cloudwatch" {
-  user = aws_iam_user.grafana_cloudwatch.name
-}
-
-output "grafana_cloudwatch_access_key_id" {
-  value = aws_iam_access_key.grafana_cloudwatch.id
-}
-
-output "grafana_cloudwatch_secret_access_key" {
-  value     = aws_iam_access_key.grafana_cloudwatch.secret
-  sensitive = true
-}
-```
-
-Note this is a plain `aws_iam_user`, not a role — deliberately, since it exists specifically to hold the one static credential this plan otherwise avoids. No mutating CloudWatch actions, nothing outside CloudWatch.
-
-- [ ] **Step 4: Validate, plan, apply, and retrieve the key**
-
-Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
-Then: `terraform output grafana_cloudwatch_access_key_id && terraform output -raw grafana_cloudwatch_secret_access_key`
-Save both — the secret key only prints in full via `-raw`; treat it the same as any other credential (don't paste it anywhere but Grafana's own data source config in Step 6).
-
-- [ ] **Step 5: 🎓 You run this — *(pre-flight: `fleetctl --version` → 4.92.0 and logged in, else stop; see Task 3 Step 8a)* create a read-only, API-only Fleet user for Grafana and get its API token** (logged in as an admin — the break-glass account before Task 9's MFA, or afterwards an SSO admin with a token from the UI's My account > Get API token via `fleetctl config set --token`)
-
-```bash
-fleetctl user create --name "Grafana" --global-role observer --api-only
-```
-
-Verified against Fleet v4.92.0: `--api-only` needs no email/password (there is no `--username` flag; an earlier draft used one and would have failed), and it **prints the API token once** — copy it immediately. This matters: a token obtained by `fleetctl login` as a normal user is a session token that expires (default 5 days), which would silently break Grafana's Fleet panels; an API-only user's token doesn't expire the same way, and it also doesn't depend on the break-glass account's MFA.
-
-`observer` is the least-privileged role that can still read hosts, policies, and vulnerability data — matches Grafana's actual need (read dashboards' worth of data, nothing else).
-
-- [ ] **Step 6: Configure the CloudWatch data source in Grafana**
-
-In Grafana's UI (`http://<grafana-container-ip>:3000`): Connections > Data sources > Add data source > Amazon CloudWatch. Authentication: "Access & secret key", paste the values from Step 4. Default region: `us-east-1`.
-
-- [ ] **Step 7: Configure the Infinity data source pointed at Fleet's API**
-
-Connections > Data sources > Add data source > Infinity. Under Auth: Bearer Token, paste the token from Step 5. Base URL: `https://<fleet_subdomain>`.
-
-- [ ] **Step 8: Verify both data sources connect**
-
-In the CloudWatch data source's settings page, use "Save & test" — expect a success message. For Infinity, create a test query against `/api/v1/fleet/hosts/count` (Type: JSON, no auth override needed since it's set at the data source level) and confirm it returns a number, not an error.
-
-- [ ] **Step 9: Build the dashboard.** Left open-ended on purpose. A few real, verified starting points to query against:
-  - CloudWatch: the same ALB/ECS/Aurora/Redis metrics this task's own alert rules watch (Steps 11-16) — request count and 5xx rate, CPU/memory utilization, database connections.
-  - Fleet, via Infinity: `GET /api/v1/fleet/hosts/count` (optionally repeated with `?platforms=darwin`/`windows`/`linux` for a platform breakdown), `GET /api/v1/fleet/global/policies` (each policy object includes `passing_host_count`/`failing_host_count` — verified against Fleet's own API reference), and `GET /api/v1/fleet/charts/cve` for vulnerability trends (Premium feature, available on this license).
-
-- [ ] **Step 10: Build the up/down status board.** The point of this dashboard is being able to see at a glance whether each part of the Fleet stack is up, so build this first, before any of Step 9's performance panels. One "State timeline" or "Stat" panel per component, colored green/red on a threshold:
-  - **Fleet itself** (Infinity → Fleet data source): `GET /healthz` on `https://<fleet_subdomain>`. A successful response is up; an error or timeout is down. This is the only true end-to-end check, since it goes through DNS, WAF, ALB, Fargate, and the database.
-  - **ALB targets** (CloudWatch, namespace `AWS/ApplicationELB`): `HealthyHostCount` (green when >= 1) and `UnHealthyHostCount` (red when > 0), with the `LoadBalancer` and `TargetGroup` dimensions. Both are standard ALB metrics.
-  - **Fargate** (CloudWatch, namespace `ECS/ContainerInsights`): `RunningTaskCount` for the `fleet` service (dimensions `ClusterName=fleet-homelab`, `ServiceName=fleet`), green when >= 1. Container Insights is enabled by default on the cluster the Fleet module creates (verified in `byo-db/variables.tf`), so this metric should exist without extra setup; confirm the panel returns data on the first run.
-  - **Aurora** (CloudWatch, `AWS/RDS`): `DatabaseConnections` and `CPUUtilization` for the cluster. Aurora has no direct up/down metric, so treat "no data" as down.
-  - **Redis** (CloudWatch, `AWS/ElastiCache`): `CurrConnections` and `EngineCPUUtilization` (both used by the monitoring addon). Same "no data means down" rule.
-  - **Alert states**, once Steps 11-16 below build them: Grafana's built-in "Alert list" panel type shows each alert rule's current state (Normal/Pending/Firing) natively — no separate CloudWatch alarm system needed to populate this.
-
-  One limit, worth knowing so the board isn't misread: this stack is torn down most of the time by design, so a fully red board usually means "torn down on purpose", not "broken" — a dashboard cannot tell those apart; read it alongside whether you've run `up`. (Unlike an earlier draft of this plan, Grafana does notify now — see Steps 11-16 — so this is no longer purely a passive display.)
-
-- [ ] **Step 11: Write `grafana-alerting.tf`** — a second, separate IAM user scoped only to `ses:SendRawEmail`, purely so Grafana can authenticate to SES's SMTP interface. Deliberately not reusing Task 6's `module.ses` (that addon wires Fleet's own IAM-role-based API sending; Grafana runs outside AWS on Proxmox and needs SMTP username/password credentials instead — a different mechanism for the same underlying SES domain identity). Verified against AWS's own SES SMTP docs: SMTP credentials are derived from a plain IAM access key via a documented algorithm (Step 13), so this is a normal `aws_iam_user` + `aws_iam_access_key`, same shape as Step 3's CloudWatch user.
-
-```hcl
-resource "aws_iam_user" "grafana_ses_smtp" {
-  name = "fleet-homelab-grafana-ses-smtp"
-}
-
-resource "aws_iam_user_policy" "grafana_ses_smtp" {
-  name = "ses-send-only"
-  user = aws_iam_user.grafana_ses_smtp.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["ses:SendRawEmail"]
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_access_key" "grafana_ses_smtp" {
-  user = aws_iam_user.grafana_ses_smtp.name
-}
-
-output "grafana_ses_smtp_access_key_id" {
-  value = aws_iam_access_key.grafana_ses_smtp.id
-}
-
-output "grafana_ses_smtp_secret_access_key" {
-  value     = aws_iam_access_key.grafana_ses_smtp.secret
-  sensitive = true
-}
-```
-
-- [ ] **Step 12: Validate, plan, apply, and retrieve the key**
-
-Run: `terraform fmt && terraform validate && terraform plan -var-file=terraform.tfvars -out=tfplan && terraform apply tfplan`
-Then: `terraform output grafana_ses_smtp_access_key_id && terraform output -raw grafana_ses_smtp_secret_access_key` — same handling as Step 4's CloudWatch key (don't paste it anywhere but the SMTP conversion in the next step and Grafana's own config).
-
-- [ ] **Step 13: Derive the SES SMTP password from the access key.** SES's SMTP password is *not* the IAM secret access key itself — it's a region-specific transform of it (HMAC-SHA256, versioned). Algorithm below is AWS's own, published at `docs.aws.amazon.com/ses/latest/dg/smtp-credentials.html` (verified there, not reconstructed from memory):
-
-```python
-import hmac, hashlib, base64
-
-def ses_smtp_password(secret_access_key: str, region: str) -> str:
-    date, service, terminal, message, version = "11111111", "ses", "aws4_request", "SendRawEmail", 0x04
-    def sign(key, msg): return hmac.new(key, msg.encode(), hashlib.sha256).digest()
-    k = sign(("AWS4" + secret_access_key).encode(), date)
-    k = sign(k, region); k = sign(k, service); k = sign(k, terminal); k = sign(k, message)
-    return base64.b64encode(bytes([version]) + k).decode()
-
-print(ses_smtp_password("<secret from Step 12>", "us-east-1"))
-```
-
-The SMTP **username** is simply the access key ID from Step 12 (unchanged). Endpoint: `email-smtp.us-east-1.amazonaws.com`, port `587` with STARTTLS (verify against AWS's current SMTP endpoints table for `us-east-1` — general reference, `docs.aws.amazon.com/general/latest/gr/ses.html`).
-
-- [ ] **Step 14: Configure Grafana's SMTP settings and an email contact point.** On the Grafana container, edit `/etc/grafana/grafana.ini`'s `[smtp]` section:
-
-```ini
-[smtp]
-enabled = true
-host = email-smtp.us-east-1.amazonaws.com:587
-user = <access key ID from Step 12>
-password = <SMTP password from Step 13>
-from_address = grafana-alerts@<fleet_subdomain>
-from_name = Grafana
-startTLS_policy = MandatoryStartTLS
-```
-
-`systemctl restart grafana-server`. Then in the UI: Alerting > Contact points > Add contact point, type Email, address = your own inbox. **SES sandbox caveat, same one Task 6 already flagged for Fleet's own mail**: if the account hasn't been granted SES production access, the *recipient* address must be individually verified first (`aws sesv2 get-account --query ProductionAccessEnabled` to check; if `false`, verify your own address the same way Task 6 Step 3 describes) — the `from_address`'s domain is already verified via Task 6, but that alone doesn't let you send *to* an unverified address in sandbox mode.
-
-- [ ] **Step 15: Build alert rules on the CloudWatch data source.** Alerting > Alert rules > New alert rule. Grafana-managed rules work against any data source that returns numeric data, CloudWatch included (verified against Grafana's own CloudWatch-datasource docs) — reuse Step 10's exact queries as the rule's query, add a Threshold expression, and set a evaluation group/interval (a few minutes is plenty for a homelab). Suggested starting rules, one per Step 10 panel:
-  - ALB `UnhealthyHostCount` > 0
-  - ECS `RunningTaskCount` < 1 for the `fleet` service
-  - Aurora: no-data-as-alert on `DatabaseConnections` (mirrors Step 10's "no data means down" rule)
-  - Redis: same no-data pattern on `CurrConnections`
-
-  Point each rule's notification policy at the Email contact point from Step 14 (Alerting > Notification policies — the default policy routes everything to it unless you add label-based routing, which isn't needed at this scale).
-
-- [ ] **Step 16: Verify with a real alert.** Temporarily lower one rule's threshold (e.g. the ECS one to `< 2`, which the normal `RunningTaskCount = 1` will trip) or use Grafana's rule-preview/test-run feature, and confirm the email actually arrives — don't just trust the rule was saved. Revert the threshold afterward.
-
-- [ ] **Step 17: Commit**
-
-```bash
-git add scripts/proxmox/create-grafana-lxc.sh scripts/proxmox/bootstrap-grafana.sh grafana-cloudwatch.tf grafana-alerting.tf
-git commit -m "Add Grafana on Proxmox: CloudWatch + Fleet API data sources, plus native alerting via SES SMTP"
-```
+- [ ] **Step 1: Write the `grafana/` root.** Resources:
+  - `aws_iam_role.grafana` (`fleet-homelab-grafana`, trusted by `grafana.amazonaws.com`, condition `aws:SourceAccount` = this account) with the AWS managed policy `AmazonGrafanaCloudWatchAccess` and an inline `sns:Publish` on the topic below only. `permission_type = "CUSTOMER_MANAGED"`, so the role's permissions are exactly what is written here (verify at build which managed policy name is current).
+  - `aws_grafana_workspace.this`: name `fleet-homelab`, the arguments above, `grafana_version` = the newest AMG offers at build (13.2 on 2026-10-10; check the Infinity plugin installs on it, else use 12.4), `configuration = jsonencode({ plugins = { pluginAdminEnabled = true }, unifiedAlerting = { enabled = true } })`.
+  - `aws_sns_topic.grafana_alerts` (`fleet-homelab-grafana-alerts`) and, when `alert_email` is set, an `email` subscription (`count = var.alert_email == "" ? 0 : 1`; SNS emails a confirmation link that must be clicked). `alert_email` is sensitive and lives in the gitignored `grafana/terraform.tfvars` (public repo).
+  - `aws_grafana_workspace_saml_configuration.this` with `count = var.okta_metadata_url == "" ? 0 : 1`: `idp_metadata_url = var.okta_metadata_url`, `role_assertion = "role"`, `admin_role_values = ["admin"]`, `editor_role_values = ["editor"]`. Anyone Okta lets in without either value is a Viewer.
+- [ ] **Step 2: Okta side (in `okta/`, created only when `grafana_workspace_endpoint` is set).** Two groups, **"Grafana Admins"** and **"Grafana Viewers"**, assigned to the app; membership by hand in the console, as for Fleet (Task 10), and no direct user assignments. A `role` attribute: `isMemberOfGroupName("Grafana Admins") ? "admin" : "viewer"`. App: Okta's catalog "Amazon Managed Grafana" app through the provider's `preconfigured_app` (look up its key and settings JSON at build: name space = workspace ID, region), or, if the provider cannot configure it, a custom SAML app using the service-provider identifier and reply URL that AMG's Authentication tab shows. Output its **public** metadata URL, as Task 10 learned the provider's own `metadata_url` is the management API.
+- [ ] **Step 3: Apply in three passes** (the two roots depend on each other's URLs): `grafana/` (workspace, role, topic; no SAML yet) → `okta/` with `grafana_workspace_endpoint` = the workspace output → `grafana/` again with `okta_metadata_url` = Okta's output. Expected: the workspace becomes `ACTIVE` and its Authentication tab shows SAML configured.
+- [ ] **Step 4: Verify sign-in and the "no role unless assigned" rule.** An account in Grafana Admins gets Admin; one in Grafana Viewers gets Viewer; one in neither is refused by Okta (as Task 10 Step 5 proved for Fleet). Every active user costs $9 (admin/editor) or $5 (viewer) that month, so keep membership minimal.
+- [ ] **Step 5: 🎓 You run this — create a read-only, API-only Fleet user for Grafana** *(pre-flight: `fleetctl --version` → 4.92.x and authenticated with an SSO admin's API token, see Task 11 Step 4)*: `fleetctl user create --name "Grafana" --global-role observer --api-only`. It prints the API token once; paste it straight into Step 7, nowhere else. `observer` is the least privilege that can read hosts, policies and vulnerability data, and an API-only token does not expire like a login session. It lives in the database, so it survives teardowns.
+- [ ] **Step 6: Data sources in Grafana.** CloudWatch: Apps → AWS Data Sources (or Connections → Add data source → CloudWatch) with **Workspace IAM Role** authentication, region `us-east-1`; "Save & test". Infinity: Administration → Plugins → install **Infinity**, then add it with Bearer token auth (Step 5's token) and base URL `https://<fleet_subdomain>`; while the stack is up, a query to `/api/v1/fleet/hosts/count` returns a number.
+- [ ] **Step 7: Build the up/down status board first**, then the rest of the dashboard. Panels, unchanged from the earlier design:
+  - **Fleet itself** (Infinity): `GET /healthz`. Success is up; error or timeout is down. The only end-to-end check (DNS, WAF, ALB, Fargate, database).
+  - **ALB targets** (`AWS/ApplicationELB`): `HealthyHostCount` (green at ≥ 1), `UnHealthyHostCount` (red at > 0).
+  - **Fargate** (`ECS/ContainerInsights`): `RunningTaskCount`, `ClusterName=fleet-homelab`, `ServiceName=fleet`.
+  - **Aurora** (`AWS/RDS`) and **Redis** (`AWS/ElastiCache`): `DatabaseConnections`/`CPUUtilization` and `CurrConnections`/`EngineCPUUtilization`; no data means down.
+  - Then: request and 5xx rates, CPU and memory, and Fleet data via Infinity (`/api/v1/fleet/hosts/count` with `?platforms=`, `/api/v1/fleet/global/policies` for passing and failing counts, `/api/v1/fleet/charts/cve` for vulnerabilities, Premium).
+  - A red board usually means "torn down on purpose"; read it alongside whether `up` has run.
+- [ ] **Step 8: Alerting — an SNS contact point, and rules that stay quiet on a teardown.** Alerting → Contact points → new **Amazon SNS** contact point with the topic ARN (output) and the workspace role. Rules (Grafana-managed, against CloudWatch):
+  - **Unhealthy while up:** ALB `UnHealthyHostCount` > 0, ECS `RunningTaskCount` < 1 while the load balancer exists. Set **no data → OK**, not Alerting: no data is the normal torn-down state, and alerting on it would email on every `down` (the earlier design's "no data means down" rules would have).
+  - **Stack left running (a cost alert):** the NAT Gateway or the load balancer has reported metrics continuously for more than, say, 12 hours. That is about $3.20 of spend, caught long before the budget's daily refresh would.
+  - Verify with a real alert: temporarily lower a threshold, confirm the email arrives through SNS, then revert.
+- [ ] **Step 9: CI and repo wiring.** Add `grafana` to the lint job's validate loop and `/grafana` to Dependabot. CI never applies `grafana/` (like `okta/`, it is applied locally), so neither CI role needs Grafana or SNS permissions.
+- [ ] **Step 10: Commit** `grafana/*.tf`, `grafana/example.tfvars`, `grafana/backend.example.hcl`, `grafana/.terraform.lock.hcl`, the `okta/` changes and the workflow and Dependabot edits. Never `grafana/terraform.tfvars`.
 
 ---
 
@@ -2477,7 +2270,7 @@ Added after the original 18 tasks, at my request, specifically to learn API Gate
 
 **Interfaces:**
 - Consumes: nothing from other `.tf` files (standalone, account-level resources, same as Task 13).
-- Produces: `aws_apigatewayv2_stage.activities_webhook.invoke_url` — the ingest URL (`.../webhook`, used as Fleet's `destination_url` in Task 11's `default.yml`) and the read URL (`.../activities`, used in Task 17/18's Grafana as a fourth Infinity data source, added as an addendum there rather than repeated here).
+- Produces: `aws_apigatewayv2_stage.activities_webhook.invoke_url` — the ingest URL (`.../webhook`, used as Fleet's `destination_url` in Task 11's `default.yml`) and the read URL (`.../activities`, used in Task 17's Grafana as another Infinity data source, added as an addendum there rather than repeated here).
 
 - [ ] **Step 1: Write the two Lambda source files.** Kept intentionally minimal — the point is learning the API Gateway/Lambda wiring, not the application logic. Both check the same shared-secret query parameter before doing anything else; both use only `boto3`, which ships in the Lambda Python runtime (no dependency packaging needed).
 
@@ -2775,7 +2568,7 @@ rm /tmp/fleet-config.yml   # held the token in plaintext
 
 - [ ] **Step 6: Verify end-to-end.** Trigger any real Fleet activity (log out and back in as the break-glass admin is enough — Task 3's screenshots already showed this fires on login) and confirm a new item lands: `aws dynamodb scan --table-name fleet-homelab-activities --query 'Items[?type.S==`user_logged_in`]' --output json`. Expect at least one item with a recent `ts`.
 
-- [ ] **Step 7: Add a fourth Grafana data source (Infinity) for this** — addendum to Task 17/18 rather than a new Grafana setup. Connections > Data sources > Add data source > Infinity, Base URL = Step 1's read URL (the query-string token makes this the auth — no separate bearer/header config needed, unlike Task 17 Step 7's Fleet data source). Starting query: the URL as-is returns the 100 most recent activities as JSON — a table panel with columns `ts`, `type`, `actor_email` is a reasonable first panel; a time-series count-by-type view is a natural follow-on, left open-ended like Task 17 Step 9.
+- [ ] **Step 7: Add a fourth Grafana data source (Infinity) for this** — addendum to Task 17 rather than a new Grafana setup (optional, like Task 17). Connections > Data sources > Add data source > Infinity, Base URL = Step 1's read URL (the query-string token makes this the auth — no separate bearer/header config needed, unlike Task 17 Step 7's Fleet data source). Starting query: the URL as-is returns the 100 most recent activities as JSON — a table panel with columns `ts`, `type`, `actor_email` is a reasonable first panel; a time-series count-by-type view is a natural follow-on, left open-ended like Task 17 Step 9.
 
 - [ ] **Step 8: No teardown wiring needed.** Unlike the Task 3 stack, nothing here bills hourly — DynamoDB on-demand, Lambda, and an HTTP API are all zero-cost at rest and near-zero at this event volume — so `scripts/down.sh`/`up.sh` (Task 14) deliberately do **not** target these resources; they simply stay up whether or not the Fleet stack is up (the webhook just has nothing to fire while Fleet itself is torn down).
 
@@ -2869,7 +2662,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - Health and error scan of the running stack (runbook plus baseline): Task 21.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
-- Grafana dashboard on Proxmox, CloudWatch + Fleet API data sources, plus native alerting via SES SMTP (replaces the standalone CloudWatch-alarms design): Task 17. ✓
+- Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
 - Entra (Microsoft Graph) data source for Grafana: Task 18, retired with the move to Okta.
 - Two-repo layout: this repo (all tasks except 11, including the `okta/` root from Task 10) + `fleet-homelab-gitops` (Task 11). ✓
 - Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at my request, to learn API Gateway/Lambda): Task 19.
