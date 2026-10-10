@@ -1,10 +1,15 @@
-# Runs up, down or plan for this stack from GitHub, started by hand (never on push).
-# AWS access is keyless: GitHub issues a short-lived OIDC token, which only the apply
-# role in oidc.tf trusts, and only for manual runs on main. Values that identify the
-# deployment come from repository secrets, which GitHub masks in these public logs.
+# Terraform for this stack, in two jobs:
+#  - plan:  on every pull request, a read-only plan with the plan role, and one PR comment
+#          holding a redacted summary (comments are public and NOT masked).
+#  - apply: started by hand (never on push): up or down with the apply role.
+# AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
+# main, so a pull request cannot get it even by editing this file. Values that identify
+# the deployment come from secrets, which GitHub masks in these public logs. Forks get
+# no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       action:
@@ -12,7 +17,6 @@ on:
         required: true
         type: choice
         options:
-          - plan
           - up
           - down
       confirm:
@@ -21,25 +25,152 @@ on:
         type: string
 
 permissions:
-  id-token: write
   contents: read
 
-concurrency:
-  group: terraform
-  cancel-in-progress: false
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "1"
+  TF_CLI_ARGS: "-no-color"
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  terraform:
-    runs-on: ubuntu-latest
+  plan:
+    name: terraform-plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: terraform-plan-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check that secrets are available
+        id: gate
+        env:
+          ROLE: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+        run: |
+          if [ -z "$ROLE" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Plan skipped::This pull request runs without the repository's secrets (for example, from a fork), so no plan can be made."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.run == 'true'
+
+      - name: Set up Terraform
+        uses: ./.github/actions/terraform-setup
+        if: steps.gate.outputs.run == 'true'
+        with:
+          role-arn: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+        env:
+          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
+          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
+          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER_ID: ${{ github.repository_owner_id }}
+          GH_REPO_ID: ${{ github.repository_id }}
+
+      # Fast checks first: formatting (both Terraform roots) and validity.
+      - name: terraform fmt and validate
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          terraform fmt -check -recursive -diff
+          terraform validate
+
+      # -lock=false: the plan role is read-only and cannot write the S3 lock file.
+      # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
+      - name: terraform plan
+        id: plan
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars > plan.txt 2>&1
+          code=$?
+          set -e
+          cat plan.txt
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+      # The comment is public and NOT masked, so it gets a summary, never the raw plan:
+      # the plan line and the changing resource addresses. Quoted for_each keys can hold
+      # the hostname, so they are blanked; secret values are replaced; and nothing is
+      # posted if a 12-digit number (an account ID) is left.
+      - name: Build the redacted summary
+        if: steps.gate.outputs.run == 'true'
+        env:
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          S1: ${{ secrets.FLEET_SUBDOMAIN }}
+          S2: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          S3: ${{ secrets.TF_STATE_BUCKET }}
+          S4: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          S5: ${{ secrets.FLEET_LICENSE_KEY }}
+          S6: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          S7: ${{ secrets.WAF_CI_HEADER_VALUE }}
+        run: |
+          if [ "$EXITCODE" = "1" ]; then
+            body="**The plan failed.** The error is in the run log, not here, because error text can include identifiers."
+          else
+            headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || echo "No plan line found.")
+            rows=$(grep -E '^[[:space:]]*# .* (will be created|will be updated in-place|will be destroyed|must be replaced|will be replaced|will be read during apply)$' plan.txt \
+              | sed -E 's/^[[:space:]]*# //; s/\["[^"]*"\]/["…"]/g' \
+              | sed -E 's/^(.*) will be created$/| create | `\1` |/; s/^(.*) will be updated in-place$/| update | `\1` |/; s/^(.*) will be destroyed$/| destroy | `\1` |/; s/^(.*) (must|will) be replaced$/| replace | `\1` |/; s/^(.*) will be read during apply$/| read | `\1` |/' \
+              | head -100 || true)
+            body="**${headline}**"
+            [ -n "$rows" ] && body+=$'\n\n| Action | Resource |\n|---|---|\n'"$rows"
+          fi
+          body=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$body"$'\n\nFull plan, with secret values masked: [run log]('"$RUN_URL"').\n'
+          account=$(aws sts get-caller-identity --query Account --output text)
+          for v in "$S1" "$S2" "$S3" "$S4" "$S5" "$S6" "$S7" "$account"; do
+            [ -n "$v" ] && body=${body//"$v"/***}
+          done
+          if printf '%s' "$body" | grep -qE '(^|[^0-9])[0-9]{12}([^0-9]|$)'; then
+            echo "::error title=Not posted::the summary still contains a 12-digit number (an account ID?)"
+            exit 1
+          fi
+          printf '%s' "$body" > summary.md
+
+      - name: Comment on the pull request
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none --body-file summary.md
+
+      - name: Fail if the plan failed
+        if: steps.gate.outputs.run == 'true' && steps.plan.outputs.exitcode == '1'
+        run: |
+          echo "::error title=Plan failed::terraform plan returned an error; see the 'terraform plan' step log."
+          exit 1
+
+      - name: Remove the generated files
+        if: always()
+        run: rm -f terraform.tfvars backend.hcl plan.txt summary.md
+
+  apply:
+    name: terraform-apply
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: terraform
+      cancel-in-progress: false
     env:
-      AWS_REGION: us-east-1
-      TF_IN_AUTOMATION: "1"
-      TF_CLI_ARGS: "-no-color"
       NO_GITOPS: "1" # a token for this repo cannot start the GitOps repo's workflow
     steps:
       # Fails before touching AWS, and the message shows on the run's summary page.
@@ -55,23 +186,10 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      - name: Set up Terraform
+        uses: ./.github/actions/terraform-setup
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-          mask-aws-account-id: true
-
-      # Terraform prints ARNs, which contain the account ID; masking it here covers
-      # every later step.
-      - name: Mask the AWS account ID
-        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
-
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: "1.14.8"
-          terraform_wrapper: false
-
-      - name: Write terraform.tfvars and backend.hcl
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
         env:
           FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
           FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
@@ -83,27 +201,6 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
-        run: |
-          umask 077
-          {
-            printf 'fleet_subdomain      = "%s"\n' "$FLEET_SUBDOMAIN"
-            printf 'fleet_license_key    = "%s"\n' "$FLEET_LICENSE_KEY"
-            printf 'cloudflare_zone_name = "%s"\n' "$CLOUDFLARE_ZONE_NAME"
-            printf 'cloudflare_api_token = "%s"\n' "$CLOUDFLARE_API_TOKEN"
-            printf 'budget_alert_email   = "%s"\n' "$BUDGET_ALERT_EMAIL"
-            printf 'waf_ci_header_value  = "%s"\n' "$WAF_CI_HEADER_VALUE"
-            printf 'github_owner         = "%s"\n' "$GH_OWNER"
-            printf 'github_owner_id      = "%s"\n' "$GH_OWNER_ID"
-            printf 'github_repo_id       = "%s"\n' "$GH_REPO_ID"
-          } > terraform.tfvars
-          printf 'bucket = "%s"\n' "$TF_STATE_BUCKET" > backend.hcl
-
-      - name: terraform init
-        run: terraform init -input=false -backend-config=backend.hcl
-
-      - name: Plan
-        if: inputs.action == 'plan'
-        run: terraform plan -input=false -var-file=terraform.tfvars
 
       - name: Up
         if: inputs.action == 'up'

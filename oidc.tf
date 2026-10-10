@@ -272,7 +272,7 @@ data "aws_iam_policy_document" "github_actions_plan" {
       "elasticloadbalancing:Describe*", "wafv2:Get*", "wafv2:List*", "wafv2:Describe*",
       "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*", "logs:Describe*", "logs:ListTagsForResource",
       "ses:Get*", "ses:List*", "ses:Describe*", "sesv2:Get*", "sesv2:List*", "route53:Get*", "route53:List*",
-      "acm:Describe*", "acm:List*", "firehose:Describe*", "firehose:List*", "budgets:ViewBudget",
+      "acm:Describe*", "acm:List*", "firehose:Describe*", "firehose:List*", "budgets:ViewBudget", "budgets:ListTagsForResource",
       "iam:Get*", "iam:List*", "kms:Describe*", "kms:List*", "kms:Get*", "sts:GetCallerIdentity", "tag:GetResources",
     ]
     resources = ["*"]

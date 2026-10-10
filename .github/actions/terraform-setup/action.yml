@@ -1,0 +1,52 @@
+# Shared setup for both Terraform jobs: AWS credentials through OIDC (the caller picks
+# the role), the account ID masked, Terraform installed, terraform.tfvars and
+# backend.hcl written from secrets, and terraform init. The caller passes the secret
+# values as step env, since a composite action cannot read secrets itself.
+name: terraform-setup
+description: Log in to AWS with a role, install Terraform, write the inputs, and init.
+
+inputs:
+  role-arn:
+    description: IAM role to assume through OIDC.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: us-east-1
+        mask-aws-account-id: true
+
+    # Terraform prints ARNs, which contain the account ID; masking it here covers every
+    # later step.
+    - name: Mask the AWS account ID
+      shell: bash
+      run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+
+    - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: "1.14.8"
+        terraform_wrapper: false
+
+    - name: Write terraform.tfvars and backend.hcl
+      shell: bash
+      run: |
+        umask 077
+        {
+          printf 'fleet_subdomain      = "%s"\n' "$FLEET_SUBDOMAIN"
+          printf 'fleet_license_key    = "%s"\n' "$FLEET_LICENSE_KEY"
+          printf 'cloudflare_zone_name = "%s"\n' "$CLOUDFLARE_ZONE_NAME"
+          printf 'cloudflare_api_token = "%s"\n' "$CLOUDFLARE_API_TOKEN"
+          printf 'budget_alert_email   = "%s"\n' "$BUDGET_ALERT_EMAIL"
+          printf 'waf_ci_header_value  = "%s"\n' "$WAF_CI_HEADER_VALUE"
+          printf 'github_owner         = "%s"\n' "$GH_OWNER"
+          printf 'github_owner_id      = "%s"\n' "$GH_OWNER_ID"
+          printf 'github_repo_id       = "%s"\n' "$GH_REPO_ID"
+        } > terraform.tfvars
+        printf 'bucket = "%s"\n' "$TF_STATE_BUCKET" > backend.hcl
+
+    - name: terraform init
+      shell: bash
+      run: terraform init -input=false -backend-config=backend.hcl
