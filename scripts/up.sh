@@ -60,6 +60,23 @@ H=$(curl -s -o /dev/null -m 20 -w '%{http_code}' ${HDR[@]+"${HDR[@]}"} "$URL/hea
 ROOT=$(curl -s -o /dev/null -m 20 -w '%{http_code}' ${HDR[@]+"${HDR[@]}"} "$URL/")
 echo "Up. /healthz -> HTTP $H; / -> HTTP $ROOT (200 = data restored; a 307 to /setup means an empty database)."
 
+# SSO smoke check: when Fleet reports SSO on, starting a login must return a SAML request
+# for the identity provider. A warning, not a failure: the rebuild itself succeeded.
+if [ "$H" = "200" ] && command -v jq >/dev/null 2>&1; then
+  SSO_ON=$(curl -s -m 20 ${HDR[@]+"${HDR[@]}"} "$URL/api/v1/fleet/sso" | jq -r '.settings.sso_enabled // false' 2>/dev/null || echo false)
+  if [ "$SSO_ON" != "true" ]; then
+    echo "SSO: off; check skipped."
+  elif curl -s -m 20 ${HDR[@]+"${HDR[@]}"} -X POST -H 'Content-Type: application/json' -d '{"relay_url":"/"}' \
+      "$URL/api/v1/fleet/sso" | jq -e '(.url // "") | test("SAMLRequest=")' >/dev/null 2>&1; then
+    echo "SSO: starting a login redirects to the identity provider."
+  else
+    echo "SSO is on, but starting a login did not redirect to the identity provider. Check Fleet's SSO settings and the IdP's metadata URL." >&2
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      echo "::warning title=SSO check failed::SSO is on, but starting a login did not redirect to the identity provider."
+    fi
+  fi
+fi
+
 # Start a GitOps run, so a config change pushed while the stack was down is applied now.
 # Best effort: needs the GitHub CLI with access to that repo (locally your own login; in
 # CI a GitHub App token as GH_TOKEN). NO_GITOPS=1 skips it.
