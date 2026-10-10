@@ -40,7 +40,7 @@ jobs:
   plan:
     name: terraform-plan
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 20
     permissions:
       id-token: write
@@ -81,6 +81,13 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
+
+      # Fast checks first: formatting (both Terraform roots) and validity.
+      - name: terraform fmt and validate
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          terraform fmt -check -recursive -diff
+          terraform validate
 
       # -lock=false: the plan role is read-only and cannot write the S3 lock file.
       # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
@@ -155,7 +162,7 @@ jobs:
   apply:
     name: terraform-apply
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
     permissions:
       id-token: write
