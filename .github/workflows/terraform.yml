@@ -75,6 +75,46 @@ jobs:
       - name: shellcheck
         run: shellcheck scripts/*.sh
 
+      # Release binaries, pinned and checked against their published SHA-256 checksums,
+      # so no third-party action is needed. Dependabot cannot update these: bump the
+      # version and checksum together by hand.
+      - name: Install actionlint and tflint
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSLo actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz -C bin actionlint
+          curl -fsSLo tflint.zip https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip
+          echo "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537  tflint.zip" | sha256sum -c -
+          unzip -q tflint.zip -d bin
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Workflow files, including the shell in run: blocks (actionlint runs shellcheck).
+      - name: actionlint
+        run: actionlint
+
+      # Security audit of the workflows and actions. The official image, pinned by digest.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo -e GH_TOKEN \
+            ghcr.io/zizmorcore/zizmor@sha256:a2eb396d886c053073405c7a980f2139ba2248ec172243cfa3841e57196e8101 \
+            --no-progress --format github .
+
+      # Our own Terraform (not Fleet's modules) against the AWS ruleset pinned in .tflint.hcl.
+      # tflint --init downloads the ruleset and verifies its signature.
+      - name: tflint (both roots)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init --config="$PWD/.tflint.hcl"
+          for dir in . okta; do
+            echo "== $dir"
+            tflint --chdir="$dir" --config="$PWD/.tflint.hcl" --format=compact
+          done
+
   plan:
     name: terraform-plan
     needs: lint
@@ -174,6 +214,8 @@ jobs:
             summary="**The plan failed.** The error is in the full output below."
           else
             headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || echo "No plan line found.")
+            # The backticks in the sed replacements are Markdown code spans, not shell.
+            # shellcheck disable=SC2016
             rows=$(grep -E '^[[:space:]]*# .* (will be created|will be updated in-place|will be destroyed|must be replaced|will be replaced|will be read during apply)$' plan.txt \
               | sed -E 's/^[[:space:]]*# //; s/\["[^"]*"\]/["…"]/g' \
               | sed -E 's/^(.*) will be created$/| create | `\1` |/; s/^(.*) will be updated in-place$/| update | `\1` |/; s/^(.*) will be destroyed$/| destroy | `\1` |/; s/^(.*) (must|will) be replaced$/| replace | `\1` |/; s/^(.*) will be read during apply$/| read | `\1` |/' \
