@@ -1905,6 +1905,7 @@ gh api -X PATCH $R -F 'security_and_analysis[secret_scanning][status]=enabled' -
 gh api -X PUT $R/vulnerability-alerts
 gh api -X PUT $R/private-vulnerability-reporting
 gh api -X PATCH $R -F has_wiki=false -F has_projects=false
+gh api -X PATCH $R -F delete_branch_on_merge=true   # delete a PR's branch when it merges (added 2026-10-10)
 # 5. ruleset on the default branch (JSON below) — POST it with: gh api -X POST $R/rulesets --input ruleset.json
 ```
 
