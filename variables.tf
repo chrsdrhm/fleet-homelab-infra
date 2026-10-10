@@ -16,14 +16,16 @@ variable "rds_snapshot_identifier" {
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token with Zone > DNS > Edit on cloudflare_zone_name only"
+  description = "Cloudflare API token with Zone > DNS > Edit on cloudflare_zone_name only. Leave empty if your DNS is not on Cloudflare."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "cloudflare_zone_name" {
-  description = "Apex zone in Cloudflare that fleet_subdomain lives under, e.g. example.com"
+  description = "Apex zone in Cloudflare that fleet_subdomain lives under, e.g. example.com. Leave empty if your DNS is not on Cloudflare: add the NS records from the fleet_name_servers output by hand."
   type        = string
+  default     = ""
 }
 
 variable "budget_alert_email" {

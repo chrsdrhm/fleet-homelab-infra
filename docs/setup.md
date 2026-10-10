@@ -8,7 +8,7 @@ The first build takes about 30 minutes. While it's up, the stack costs about $0.
 
 - **Accounts:**
   - an AWS account (admin access)
-  - a domain whose DNS is on Cloudflare
+  - a domain you control. If its DNS is on Cloudflare, Terraform delegates the Fleet subdomain for you; with any other DNS provider, you add four NS records by hand (step 5).
   - a [Fleet Premium](https://fleetdm.com/pricing) license key
   - GitHub
 - **Tools:**
@@ -56,8 +56,8 @@ Then edit `terraform.tfvars`. It's gitignored; never commit it.
 |---|---|
 | `fleet_subdomain` | Fleet's hostname, e.g. `fleet.example.com` |
 | `fleet_license_key` | Your Fleet Premium key |
-| `cloudflare_zone_name` | Your domain, e.g. `example.com` |
-| `cloudflare_api_token` | A Cloudflare token made from the **Edit zone DNS** template, for that zone only |
+| `cloudflare_zone_name` | Your domain, e.g. `example.com`. Leave empty if your DNS isn't on Cloudflare. |
+| `cloudflare_api_token` | A Cloudflare token made from the **Edit zone DNS** template, for that zone only. Leave empty if your DNS isn't on Cloudflare. |
 | `budget_alert_email` | Where cost alerts go |
 | `waf_ci_header_value` | A random string: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 | `github_owner`, `github_owner_id`, `github_repo_id` | The output of the command below |
@@ -73,6 +73,15 @@ terraform init -backend-config=backend.hcl
 terraform apply -var-file=terraform.tfvars -target=aws_secretsmanager_secret_version.fleet_server_private_key   # first time only
 NO_GITOPS=1 ./scripts/up.sh
 ```
+
+**DNS not on Cloudflare?** Before running `up.sh`, create the Fleet subdomain's DNS zone and delegate it by hand, because the TLS certificate can't be issued until the subdomain points to it:
+
+```bash
+terraform apply -var-file=terraform.tfvars -target=aws_route53_zone.fleet
+terraform output fleet_name_servers
+```
+
+At your DNS provider, add four NS records for `<fleet_subdomain>`, one per name server. Then run `up.sh`. You only do this once, because the zone survives teardowns.
 
 When it finishes, open `https://<fleet_subdomain>/` and create the first admin account. Keep its password in your password manager.
 

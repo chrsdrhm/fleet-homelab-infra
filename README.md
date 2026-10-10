@@ -11,7 +11,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 [Fleet](https://fleetdm.com) is an open-source device management and osquery platform. I'm standing up a real, publicly reachable Fleet instance to learn how the pieces fit together:
 
 - **Infrastructure:** Fleet's own [`fleet-terraform`](https://github.com/fleetdm/fleet-terraform) root module (VPC, Aurora MySQL, Redis, ALB, ECS Fargate), pinned to a release tag rather than reimplemented.
-- **DNS and TLS:** a Route 53 hosted zone for a subdomain, delegated from Cloudflare (also managed in Terraform), with an ACM certificate.
+- **DNS and TLS:** a Route 53 hosted zone for a subdomain with an ACM certificate. The delegation is managed in Terraform when the domain's DNS is on Cloudflare (as mine is); with any other DNS provider you add four NS records by hand once.
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned; the checks live in [`checks/`](checks/README.md).

@@ -34,10 +34,10 @@ provider "aws" {
   }
 }
 
-# Only used to delegate the Fleet subdomain to Route 53 (cloudflare.tf).
-# Token scope: Zone > DNS > Edit, on the one zone only.
+# Only used to delegate the Fleet subdomain to Route 53 (cloudflare.tf), and only when
+# cloudflare_zone_name is set. Token scope: Zone > DNS > Edit, on the one zone only.
 provider "cloudflare" {
-  api_token = var.cloudflare_api_token
+  api_token = var.cloudflare_api_token != "" ? var.cloudflare_api_token : null
 }
 
 data "aws_caller_identity" "current" {}

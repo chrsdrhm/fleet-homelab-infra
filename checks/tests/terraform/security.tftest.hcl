@@ -199,3 +199,26 @@ run "budget_alerts_every_ten_dollars" {
     error_message = "The budget must alert at every $10 from $10 to $100."
   }
 }
+
+run "dns_delegation_uses_cloudflare_only_when_configured" {
+  command = plan
+
+  assert {
+    condition     = length(cloudflare_dns_record.fleet_ns) == 4
+    error_message = "With a Cloudflare zone set, the four NS records delegating the subdomain must be created."
+  }
+}
+
+run "dns_elsewhere_skips_cloudflare" {
+  command = plan
+
+  variables {
+    cloudflare_zone_name = ""
+    cloudflare_api_token = ""
+  }
+
+  assert {
+    condition     = length(cloudflare_dns_record.fleet_ns) == 0 && length(data.cloudflare_zone.parent) == 0
+    error_message = "With no Cloudflare zone, nothing in Cloudflare may be read or created (the NS records are added by hand)."
+  }
+}
