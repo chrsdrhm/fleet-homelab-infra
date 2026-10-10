@@ -7,7 +7,7 @@
 # checks/README.md for when.
 set -euo pipefail
 hashes="${FLEET_HOMELAB_PRIVATE_HASHES:-$HOME/.config/fleet-homelab/private-hashes}"
-owner="${GITHUB_OWNER:-chrsdrhm}"
+owner="${GITHUB_OWNER:-$(gh repo view --json owner --jq .owner.login)}"  # this repo's owner
 repos=(fleet-homelab-infra fleet-homelab-gitops)
 
 [ -f "$hashes" ] || { echo "No hash list at $hashes" >&2; exit 1; }
