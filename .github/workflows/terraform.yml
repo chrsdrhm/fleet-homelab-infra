@@ -8,6 +8,7 @@
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
+run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || format('Terraform {0}', inputs.action) }}"
 
 on:
   pull_request:
