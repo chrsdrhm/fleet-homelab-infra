@@ -464,7 +464,15 @@ takes effect: opening a PR runs `terraform plan` and posts the output as a
 comment (mirroring the dry-run behavior the GitOps repo already has for
 Fleet config), so merging to `main` is always an informed decision — the
 apply itself just waits for the next manual `up` trigger rather than firing
-immediately. Two IAM roles serve this, not one: an **apply role**
+immediately. **A data-loss guard** sits in that check: if the plan would destroy
+or replace a resource that holds data or identity (the Aurora cluster, a
+Secrets Manager secret, an S3 bucket, the Route 53 zone, the ACM certificate,
+the SES identity or the Fleet server key), the comment opens with a caution
+listing them and the check fails. Accepting it on purpose takes the
+`allow-destroy` label on the pull request; the change then happens at the next
+`up`. The guard covers pull-request plans only: `down` still destroys the
+cluster after its snapshot, by design, and `prevent_destroy` (the server key,
+the installers bucket) still has to be removed in code first. Two IAM roles serve this, not one: an **apply role**
 (assumable only by a `workflow_dispatch` run on `main`) for `up`/`down`,
 and a **read-only plan role** (assumable only from the `pull_request` context)
 for the PR checks — a PR workflow runs the file from the PR's own branch, so it

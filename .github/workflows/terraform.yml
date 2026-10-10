@@ -3,6 +3,8 @@
 #           shellcheck, actionlint, zizmor, tflint.
 #  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
 #           summary and the full plan, masked (comments are public and NOT masked by GitHub).
+#           A plan that destroys or replaces a resource holding data fails the check unless
+#           the pull request has the `allow-destroy` label.
 #  - apply: started by hand (never on push): up or down with the apply role.
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
 # main, so a pull request cannot get it even by editing this file. Values that identify
@@ -13,6 +15,8 @@ run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0
 
 on:
   pull_request:
+    # labeled/unlabeled: re-check when the `allow-destroy` label is added or removed.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       action:
@@ -212,11 +216,29 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set +e
-          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars > plan.txt 2>&1
+          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars -out=tfplan > plan.txt 2>&1
           code=$?
           set -e
           cat plan.txt
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+          # Resources that hold data or identity and must not be destroyed or replaced by
+          # accident: the database, the server key that decrypts it, secrets, buckets, the
+          # DNS zone, the certificate and the email identity.
+          : > data-loss.txt
+          if [ "$code" = "2" ]; then
+            terraform show -json tfplan > plan.json
+            jq -r '.resource_changes[]
+              | select(.change.actions | index("delete"))
+              | select((.type | IN("aws_rds_cluster", "aws_secretsmanager_secret", "aws_s3_bucket",
+                  "aws_route53_zone", "aws_acm_certificate", "aws_ses_domain_identity"))
+                or .address == "random_password.fleet_server_private_key")
+              | "\(.address) (\(if (.change.actions | index("create")) then "replace" else "destroy" end))"' plan.json \
+              | sed -E 's/\["[^"]*"\]/["…"]/g' > data-loss.txt
+          fi
+          if [ -s data-loss.txt ]; then
+            echo "::warning title=Data at risk::this plan destroys or replaces $(wc -l < data-loss.txt | tr -d ' ') resource(s) that hold data; see the PR comment."
+          fi
 
       # The comment is public and GitHub does NOT mask it, so every secret value and the
       # account ID are replaced first (the same masking the run log gets). The summary
@@ -269,7 +291,14 @@ jobs:
             exit 1
           fi
 
-          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary"
+          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'
+          if [ -s data-loss.txt ]; then
+            caution=$'> [!CAUTION]\n> **This plan destroys or replaces resources that hold data:**\n'
+            while IFS= read -r line; do caution+=$'> - `'"$line"$'`\n'; done < data-loss.txt
+            caution+=$'>\n> The check fails unless this pull request has the `allow-destroy` label.\n\n'
+            head+=$(mask "$caution")$'\n\n'
+          fi
+          head+="$summary"
           foot=$'\n\n_The full log is in the [workflow job]('"$job_url"$')._\n'
           # Only the plan itself: drop the refresh and read progress lines (they stay in the
           # job log), keeping drift notes, the plan, warnings and errors.
@@ -309,9 +338,22 @@ jobs:
           echo "::error title=Plan failed::terraform plan returned an error; see the 'terraform plan' step log."
           exit 1
 
+      - name: Fail if the plan destroys data without allow-destroy
+        if: steps.gate.outputs.run == 'true'
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          [ -s data-loss.txt ] || exit 0
+          if [[ ",$LABELS," == *",allow-destroy,"* ]]; then
+            echo "::notice title=Data loss accepted::the allow-destroy label is on this pull request."
+          else
+            echo "::error title=Data at risk::this plan destroys or replaces resources that hold data. Add the allow-destroy label if that is intended."
+            exit 1
+          fi
+
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md
+        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md tfplan plan.json data-loss.txt
 
   apply:
     name: terraform-apply
