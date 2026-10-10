@@ -229,8 +229,6 @@ jobs:
     concurrency:
       group: terraform
       cancel-in-progress: false
-    env:
-      NO_GITOPS: "1" # a token for this repo cannot start the GitOps repo's workflow
     steps:
       # Fails before touching AWS, and the message shows on the run's summary page.
       - name: Check the inputs
@@ -261,8 +259,14 @@ jobs:
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
 
+      # GH_TOKEN: a fine-grained token limited to the GitOps repo (Actions: read and
+      # write), so up.sh can start its workflow; this run's own token cannot.
+      # FLEET_CI_HEADER gets up.sh's health check past the WAF's US-only rule.
       - name: Up
         if: inputs.action == 'up'
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_DISPATCH_TOKEN }}
+          FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: ./scripts/up.sh
 
       - name: Down
