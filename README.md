@@ -28,7 +28,7 @@ Left running, the stack would cost about **$7 a day, or about $200 a month** (ro
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
-The teardown only removes the parts that cost money to run; everything that holds state stays. The database is snapshotted before it's deleted and restored on the way back up, and Apple MDM's push certificate and keys are stored in it. The Fleet server key that encrypts it, the Windows MDM certificate (in Secrets Manager), the software-installers bucket, DNS, the TLS certificate and the email sending identity are never torn down.
+The teardown only removes the expensive parts; everything that holds state stays. The database is snapshotted before it's deleted and restored on the way back up, and Apple MDM's push certificate and keys are stored in it. The Fleet server key that encrypts it, the Windows MDM certificate (in Secrets Manager), the software-installers bucket, DNS, the TLS certificate and the email sending identity are never torn down.
 
 ## Sized for a homelab
 
