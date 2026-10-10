@@ -47,7 +47,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `*.tf` | The AWS and Cloudflare Terraform configuration |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
 | `grafana/` | Optional. The Amazon Managed Grafana workspace, its IAM role and alert topic (its own Terraform root, applied locally) |
-| `scripts/` | `up.sh`, `down.sh`, `tf-apply.sh` (apply with one known retry) and the private-strings check |
+| `scripts/` | `up.sh`, `down.sh`, `tf-apply.sh` (apply with one known retry), and the private-strings check and its sync script |
 | `tests/` | `terraform test` files: the CI roles' trust, WAF rules, public bucket scope and budget, against mocked providers |
 | `.githooks/` | Optional local hooks that block commits containing private strings (`git config core.hooksPath .githooks`) |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
