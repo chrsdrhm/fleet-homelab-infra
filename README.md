@@ -56,7 +56,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 ## Security notes
 
 - **No AWS keys in GitHub.** CI reaches AWS through OIDC. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role.
-- **No shortcuts to `main`.** Every change goes through a pull request whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public.
+- **No shortcuts to `main`.** Every change goes through a pull request whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public. A plan that would destroy or replace something holding data (the database, a secret, a bucket, DNS, the certificate) fails its check unless the pull request has the `allow-destroy` label.
 - **Found a problem?** Please [report it privately](https://github.com/chrsdrhm/fleet-homelab-infra/security/advisories/new) through this repo's **Security** tab instead of opening a public issue.
 
 ## Built with AI assistance
