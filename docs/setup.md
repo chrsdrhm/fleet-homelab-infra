@@ -118,14 +118,7 @@ Fleet picks up the Okta settings from the GitOps repo (step 7).
      fleetctl user create --name "GitOps CI" --global-role gitops --api-only
      ```
    - The second command prints the new user's token once; copy it for the next step.
-2. **Set these secrets** in `fleet-homelab-gitops` with `gh secret set NAME --repo <you>/fleet-homelab-gitops`:
-   - `FLEET_URL`: `https://<fleet_subdomain>`
-   - `FLEET_API_TOKEN`: the token from step 1
-   - `FLEET_CI_HEADER`: your `waf_ci_header_value`
-   - **With Okta:**
-     - `FLEET_OKTA_METADATA_URL`: from `terraform output -raw metadata_url`, run in `okta/`
-     - `FLEET_IDP_IMAGE_URL`: from `terraform output -raw idp_logo_url`
-   - **Without Okta:** set `enable_sso: false` in its `default.yml` instead.
+2. **Set its secrets and settings** (Fleet's URL, the token from step 1, the WAF header, and the Okta values if you use Okta): see [GitHub setup](github-setup.md). Without Okta, also set `enable_sso: false` in its `default.yml`.
 3. **Run it:**
    ```bash
    gh workflow run workflow.yml --repo <you>/fleet-homelab-gitops
@@ -135,7 +128,7 @@ From then on, `up.sh` starts this run after every rebuild.
 
 ## 8. Optional: CI
 
-With CI, every pull request is checked and planned, and you can run `up`/`down` from GitHub. The full setup (repository secrets, settings, branch rules and the optional GitHub App) is in the plan's [Task 15](plans/fleet-homelab-aws-deployment.md#task-15-remote-execution-via-github-actions-oidc--no-long-lived-aws-keys-in-github) and [Task 16](plans/fleet-homelab-aws-deployment.md#task-16-pr-triggered-terraform-plan-checks--closing-the-gitops-loop-for-infra) notes.
+With CI, every pull request is checked and planned, and you can run `up`/`down` from GitHub. [GitHub setup](github-setup.md) covers all of it for both repos, in order: secrets, repository settings, running the checks once, branch rules, and the optional GitHub App that lets a CI `up` reapply the GitOps configuration.
 
 To have CI check for your own private values (your hostname, account ID and so on, stored only as hashes), run:
 
