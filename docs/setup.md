@@ -2,7 +2,7 @@
 
 How to build this in your own accounts. Steps 1–5 get Fleet running; the rest is optional. Commands are for bash or zsh (Linux, macOS, or WSL on Windows).
 
-The first build takes about 30 minutes. While it's up, the stack costs about $0.27 an hour, so tear it down when you're done (step 9).
+The first build takes about 30 minutes. While it's up, the stack costs about $0.25 an hour, so tear it down when you're done (step 9).
 
 ## 1. What you need
 
