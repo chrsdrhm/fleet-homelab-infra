@@ -19,14 +19,14 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 
 ## Cost
 
-Left running, the stack would cost about **$6.45 a day, or about $196 a month** (roughly $0.27 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer and its public IPv4 addresses. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**. Torn down, it costs about **$1.40 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
+Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer and its public IPv4 addresses. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**. Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. A $100 AWS Budget emails me at every $10 of spend, mainly to catch a stack I forgot to tear down. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
 ## Teardown and rebuild
 
 Two scripts do it, and the same scripts run from my laptop or from GitHub Actions:
 
-- **`scripts/down.sh`** (about 18–20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
-- **`scripts/up.sh`** (about 22 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
+- **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
+- **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so Fleet's configuration is reapplied.
 
 What has to survive a teardown is kept outside it: the database (through the snapshot), the Fleet server key that encrypts data in that database, the Windows MDM certificate, the software-installers bucket, DNS and the TLS certificate. A rebuilt Fleet comes back with the same users, hosts, settings and SSO.
 
