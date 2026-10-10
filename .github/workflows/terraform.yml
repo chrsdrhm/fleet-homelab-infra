@@ -80,6 +80,7 @@ jobs:
       id-token: write
       contents: read
       pull-requests: write
+      actions: read
     concurrency:
       group: terraform-plan-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -131,14 +132,14 @@ jobs:
 
       # The comment is public and GitHub does NOT mask it, so every secret value and the
       # account ID are replaced first (the same masking the run log gets). The summary
-      # (plan line + changing resources) must pass a 12-digit check or nothing is posted;
-      # the full plan is cut so the whole comment fits GitHub's 65,536-character limit, and left out if it
-      # still holds a 12-digit number.
+      # (plan line + changing resources) must pass a 12-digit check or nothing is posted.
+      # The full plan is added only if the whole comment stays within 60,000 characters
+      # and it holds no 12-digit number; otherwise the comment links to this job instead.
       - name: Build the plan comment
         if: steps.gate.outputs.run == 'true'
         env:
           EXITCODE: ${{ steps.plan.outputs.exitcode }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
           S1: ${{ secrets.FLEET_SUBDOMAIN }}
           S2: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
           S3: ${{ secrets.TF_STATE_BUCKET }}
@@ -148,6 +149,9 @@ jobs:
           S7: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: |
           account=$(aws sts get-caller-identity --query Account --output text)
+          job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "terraform-plan") | .html_url' | head -1)
+          [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           mask() {
             local text="$1" v
             for v in "$S1" "$S2" "$S3" "$S4" "$S5" "$S6" "$S7" "$account"; do
@@ -174,21 +178,17 @@ jobs:
             exit 1
           fi
 
-          # GitHub caps a comment at 65,536 characters; the plan gets what the summary leaves.
-          max=$((63000 - ${#summary}))
+          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary"
+          foot=$'\n\n[Workflow job]('"$job_url"$')\n'
           full=$(mask "$(cat plan.txt)")
-          cut=""
-          if [ "${#full}" -gt "$max" ]; then
-            full=${full:0:$max}
-            cut=$'\n\n**The plan was cut to fit in a comment.** The complete output is in the run log.'
-          fi
+          details=$'\n\n<details><summary>Full plan (secret values masked)</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
           if has12 "$full"; then
-            details=$'\n\n_The full plan is left out because it contains a 12-digit number, which could be an account ID. It is in the run log._'
-          else
-            details=$'\n\n<details><summary>Full plan (secret values masked)</summary>\n\n````\n'"$full"$'\n````\n\n</details>'"$cut"
+            details=$'\n\n_The full plan is not shown here because it contains a 12-digit number, which could be an account ID. See the [workflow job]('"$job_url"$')._'
+          elif [ $(( ${#head} + ${#details} + ${#foot} )) -gt 60000 ]; then
+            details=$'\n\n_The full plan is too long for a comment. See it in the [workflow job]('"$job_url"$')._'
           fi
 
-          printf '%s' $'<!-- terraform-plan -->\n### Terraform plan\n\n'"$summary$details"$'\n\n[Run log]('"$RUN_URL"$')\n' > comment.md
+          printf '%s' "$head$details$foot" > comment.md
 
       - name: Comment on the pull request
         if: steps.gate.outputs.run == 'true'
