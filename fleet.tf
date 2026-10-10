@@ -133,7 +133,7 @@ module "migrations" {
 # metrics only start flowing minutes after the cluster has tasks.)
 resource "aws_cloudwatch_log_group" "container_insights" {
   name              = "/aws/ecs/containerinsights/${local.cluster_name}/performance"
-  retention_in_days = 1
+  retention_in_days = 5
 }
 
 resource "aws_route53_record" "fleet_alb" {
