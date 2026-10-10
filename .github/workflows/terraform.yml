@@ -208,7 +208,11 @@ jobs:
           if [ "$EXITCODE" = "1" ]; then
             summary="**The plan failed.** The error is in the full output below."
           else
-            headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || echo "No plan line found.")
+            headline=$(grep -m1 -E '^(Plan:|No changes\.)' plan.txt || true)
+            if [ -z "$headline" ] && grep -q '^Changes to Outputs:' plan.txt; then
+              headline="No resource changes; only output values change."
+            fi
+            headline="${headline:-No plan line found.}"
             # The backticks in the sed replacements are Markdown code spans, not shell.
             # shellcheck disable=SC2016
             rows=$(grep -E '^[[:space:]]*# .* (will be created|will be updated in-place|will be destroyed|must be replaced|will be replaced|will be read during apply)$' plan.txt \

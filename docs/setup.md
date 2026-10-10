@@ -1,0 +1,156 @@
+# Setup guide
+
+How to build this in your own accounts. Steps 1–5 get Fleet running; the rest is optional. Commands are for bash or zsh (Linux, macOS, or WSL on Windows).
+
+The first build takes about 30 minutes. While it's up, the stack costs about $0.25 an hour, so tear it down when you're done (step 9).
+
+## 1. What you need
+
+- **Accounts:**
+  - an AWS account (admin access)
+  - a domain you control. If its DNS is on Cloudflare, Terraform delegates the Fleet subdomain for you; with any other DNS provider, you add four NS records by hand (step 5).
+  - a [Fleet Premium](https://fleetdm.com/pricing) license key
+  - GitHub
+- **Tools:**
+  - [Terraform](https://developer.hashicorp.com/terraform/install) 1.12 or newer (CI uses 1.14.8)
+  - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  - [GitHub CLI](https://cli.github.com/)
+  - git, curl, jq, python3
+
+## 2. Get the code
+
+Fork both repos, keeping their names, and clone them:
+
+```bash
+gh repo fork chrsdrhm/fleet-homelab-infra --clone
+gh repo fork chrsdrhm/fleet-homelab-gitops --clone
+cd fleet-homelab-infra
+git config core.hooksPath checks/hooks   # optional: blocks commits that contain private values
+```
+
+In both repos, change `.github/CODEOWNERS` to your GitHub username.
+
+## 3. Sign in to AWS and create the state bucket
+
+```bash
+aws configure sso && aws sso login        # or any other way the AWS CLI can sign in
+export AWS_REGION=us-east-1
+
+BUCKET=fleet-homelab-tfstate-$(aws sts get-caller-identity --query Account --output text)
+aws s3api create-bucket --bucket "$BUCKET"
+aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+printf 'bucket = "%s"\n' "$BUCKET" | tee backend.hcl > okta/backend.hcl
+```
+
+The bucket holds Terraform's state. It's created once and never torn down.
+
+## 4. Fill in your settings
+
+```bash
+cp example.tfvars terraform.tfvars
+```
+
+Then edit `terraform.tfvars`. It's gitignored; never commit it.
+
+| Setting | Value |
+|---|---|
+| `fleet_subdomain` | Fleet's hostname, e.g. `fleet.example.com` |
+| `fleet_license_key` | Your Fleet Premium key |
+| `cloudflare_zone_name` | Your domain, e.g. `example.com`. Leave empty if your DNS isn't on Cloudflare. |
+| `cloudflare_api_token` | A Cloudflare token made from the **Edit zone DNS** template, for that zone only. Leave empty if your DNS isn't on Cloudflare. |
+| `budget_alert_email` | Where cost alerts go |
+| `waf_ci_header_value` | A random string: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
+| `github_owner`, `github_owner_id`, `github_repo_id` | The output of the command below |
+
+```bash
+gh api repos/$(gh api user --jq .login)/fleet-homelab-infra --jq '{github_owner: .owner.login, github_owner_id: .owner.id, github_repo_id: .id}'
+```
+
+## 5. Build it
+
+```bash
+terraform init -backend-config=backend.hcl
+terraform apply -var-file=terraform.tfvars -target=aws_secretsmanager_secret_version.fleet_server_private_key   # first time only
+NO_GITOPS=1 ./scripts/up.sh
+```
+
+**DNS not on Cloudflare?** Before running `up.sh`, create the Fleet subdomain's DNS zone and delegate it by hand, because the TLS certificate can't be issued until the subdomain points to it:
+
+```bash
+terraform apply -var-file=terraform.tfvars -target=aws_route53_zone.fleet
+terraform output fleet_name_servers
+```
+
+At your DNS provider, add four NS records for `<fleet_subdomain>`, one per name server. Then run `up.sh`. You only do this once, because the zone survives teardowns.
+
+When it finishes, open `https://<fleet_subdomain>/` and create the first admin account. Keep its password in your password manager.
+
+**Email:** Fleet sends invites and MFA codes through Amazon SES, which in a new AWS account only delivers to verified addresses. To get them, verify your own address once:
+
+```bash
+aws sesv2 create-email-identity --email-identity you@example.com
+```
+
+Then click the link in the email AWS sends.
+
+## 6. Optional: Okta single sign-on
+
+1. Create an [Okta free trial](https://www.okta.com/free-trial/) org. It becomes a free plan after 30 days; sign in monthly to keep it active.
+2. Create an **API Services** app for Terraform: Applications → Create App Integration → Classic experience.
+   - Use a key pair, and save the private key outside the repo.
+   - Grant it `okta.apps.manage` and `okta.groups.manage`, and the Super Administrator role.
+3. Apply the Okta side:
+   ```bash
+   cd okta && cp example.tfvars terraform.tfvars   # fill it in
+   terraform init -backend-config=backend.hcl && terraform apply -var-file=terraform.tfvars
+   ```
+4. Add yourself to the **Fleet Admins** group in the Okta console.
+
+Fleet picks up the Okta settings from the GitOps repo (step 7).
+
+## 7. The GitOps repo (Fleet's configuration)
+
+1. **Create an API user for GitOps:**
+   - In Fleet, go to My account → Get API token.
+   - In a separate terminal, run:
+     ```bash
+     fleetctl config set --address https://<fleet_subdomain> --token <your token>
+     fleetctl user create --name "GitOps CI" --global-role gitops --api-only
+     ```
+   - The second command prints the new user's token once; copy it for the next step.
+2. **Set these secrets** in `fleet-homelab-gitops` with `gh secret set NAME --repo <you>/fleet-homelab-gitops`:
+   - `FLEET_URL`: `https://<fleet_subdomain>`
+   - `FLEET_API_TOKEN`: the token from step 1
+   - `FLEET_CI_HEADER`: your `waf_ci_header_value`
+   - **With Okta:**
+     - `FLEET_OKTA_METADATA_URL`: from `terraform output -raw metadata_url`, run in `okta/`
+     - `FLEET_IDP_IMAGE_URL`: from `terraform output -raw idp_logo_url`
+   - **Without Okta:** set `enable_sso: false` in its `default.yml` instead.
+3. **Run it:**
+   ```bash
+   gh workflow run workflow.yml --repo <you>/fleet-homelab-gitops
+   ```
+
+From then on, `up.sh` starts this run after every rebuild.
+
+## 8. Optional: CI
+
+With CI, every pull request is checked and planned, and you can run `up`/`down` from GitHub. The full setup (repository secrets, settings, branch rules and the optional GitHub App) is in the plan's [Task 15](plans/fleet-homelab-aws-deployment.md#task-15-remote-execution-via-github-actions-oidc--no-long-lived-aws-keys-in-github) and [Task 16](plans/fleet-homelab-aws-deployment.md#task-16-pr-triggered-terraform-plan-checks--closing-the-gitops-loop-for-infra) notes.
+
+To have CI check for your own private values (your hostname, account ID and so on, stored only as hashes), run:
+
+```bash
+python3 checks/private-values/check.py --from-tfvars && checks/private-values/sync-hashes.sh
+```
+
+[`checks/README.md`](../checks/README.md) covers all the checks.
+
+## 9. Day to day
+
+| To | Run |
+|---|---|
+| Tear down (keeps your data) | `./scripts/down.sh` |
+| Bring it back | `./scripts/up.sh` |
+| Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
+
+If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

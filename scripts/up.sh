@@ -69,7 +69,11 @@ fi
 # Start a GitOps run, so a config change pushed while the stack was down is applied now.
 # Best effort: needs the GitHub CLI with access to that repo (locally your own login; in
 # CI a GitHub App token as GH_TOKEN). NO_GITOPS=1 skips it.
-GITOPS_REPO="${GITOPS_REPO:-chrsdrhm/fleet-homelab-gitops}"
+# The GitOps repo is assumed to sit next to this one, under the same owner: in CI from
+# GITHUB_REPOSITORY_OWNER (the job's app token can only see the GitOps repo), locally
+# from this clone's GitHub remote.
+owner="${GITHUB_REPOSITORY_OWNER:-$(gh repo view --json owner --jq .owner.login 2>/dev/null || echo unknown)}"
+GITOPS_REPO="${GITOPS_REPO:-$owner/fleet-homelab-gitops}"
 if [ "$H" = "200" ] && [ -z "${NO_GITOPS:-}" ]; then
   if command -v gh >/dev/null 2>&1 && gh workflow run workflow.yml --repo "$GITOPS_REPO" --ref main >/dev/null 2>&1; then
     echo "Started a GitOps run in $GITOPS_REPO (follow it with: gh run watch --repo $GITOPS_REPO)."
