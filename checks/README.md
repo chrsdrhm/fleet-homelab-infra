@@ -28,6 +28,26 @@ git config core.hooksPath checks/hooks   # optional: check every commit for priv
 
 `install-tools.sh` verifies each download against its pinned SHA-256 checksum. Dependabot can't update these pins (or the zizmor digest in `run.sh`); bump a version and its checksum together by hand.
 
+## The local hooks
+
+The hooks in `checks/hooks/` (`pre-commit` and `commit-msg`) run the private-values check on every commit, before anything leaves your machine. CI only checks a pull request after the branch has already been pushed, so the hooks are what actually prevent a leak.
+
+Git doesn't run hooks from a repo on its own; each clone has to opt in once:
+
+```bash
+git config core.hooksPath checks/hooks
+```
+
+That setting is saved in the clone's own `.git/config`, not in the repo, so every new clone needs it again. `.git/` is git's internal folder; VS Code and most file browsers hide it, and it is never committed or pushed. To check or change the setting, use `git config` rather than editing the file:
+
+```bash
+git config core.hooksPath                  # shows checks/hooks when the hooks are on
+git config --local --list                  # every setting this clone has in .git/config
+git config --unset core.hooksPath          # turn the hooks off
+```
+
+To skip the hooks for one commit, use `git commit --no-verify`. CI still runs the same check on the pull request.
+
 ## Removing them
 
 Delete this folder. Nothing else breaks:
