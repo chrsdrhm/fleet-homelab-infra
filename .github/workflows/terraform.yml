@@ -193,7 +193,7 @@ jobs:
           full=$(grep -vE ': (Refreshing state\.\.\.|Reading\.\.\.|Read complete after |Still (reading|refreshing)\.\.\.)' plan.txt \
             | sed -e '/./,$!d' || true)
           full=$(mask "$full")
-          details=$'\n\n<details><summary>Full plan</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
+          details=$'\n\n<details><summary>Plan details</summary>\n\n````\n'"$full"$'\n````\n\n</details>'
           if has12 "$full"; then
             details=$'\n\n_The full plan is not shown here because it contains a 12-digit number, which could be an account ID. See the [workflow job]('"$job_url"$')._'
             foot=$'\n'
