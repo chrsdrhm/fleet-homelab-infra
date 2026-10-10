@@ -132,7 +132,7 @@ jobs:
       # The comment is public and GitHub does NOT mask it, so every secret value and the
       # account ID are replaced first (the same masking the run log gets). The summary
       # (plan line + changing resources) must pass a 12-digit check or nothing is posted;
-      # the full plan is cut to fit GitHub's 65,536-character limit and left out if it
+      # the full plan is cut so the whole comment fits GitHub's 65,536-character limit, and left out if it
       # still holds a 12-digit number.
       - name: Build the plan comment
         if: steps.gate.outputs.run == 'true'
@@ -174,7 +174,8 @@ jobs:
             exit 1
           fi
 
-          max=60000
+          # GitHub caps a comment at 65,536 characters; the plan gets what the summary leaves.
+          max=$((63000 - ${#summary}))
           full=$(mask "$(cat plan.txt)")
           cut=""
           if [ "${#full}" -gt "$max" ]; then
