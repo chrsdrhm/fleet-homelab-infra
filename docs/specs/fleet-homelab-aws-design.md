@@ -519,8 +519,13 @@ it out by not applying that root. The Okta side is optional the same way
 
 - **Always on.** AWS bills per active user per month with a one-editor minimum
   per workspace, about **$9/month** for a single admin, whether or not the
-  Fleet stack is up. It is not torn down: that would not reliably save money
-  and would lose anything not in code. While the stack is down, CloudWatch
+  Fleet stack is up. It is not torn down with the stack: the charge is per
+  active user per month, not per hour, so any month with a login costs $9
+  however long the workspace exists (AWS does not document charges for a
+  workspace that exists only part of a month). Tearing it down each session
+  would also give it a new workspace ID, which breaks the Okta app until
+  `okta/` is re-applied, and would lose the hand-built dashboards and alert
+  rules. Deleting it only saves money for whole months without use. While the stack is down, CloudWatch
   history (15 months) stays visible and the Fleet panels show no data. API keys
   and service accounts are billed like users, so the design uses none (panels
   are built by hand, which suits the goal of learning Grafana).
