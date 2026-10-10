@@ -214,9 +214,12 @@ Non-goals).
 ### DNS / TLS
 
 My domain's DNS is hosted on Cloudflare. A Route 53 hosted zone is
-created just for the `fleet.<domain>` subdomain; 4 NS records are added in
-the Cloudflare dashboard to delegate only that subdomain to Route 53 — the
-rest of the domain stays on Cloudflare, untouched. ACM validates the
+created just for the `fleet.<domain>` subdomain; Terraform (`cloudflare.tf`)
+adds 4 NS records in Cloudflare to delegate only that subdomain to Route 53 —
+the rest of the domain stays on Cloudflare, untouched. The Cloudflare part is
+optional: with `cloudflare_zone_name` left empty, the same 4 NS records are added
+by hand once at any other DNS provider, from the `fleet_name_servers` output
+(the Route 53 zone survives teardowns, so they stay valid). ACM validates the
 certificate against the Route 53 zone. Fleet is **not** proxied through
 Cloudflare's CDN (NS records can't be proxied regardless, and proxying the
 `fleet` subdomain itself would be a bad fit for Fleet's long-lived
