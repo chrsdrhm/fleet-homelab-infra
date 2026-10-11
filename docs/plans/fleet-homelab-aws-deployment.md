@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2640,7 +2640,7 @@ Added after Task 19, at my request. **Not the same thing as Task 10/11's SSO.** 
 
 ---
 
-### Task 21: Health and error scan — are all the components working?
+### Task 21: Health and error scan, and a repo review
 
 Added at my request. A read-only runbook to run **while the stack is up** (Fleet's CloudWatch logs are destroyed with the stack, and the app log group keeps only 5 days). First baseline run: 2026-10-05, after the Okta, GitOps and Aurora 3.13.0 work.
 
@@ -2669,6 +2669,95 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 
 **Possible follow-ups, not built:** keep Fleet's app logs beyond teardown (a subscription to S3, or a named log group kept outside the teardown), alarms on the error rate, and a scheduled version of this scan.
 
+**Repo and docs review** (both repos; no stack needed). Run it alongside the health scan, or after a run of changes. Each finding becomes a pull request, grouped by theme:
+1. **Accuracy:** the README's architecture diagram (Task 22), the READMEs, `docs/setup.md`, `docs/github-setup.md`, `checks/README.md`, `AGENTS.md` and the spec match the code and each other. Commands still work, links and anchors resolve, and user-facing pages use the rounded cost figures.
+2. **Clarity and concision:** each topic has one home and is linked from elsewhere, not repeated. Plain language, setup steps before background, no meta remarks or incident narratives.
+3. **Tidy:** stale files, branches, comments and TODOs; comments in workflows and scripts that no longer match what the code does; unused variables and outputs.
+4. **Bug scrub:** workflows (permissions, `if:` conditions, concurrency and cancelled runs, untrusted input), scripts (quoting, error handling, `checks/run.sh` clean), and Terraform (identifying values `sensitive`, data-loss guard coverage, teardown and rebuild still restoring everything).
+5. **Privacy:** rerun the private-values scan over the full history of both repos, and check that recent PR comments and CI logs hold no identifying values.
+6. **Upkeep:** Dependabot pull requests, pinned versions still current, and the tools' maintenance (actionlint: check again from 2027-01).
+
+---
+
+### Task 22: Architecture diagram in the README
+
+Added at my request. A diagram of the stack for the README's **What this is** section, so a reader sees the shape of it before the details.
+
+**Format:** [Mermaid](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams), written in the README itself. GitHub renders it, it's plain text that a pull request can review and diff, and there's no image file to keep in step with the code.
+
+- [ ] **Step 1: Draft the diagram.** Show, at the level a reader needs (not every resource):
+  - **The request path:** devices running osquery/Fleet's agent and people in a browser → DNS (Cloudflare delegating to Route 53) → the WAF and the load balancer → Fleet on ECS Fargate → Aurora MySQL and Redis, in private subnets, with the NAT Gateway for outbound.
+  - **Around it:** Secrets Manager, SES for email, the ACM certificate, the S3 buckets.
+  - **Sign-in:** Okta for single sign-on (optional).
+  - **CI and GitOps:** GitHub Actions reaching AWS through OIDC (plan on pull requests, apply on merge, `up`/`down`), and the GitOps repo applying Fleet's configuration.
+  - **Optional and always-on parts:** Amazon Managed Grafana (optional, always on), and which resources survive a teardown (the database snapshot, secrets, buckets, the DNS zone and certificate, the budget), so the teardown story is visible too.
+- [ ] **Step 2: Check it against the code.** Every box maps to something in the Terraform or the workflows, and every optional part is marked optional. Check it renders on GitHub in light and dark mode and on a phone.
+- [ ] **Step 3: Add it to the README** under **What this is**, with a one-line caption. Link it from the GitOps README too, if it helps there.
+- [ ] **Step 4: Keep it current:** the repo review in Task 21 checks the diagram against the code.
+
+---
+
+### Task 23: Deep dive — how Fargate runs Fleet, and where its image comes from
+
+Added at my request: a guided, read-only look at the compute side, to understand it rather than change it. Run it while the stack is up. Findings go into the spec (and a follow-up task if something should change).
+
+- [ ] **Step 1: The image.** `fleet.tf` sets `fleetdm/fleet:v4.92.0`, which ECS pulls from Docker Hub through the NAT Gateway at each task start. 🎓 Find the digest the running task actually uses (`aws ecs describe-tasks` → `containers[].imageDigest`), and compare it with the tag on Docker Hub. Questions to answer: a tag can be re-pushed, a digest can't, so should this pin a digest? Would an ECR pull-through cache help (rate limits, NAT data)? How does an upgrade happen (a new tag in `fleet.tf`, a pull request, the migrations task), and could Dependabot or Fleet's release notes drive it?
+- [ ] **Step 2: The task definition.** 🎓 Read the live one (`aws ecs describe-task-definition`): the container, the 512 CPU / 4096 MB size, environment variables versus secrets pulled from Secrets Manager, the log configuration (CloudWatch), and the two IAM roles (the **execution role** ECS uses to pull the image and read secrets, and the **task role** Fleet itself runs as). Map each part back to `fleet.tf` and Fleet's `byo-ecs` module.
+- [ ] **Step 3: The service and a deployment.** 🎓 `aws ecs describe-services`: desired and running counts, the deployment circuit breaker, and the autoscaling limits. Then trace what a change does, step by step: a new task definition revision, a new task started in a private subnet (`awsvpc`, its own network interface and security group), the load balancer's health check, the old task drained (the 300-second deregistration delay), and stopped.
+- [ ] **Step 4: Migrations and start-up.** How `module.migrations` runs `fleet prepare db` as a one-off task before the service starts, and what the first boot after a snapshot restore does.
+- [ ] **Step 5: Fargate itself.** The platform version, CPU architecture (x86 versus ARM/Graviton, and whether Fleet's image supports ARM), Fargate Spot, and what the task costs per hour, against the sizing notes in the spec.
+- [ ] **Step 6: Write it up.** A short "How Fleet runs on Fargate" section in the spec, and a task for any change worth making (for example, pinning the image by digest).
+
+
+---
+
+### Task 24: Hands-on inside Aurora and Redis
+
+Added at my request: look inside the data stores Fleet uses, read-only, to see how it keeps its state. There's no SQS in this stack (Fleet queues its work in Redis), so it's Aurora and Redis. Both sit in private subnets with no public access, so the way in is a short-lived "tools" container inside the VPC, opened with ECS Exec: no SSH, no bastion host, no open ports.
+
+- [ ] **Step 1: Build the way in** (`tools.tf`, off by default with a variable, so it costs nothing unless used):
+  - an ECS task definition for a small image with a MySQL client and `redis-cli`, pinned by digest, run in Fleet's private subnets with a security group that Aurora's and Redis's groups allow in
+  - ECS Exec: `enable_execute_command`, the task role's `ssmmessages` permissions, and the Session Manager plugin for the AWS CLI on my machine
+  - a read-only MySQL user for this, with its password in Secrets Manager; never the admin user
+  - torn down with the stack, like the rest of `module.fleet`
+- [ ] **Step 2: 🎓 You run this — Aurora.** Start the task, `aws ecs execute-command` into it, and connect with the read-only user. Look at:
+  - `SHOW TABLES` in Fleet's database, and the ones that matter: `hosts`, `labels` and `label_membership`, `policies` and `policy_membership`, `queries` and `scheduled_query_stats`, `software` and `host_software`, `activities`, `users`, `app_config_json`
+  - `migration_status_tables`: Fleet's schema version, which the migrations task advances
+  - how a GitOps change shows up here (a policy row appears after the apply)
+  - the largest tables (`information_schema.tables`), against the spec's sizing
+- [ ] **Step 3: 🎓 You run this — Redis.** From the same task, `redis-cli` with TLS. `INFO` (memory, clients, keyspace), then `SCAN` (never `KEYS`) to see what Fleet keeps there: live query campaigns and their results, locks for its scheduled jobs, and caches. Run a live query in Fleet and watch its keys appear and expire.
+- [ ] **Step 4: Fleet's own view.** Compare with `fleetctl debug` (for example `db-locks`, `migrations`, `errors`) and the `/api/v1/fleet/status/*` endpoints, which show the same state through Fleet.
+- [ ] **Step 5: Stop the task** and write up what each store holds: a short section in the spec ("What Fleet keeps where").
+
+The RDS **Query Editor** in the AWS console is a simpler way into Aurora only, but it needs the cluster's Data API turned on (`enable_http_endpoint`); weigh that against Step 1 before building.
+
+
+---
+
+### Task 25: Upgrade Fleet, and a runbook for doing it
+
+Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot doesn't cover them: the version is the image tag in `fleet.tf`. The routine is in [`docs/upgrading-fleet.md`](../upgrading-fleet.md): read the release notes, snapshot Aurora, change the tag in a pull request, merge (applied on merge while the stack is up, otherwise at the next `up`), check, and roll back from the snapshot if needed. Database migrations can't be undone, which is why the snapshot comes first.
+
+- [ ] **Step 1: 🎓 You run this — upgrade 4.92.0 → 4.93.0** by following the runbook end to end, and fix anything in it that turns out wrong or unclear.
+- [ ] **Step 2: Check `fleet-terraform`'s newer tags** (`tf-mod-root-*`, the add-ons) and their changelogs, and decide whether to bump them, as their own pull request.
+- [ ] **Step 3: Have Dependabot open the upgrade pull request.** Dependabot can't read the image tag in `fleet.tf`, but it reads Dockerfiles. So:
+  - move the tag to a one-line `fleet.Dockerfile` (`FROM fleetdm/fleet:v4.93.0`), and have `fleet.tf` read it (for example, `trimprefix(trimspace(file("${path.module}/fleet.Dockerfile")), "FROM ")`)
+  - add a `docker` entry to `.github/dependabot.yml` for it, with the same 7-day cooldown
+  - each new release then arrives as a pull request that already has its plan and Claude review; merging it applies the upgrade (the snapshot still comes first)
+  - update `docs/upgrading-fleet.md` to start from that pull request
+- [ ] **Step 4: Check whether Dependabot bumps the `fleet-terraform` modules.** Their tags have unusual names (`tf-mod-root-v1.31.1`, `tf-mod-addon-mdm-v2.2.0`), and as of 2026-10-11 we pin the newest of all four, so it hasn't been tested. GitHub's dependency graph doesn't list Terraform, so check two ways:
+  - **Now:** Insights → Dependency graph → Dependabot → the `terraform` entry → **Check for updates**, and read its log: it lists every dependency it found. Are the four `fleet-terraform` sources there?
+  - **At the next Dependabot pull request, or the next `fleet-terraform` release:** a newer tag should produce a pull request within about two weeks (weekly checks plus the 7-day cooldown). If it doesn't, cover the modules another way, such as a weekly workflow that compares the pinned tags with the latest and opens an issue.
+- [ ] **Step 5: Release notifications for the notes themselves:** on `fleetdm/fleet`, **Watch → Custom → Releases**, so the release notes arrive by email. That repo also publishes releases for other components (such as the agent), so filter on `fleet-v` in the title.
+- [ ] **Step 6: A Claude skill that reviews a Fleet upgrade** (`.claude/skills/fleet-upgrade/SKILL.md`, which Claude Code loads in this repo). Given the current and target versions (from `fleet.Dockerfile` and the pull request), it:
+  - reads every release in between (GitHub releases and `CHANGELOG.md`) and summarizes what changed, briefly
+  - flags **breaking changes and anything we must change**, checked against this setup: the server settings in `fleet.tf`, minimum MySQL and Redis versions against Aurora's and ElastiCache's, the `fleet-terraform` module and add-on versions, the GitOps YAML keys used in the GitOps repo, and CI (`fleetctl`, the GitOps action from Fleet's `fleetctl new` templates)
+  - lists what's worth adopting (new features or settings), separately from what's required
+  - ends with a verdict (✅ upgrade as is / ⚠️ upgrade with these changes / ❌ wait), and the runbook steps still to do (the snapshot)
+
+  Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
+
+
 ---
 
 ## Spec coverage check
@@ -2683,7 +2772,11 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - AWS Budget alert ($100/mo, an alert every $10): Task 13. ✓ (built and applied)
 - Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
-- Health and error scan of the running stack (runbook plus baseline): Task 21.
+- Health and error scan of the running stack (runbook plus baseline), and the repo and docs review: Task 21.
+- Architecture diagram in the README (Mermaid): Task 22.
+- Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
+- Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
+- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes): Task 25.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth and applies it while the stack is up): Task 16, with apply on merge added 2026-10-11. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
