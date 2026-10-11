@@ -2225,6 +2225,8 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
 
 ---
 
+**Apply on merge (2026-10-11):** merging to `main` now applies it while the stack is up. A new `apply-on-merge` job runs on every push to `main` (docs-only changes excepted): it checks the state for `module.fleet`, and if the stack is down it applies nothing and leaves `main` for the next `up`. Otherwise it plans, runs the data-loss guard again (stopping unless the merged pull request had `allow-destroy`), and applies through `tf-apply.sh`. No IAM change was needed: the apply role's trust already matched any run on `main`, and the ruleset means only a merge or a manual run can start one. Before this, a merge left `main` ahead of the deployed state until the next `up`, so every later plan showed the pending change.
+
 ### Task 17: Grafana dashboard and alerting — Amazon Managed Grafana (optional)
 
 **Redesigned 2026-10-10: Amazon Managed Grafana (AMG) instead of a Proxmox container, and optional.** The Proxmox design only worked for someone with my Proxmox host, needed a static IAM access key for CloudWatch (the plan's one long-lived AWS credential), and a second IAM user for SES SMTP. In AMG, CloudWatch is read through an IAM role, alerts go out through SNS, AWS runs TLS, upgrades and patching, and the whole thing is Terraform anyone can apply. The goal is unchanged: learn Grafana hands-on; the plumbing is code, the panels and alert rules are built by hand.

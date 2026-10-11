@@ -1,5 +1,6 @@
 # Lets GitHub Actions in this repo reach AWS without stored keys (Task 15). Two roles:
-#  - apply: up/down/plan, only from a manually started run (workflow_dispatch) on main;
+#  - apply: up/down and the apply after a merge, only from runs on main (a merge or a
+#           manually started run; the ruleset allows no other way onto main);
 #  - plan:  read-only, only from pull_request runs (Task 16).
 # Applied locally by an admin, never by CI: the apply role is denied from changing
 # either role or policy, so a pending diff here makes a CI run fail with AccessDenied.
@@ -20,7 +21,7 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   thumbprint_list = [data.tls_certificate.github_actions.certificates[0].sha1_fingerprint]
 }
 
-# ---------- Apply role: up / down / plan, workflow_dispatch on main only ----------
+# ---------- Apply role: up / down / apply-on-merge, runs on main only ----------
 
 resource "aws_iam_role" "github_actions_apply" {
   name = "fleet-homelab-github-actions"
