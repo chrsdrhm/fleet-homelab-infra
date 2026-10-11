@@ -126,13 +126,13 @@ Fleet picks up the Okta settings from the GitOps repo (step 7).
 
 From then on, `up.sh` starts this run after every rebuild.
 
-**GitOps mode is on** (in its `default.yml`): Fleet's UI shows everything the repo manages as read-only, so changes go through pull requests. Keep it on whenever you run this through CI: the repo defines everything, so anything made in the UI would be deleted by the next run, with no warning. Fleet can leave labels, software or enroll secrets editable in the UI; the [GitOps README](https://github.com/chrsdrhm/fleet-homelab-gitops#gitops-mode-the-ui-is-read-only) explains when you'd want that.
+**GitOps mode is on** (in its `default.yml`): Fleet's UI shows everything the repo manages as read-only, so changes go through pull requests. Keep it on: the repo defines everything, so anything made in the UI would be deleted by the next GitOps run, with no warning. Fleet can leave labels, software or enroll secrets editable in the UI; the [GitOps README](https://github.com/chrsdrhm/fleet-homelab-gitops#gitops-mode-the-ui-is-read-only) explains when you'd want that.
 
-## 8. Optional: CI
+## 8. Optional: CI for the infrastructure
 
-CI is optional, but worth it. **To set it up, follow [GitHub setup](github-setup.md)**, which covers both repos step by step.
+This is CI for the Terraform in this repo, plus checks and reviews on both repos' pull requests. It's separate from the GitOps workflow in step 7, which applies Fleet's configuration and isn't optional. CI is optional, but worth it. **To set it up, follow [GitHub setup](github-setup.md)**, which covers both repos step by step.
 
-With CI, every pull request is checked before it can merge, and the results land on the pull request itself:
+With it, every pull request is checked before it can merge, and the results land on the pull request itself:
 - **Lint and tests:** a ❌ comment names any check that fails, including one that catches a private value about to go public.
 - **Terraform plan:** exactly what will change in AWS, with secrets masked, and a failed check if the change would destroy data.
 - **Claude review (optional):** a ✅ / ⚠️ / ❌ verdict against Fleet's approach and AWS and endpoint security baselines; comment `@claude` to review again after a fix.
