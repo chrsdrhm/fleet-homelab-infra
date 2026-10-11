@@ -8,10 +8,12 @@
 name: Claude review
 
 on:
+  # Not on every push, to save the plan's usage. To review the latest commit again,
+  # comment @claude on the pull request (only the repository owner can trigger it).
   pull_request:
-    # Not on every push, to save the plan's usage. Re-run from the Actions tab
-    # after pushing changes you want reviewed again.
     types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -19,14 +21,21 @@ permissions:
 jobs:
   review:
     name: claude-review
-    if: github.event.pull_request.draft == false
+    # A comment triggers it only on a pull request, only with @claude, and only from the
+    # repository owner: anyone can comment on a public repo, and each review uses the
+    # owner's plan and secrets. Claude only reads the pull request's code; it never runs it.
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment' && github.event.issue.pull_request
+          && contains(github.event.comment.body, '@claude')
+          && github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write # inline and summary review comments
     concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
+      group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     steps:
       - name: Check that the Claude token is set
@@ -46,6 +55,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # From a comment, the event is about the default branch: check out the PR's head.
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+      - name: Acknowledge the @claude comment
+        if: steps.gate.outputs.run == 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
 
       - name: Review with Claude
         id: review
@@ -56,7 +74,7 @@ jobs:
           github_token: ${{ github.token }} # the job's own token: no OIDC, no app to install
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
 
             Review this pull request as described in AGENTS.md, under "When reviewing a
             pull request". Check changes against Fleet's documented approach and Fleet's own
@@ -94,7 +112,7 @@ jobs:
         env:
           LOG: ${{ steps.review.outputs.execution_file }}
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           if [ ! -f "$LOG" ] || ! result=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
             echo "::warning title=No review result::The review's execution log has no result, so no summary was posted."
