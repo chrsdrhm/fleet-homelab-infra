@@ -130,7 +130,7 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 ## 6. Optional: Claude reviews pull requests
 
-`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
+`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. The summary is updated in place on later runs, not added again. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
 
 **How it signs in.** There are two separate sign-ins:
 - **To Claude, with a one-year token from your subscription.**
@@ -145,8 +145,14 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 - **What it can look at:** the repo, plus Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
 
 **How much it uses:**
-- **Per review:** open the review's run in the Actions tab. Its summary lists the tokens used, turns, duration and a list-price estimate (not billed on a subscription).
-- **Your plan overall:** see **claude.ai → Settings → Usage**, or `/usage` in Claude Code. Reviews draw on the same plan limits as your own sessions.
+- **Per review:** expand **📊 Usage summary** at the end of the summary comment. The review's run in the Actions tab shows the same figures, plus a list-price estimate (not billed on a subscription).
+- **What the numbers mean:**
+  - **Input tokens:** how much text Claude read: the diff, files, `AGENTS.md`, any pages it fetched, and the conversation so far, which is sent again on every turn. That is why this number is large. Most of it is "read from cache": text it already sent, which costs about a tenth as much at API prices.
+  - **Output tokens:** what Claude wrote, its reasoning and comments. A token is roughly ¾ of a word.
+  - **Turns:** rounds of Claude using a tool, such as reading a file or fetching a page. More turns means it dug deeper.
+  - **Duration:** how long the review took.
+- **A lot or a little?** A small pull request here takes about 100,000 input tokens (most of it cached), 1,000–2,000 output tokens, 4–5 turns and under a minute: about $0.10 at API list prices. A large change can be several times that. The list-price estimate is the easiest way to compare reviews.
+- **Your plan overall:** see **claude.ai → Settings → Usage**, or `/usage` in Claude Code. Reviews draw on the same plan limits as your own sessions. To see what one review costs your plan, check that page before and after it.
 
 **Model:** your plan's default. To pin one, set a repository variable, for example:
 ```bash
