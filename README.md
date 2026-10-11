@@ -54,6 +54,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
+| `AGENTS.md` (and `CLAUDE.md`, which imports it) | Rules for AI assistants working in or reviewing this repo |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |
 | `docs/plans/` | The implementation plan, including problems found and fixed while running it |
 | `example.tfvars`, `backend.example.hcl` | Placeholder values; real values live in gitignored `terraform.tfvars` and `backend.hcl` |
