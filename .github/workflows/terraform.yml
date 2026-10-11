@@ -247,10 +247,25 @@ jobs:
       # (plan line + changing resources) must pass a 12-digit check or nothing is posted.
       # The full plan is added only if the whole comment stays within 60,000 characters
       # and it holds no 12-digit number; otherwise the comment links to this job instead.
+      # down.sh destroys module.fleet, so its absence from the state means the stack is
+      # down: the plan then shows the whole stack to add, and the comment says why
+      # (merging never builds it: the apply on merge skips a torn-down stack).
+      - name: Check whether the stack is up
+        id: stack
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          resources=$(terraform state list)
+          if grep -q '^module\.fleet\.' <<< "$resources"; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build the plan comment
         if: steps.gate.outputs.run == 'true'
         env:
           EXITCODE: ${{ steps.plan.outputs.exitcode }}
+          STACK_UP: ${{ steps.stack.outputs.up }}
           GH_TOKEN: ${{ github.token }}
           FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
           CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
@@ -302,6 +317,9 @@ jobs:
           fi
 
           head=$'<!-- terraform-plan -->\n### 🏗️ Terraform plan\n\n'
+          if [ "$STACK_UP" = "false" ]; then
+            head+=$'⏸️ **The stack is down, so this is what the next `up` will build.** Merging this pull request won\'t apply it.\n\n'
+          fi
           if [ -s data-loss.txt ]; then
             caution=$'> [!CAUTION]\n> **This plan destroys or replaces resources that hold data:**\n'
             while IFS= read -r line; do caution+=$'> - `'"$line"$'`\n'; done < data-loss.txt
