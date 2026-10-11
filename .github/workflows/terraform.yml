@@ -257,11 +257,14 @@ jobs:
             --jq '.jobs[] | select(.name == "terraform-plan") | .html_url' | head -1)
           [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           mask() {
+            # Longest values first, so a value that contains another (the email address
+            # contains the domain) is masked whole rather than leaving part of it showing.
             local text="$1" v
-            for v in "$FLEET_SUBDOMAIN" "$CLOUDFLARE_ZONE_NAME" "$TF_STATE_BUCKET" "$BUDGET_ALERT_EMAIL" \
-                     "$FLEET_LICENSE_KEY" "$CLOUDFLARE_API_TOKEN" "$WAF_CI_HEADER_VALUE" "$account"; do
+            while IFS= read -r v; do
               [ -n "$v" ] && text=${text//"$v"/***}
-            done
+            done < <(printf '%s\n' "$FLEET_SUBDOMAIN" "$CLOUDFLARE_ZONE_NAME" "$TF_STATE_BUCKET" "$BUDGET_ALERT_EMAIL" \
+                       "$FLEET_LICENSE_KEY" "$CLOUDFLARE_API_TOKEN" "$WAF_CI_HEADER_VALUE" "$account" \
+                     | awk '{ print length($0) "\t" $0 }' | sort -rn | cut -f2-)
             # Route 53 name servers: the set of four can lead back to the domain.
             printf '%s' "$text" | sed -E 's/ns-[0-9]+\.awsdns-[0-9]+\.[a-z.]+/<name-server>/g'
           }

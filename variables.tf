@@ -31,6 +31,7 @@ variable "cloudflare_zone_name" {
 variable "budget_alert_email" {
   description = "Address that receives AWS Budget alerts. Kept out of Git (this repo is public); set in terraform.tfvars."
   type        = string
+  sensitive   = true # hidden in plans, so it never reaches a pull request comment
 }
 
 variable "waf_ci_header_value" {
