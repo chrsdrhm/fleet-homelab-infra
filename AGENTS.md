@@ -22,7 +22,8 @@ This project follows Fleet's documented approach wherever it can. Before changin
 ## Hard rules
 
 - **No private or identifying values, anywhere.** That covers files, commit messages, branch names, and PR titles, bodies and comments. Private values include the real hostname or domain, the AWS account ID (and ARNs or bucket names that contain it), Okta org names, IDs and URLs, email addresses, and any credential.
-  - Use placeholders: `fleet.example.com`, `example.com`, `123456789012`, `<aws-account-id>`.
+  - Use placeholders: `fleet.example.com`, `example.com`, `123456789012`, `<aws-account-id>`. Placeholder email addresses use `example.com`, `example.org` or `example.net`, the only domains the private-values check accepts.
+  - **A new variable or output that holds an identifying value must be `sensitive = true`,** so Terraform hides it in plans, which are posted to public pull requests.
   - In tests and examples, label placeholders as placeholders.
   - Real values live only in gitignored files (`terraform.tfvars`, `backend.hcl`, `okta/terraform.tfvars`) and in GitHub secrets.
 - **Never create a plaintext copy of a private value:** no extra files, secrets, logs or scan lists. The private-values check stores only hashes.
@@ -61,7 +62,7 @@ Cite a specific control only when you are sure of it.
 Reliability is deliberately traded for cost here. Raise a trade-off only if a change makes it worse than the spec describes.
 
 **Check, in this order:**
-1. **Private or identifying values** anywhere in the change, including PR text and file names.
+1. **Private or identifying values** anywhere in the change, including PR text and file names. Treat an email address on any domain other than `example.com`, `example.org` or `example.net` as a finding, even one that looks made up: the private-values check fails on it too. Flag a new identifying variable or output that isn't `sensitive`.
 2. **Security:**
    - least-privilege IAM, especially the CI roles' trust policies and denies
    - network exposure (security groups, anything made public, WAF rules)
