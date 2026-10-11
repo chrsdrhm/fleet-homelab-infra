@@ -130,7 +130,7 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 ## 6. Optional: Claude reviews pull requests
 
-`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. Each later review posts a new summary at the bottom of the pull request and hides the earlier ones as outdated (you can still expand them). **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
+`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. While a review runs, the comment shows ⏳ with a link to watch it live. Each later review posts a new comment at the bottom of the pull request and hides the earlier ones as outdated (you can still expand them). **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
 
 **How it signs in.** There are two separate sign-ins:
 - **To Claude, with a one-year token from your subscription.**
