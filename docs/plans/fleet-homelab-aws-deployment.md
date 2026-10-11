@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2695,6 +2695,20 @@ Added at my request. A diagram of the stack for the README's **What this is** se
 
 ---
 
+### Task 23: Deep dive — how Fargate runs Fleet, and where its image comes from
+
+Added at my request: a guided, read-only look at the compute side, to understand it rather than change it. Run it while the stack is up. Findings go into the spec (and a follow-up task if something should change).
+
+- [ ] **Step 1: The image.** `fleet.tf` sets `fleetdm/fleet:v4.92.0`, which ECS pulls from Docker Hub through the NAT Gateway at each task start. 🎓 Find the digest the running task actually uses (`aws ecs describe-tasks` → `containers[].imageDigest`), and compare it with the tag on Docker Hub. Questions to answer: a tag can be re-pushed, a digest can't, so should this pin a digest? Would an ECR pull-through cache help (rate limits, NAT data)? How does an upgrade happen (a new tag in `fleet.tf`, a pull request, the migrations task), and could Dependabot or Fleet's release notes drive it?
+- [ ] **Step 2: The task definition.** 🎓 Read the live one (`aws ecs describe-task-definition`): the container, the 512 CPU / 4096 MB size, environment variables versus secrets pulled from Secrets Manager, the log configuration (CloudWatch), and the two IAM roles (the **execution role** ECS uses to pull the image and read secrets, and the **task role** Fleet itself runs as). Map each part back to `fleet.tf` and Fleet's `byo-ecs` module.
+- [ ] **Step 3: The service and a deployment.** 🎓 `aws ecs describe-services`: desired and running counts, the deployment circuit breaker, and the autoscaling limits. Then trace what a change does, step by step: a new task definition revision, a new task started in a private subnet (`awsvpc`, its own network interface and security group), the load balancer's health check, the old task drained (the 300-second deregistration delay), and stopped.
+- [ ] **Step 4: Migrations and start-up.** How `module.migrations` runs `fleet prepare db` as a one-off task before the service starts, and what the first boot after a snapshot restore does.
+- [ ] **Step 5: Fargate itself.** The platform version, CPU architecture (x86 versus ARM/Graviton, and whether Fleet's image supports ARM), Fargate Spot, and what the task costs per hour, against the sizing notes in the spec.
+- [ ] **Step 6: Write it up.** A short "How Fleet runs on Fargate" section in the spec, and a task for any change worth making (for example, pinning the image by digest).
+
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2709,6 +2723,7 @@ Added at my request. A diagram of the stack for the README's **What this is** se
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
 - Health and error scan of the running stack (runbook plus baseline), and the repo and docs review: Task 21.
 - Architecture diagram in the README (Mermaid): Task 22.
+- Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
