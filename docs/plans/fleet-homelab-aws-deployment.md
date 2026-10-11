@@ -1181,6 +1181,8 @@ Note for later: because the Aurora snapshot/restore mechanism preserves the data
 
 **GitOps mode on (2026-10-11):** `org_settings.gitops.gitops_mode_enabled: true` in the GitOps repo's `default.yml`, with `repository_url` set from the workflow (`github.server_url`/`github.repository`). `default.yml` defines everything, so a change made in the UI was silently deleted by the next apply, merge or nightly, and the dry run can't warn about it (it doesn't compare with the server). Only Fleet's default exception (enroll secrets) is on; the GitOps README explains the labels and software exceptions.
 
+**Caught up with Fleet's `fleetctl new` template (2026-10-11):** pull request dry runs use `pull_request_target` (fleetdm/fleet#53059): the workflow and action come from `main` and the pull request's YAML is checked out into `untrusted-pr/`. `pull_request` stays until a test shows the new run counts as the required `fleet-gitops` check (those runs belong to `main`'s commit), then it's removed, or the result is posted to the pull request's commit instead. `fleetctl` no longer comes from npm (the template moved to piping `install-fleetctl.sh` into bash, #52971). Since that step holds the API token, ours downloads exactly the server's `fleetctl` release archive from GitHub and checks it against the release's `checksums.txt`; a snapshot or unknown server version fails rather than installing the latest. Fleet's `/fleet-gitops` skill is added, limited to `fleetctl gitops … --dry-run`, and the template's `CLAUDE.md` guidance is in `AGENTS.md`.
+
 ---
 
 ### Task 12: Osquery log destination — Firehose → S3
@@ -2677,7 +2679,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 3. **Tidy:** stale files, branches, comments and TODOs; comments in workflows and scripts that no longer match what the code does; unused variables and outputs.
 4. **Bug scrub:** workflows (permissions, `if:` conditions, concurrency and cancelled runs, untrusted input), scripts (quoting, error handling, `checks/run.sh` clean), and Terraform (identifying values `sensitive`, data-loss guard coverage, teardown and rebuild still restoring everything).
 5. **Privacy:** rerun the private-values scan over the full history of both repos, and check that recent PR comments and CI logs hold no identifying values.
-6. **Upkeep:** Dependabot pull requests, pinned versions still current, and the tools' maintenance (actionlint: check again from 2027-01).
+6. **Upkeep:** Dependabot pull requests, pinned versions still current, and the tools' maintenance (actionlint: check again from 2027-01). Compare the GitOps repo with Fleet's current `fleetctl new` template on `main`, to catch changes before they reach a release.
 
 ---
 
@@ -2756,6 +2758,7 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
   - flags **breaking changes and anything we must change**, checked against this setup: the server settings in `fleet.tf`, minimum MySQL and Redis versions against Aurora's and ElastiCache's, the `fleet-terraform` module and add-on versions, the GitOps YAML keys used in the GitOps repo, and CI (`fleetctl`, the GitOps action from Fleet's `fleetctl new` templates)
   - lists what's worth adopting (new features or settings), separately from what's required
   - ends with a verdict (✅ upgrade as is / ⚠️ upgrade with these changes / ❌ wait), and the runbook steps still to do (the snapshot)
+  - **compares Fleet's `fleetctl new` template** (`cmd/fleetctl/fleetctl/templates/new` in `fleetdm/fleet`) between the two release tags, and lists what changed in the workflow, the action, `gitops.sh`, the skill and `default.yml`, with what's worth adopting in the GitOps repo. The GitOps repo records which Fleet version its scaffold matches (for example a `fleet-template: v4.93.0` line), so the comparison starts from there, and an adopting pull request updates it.
 
   Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
 
