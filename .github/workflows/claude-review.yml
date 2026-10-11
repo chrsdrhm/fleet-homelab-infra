@@ -81,12 +81,17 @@ jobs:
           # From a comment, the event is about the default branch: check out the PR's head.
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
+      # 👀 on the @claude comment while the review runs; the last step swaps it for 🚀
+      # when it's done, or 😕 if it failed. (GitHub has no ✅ reaction.)
       - name: Acknowledge the @claude comment
+        id: ack
         if: steps.gate.outputs.run == 'true' && github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT_ID: ${{ github.event.comment.id }}
-        run: gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
+        run: |
+          id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes --jq .id || true)
+          echo "reaction=$id" >> "$GITHUB_OUTPUT"
 
       - name: Review with Claude
         id: review
@@ -171,3 +176,18 @@ jobs:
           else
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
           fi
+
+      - name: Mark the @claude comment as done
+        if: always() && steps.ack.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.ack.outputs.reaction }}
+          OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          if [ -n "$REACTION" ]; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions/$REACTION" || true
+          fi
+          done_as=rocket
+          [ "$OUTCOME" = success ] || done_as=confused
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content="$done_as" > /dev/null || true

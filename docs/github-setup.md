@@ -172,7 +172,7 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
 3. Make sure both actions it needs are in the allow-list (step 2).
 4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
 
-**To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts, and updates the same summary comment.
+**To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts and 🚀 when it's done (😕 if it failed), and updates the same summary comment.
 - **Only people with write access can trigger it:** you, and anyone you give write access. Anyone can comment on a public repo, and each review uses your plan, so other people's mentions are ignored. In a fork of this repo, that means the fork's owner and their collaborators.
 - **Drafts:** skipped when opened, but `@claude` reviews one anyway.
 - **Forks:** never reviewed. A fork's pull request doesn't get the token when opened, and `@claude` skips it too: the review would check out the fork's files, and Claude Code loads settings from them, including hooks that run commands, while holding your token.
