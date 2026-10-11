@@ -73,6 +73,12 @@ PATTERNS = [
         re.compile(r"(?<![A-Za-z0-9._%-])[A-Za-z0-9][A-Za-z0-9._%+-]*@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}"),
         None,  # allowed by domain, below
     ),
+    (
+        "Route 53 name server",
+        # A hosted zone's set of four is close to unique, so it can lead back to the domain.
+        re.compile(r"\bns-[0-9]{1,4}\.awsdns-[0-9]{2}\.(?:com|net|org|co\.uk)\b", re.IGNORECASE),
+        {"ns-0.awsdns-00.com"},
+    ),
     ("signed token (JWT)", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), set()),
 ]
 ALLOWED_EMAIL_DOMAINS = {"example.com", "example.org", "example.net", "github.com", "anthropic.com"}  # github.com: noreply and Dependabot sign-offs
