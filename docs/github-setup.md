@@ -130,7 +130,7 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 ## 6. Optional: Claude reviews pull requests
 
-`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. The summary is updated in place on later runs, not added again. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
+`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. While a review runs, the comment shows ⏳ with a link to watch it live. Each later review posts a new comment at the bottom of the pull request and hides the earlier ones as outdated (you can still expand them). **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
 
 **How it signs in.** There are two separate sign-ins:
 - **To Claude, with a one-year token from your subscription.**
@@ -172,7 +172,7 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
 3. Make sure both actions it needs are in the allow-list (step 2).
 4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
 
-**To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts, and updates the same summary comment.
+**To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts and 🚀 when it's done (😕 if it failed), and posts a new summary, hiding the earlier one.
 - **Only people with write access can trigger it:** you, and anyone you give write access. Anyone can comment on a public repo, and each review uses your plan, so other people's mentions are ignored. In a fork of this repo, that means the fork's owner and their collaborators.
 - **Drafts:** skipped when opened, but `@claude` reviews one anyway.
 - **Forks:** never reviewed. A fork's pull request doesn't get the token when opened, and `@claude` skips it too: the review would check out the fork's files, and Claude Code loads settings from them, including hooks that run commands, while holding your token.

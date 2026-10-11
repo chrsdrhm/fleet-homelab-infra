@@ -2,8 +2,9 @@
 # when lint fails):
 #  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
 #           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
-#  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
+#  - plan:  after lint, a read-only plan with the plan role, and a PR comment with a
 #           summary and the full plan, masked (comments are public and NOT masked by GitHub).
+#           Each plan is a new comment; earlier ones are hidden as outdated.
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
 #  - apply: started by hand (never on push): up or down with the apply role.
@@ -320,15 +321,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          # Update this workflow's earlier comment (found by its marker) instead of adding one.
-          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- terraform-plan -->"))) | .id' | tail -1)
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md > /dev/null
-            echo "Updated the plan comment."
-          else
-            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
-          fi
+          # Each plan is a new comment at the bottom of the pull request, so it's clear it ran
+          # again. Earlier plan comments (found by the marker) are hidden as outdated, or
+          # deleted if that fails, so only the latest shows.
+          older=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- terraform-plan -->"))) | "\(.id) \(.node_id)"')
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          while read -r id node; do
+            [ -n "$id" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql -f id="$node" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null \
+              || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
+          done <<< "$older"
 
       - name: Fail if the plan failed
         if: steps.gate.outputs.run == 'true' && steps.plan.outputs.exitcode == '1'

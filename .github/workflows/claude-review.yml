@@ -81,12 +81,55 @@ jobs:
           # From a comment, the event is about the default branch: check out the PR's head.
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
+      # 👀 on the @claude comment while the review runs; the last step swaps it for 🚀
+      # when it's done, or 😕 if it failed, and just removes it if the run was cancelled
+      # (a newer run takes over). GitHub has no ✅ reaction.
       - name: Acknowledge the @claude comment
+        id: ack
         if: steps.gate.outputs.run == 'true' && github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT_ID: ${{ github.event.comment.id }}
-        run: gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
+        run: |
+          id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes --jq .id || true)
+          echo "reaction=$id" >> "$GITHUB_OUTPUT"
+
+      # As soon as the review starts, a "⏳ reviewing" comment goes at the bottom of the pull
+      # request, linking to the live run. Earlier summaries (found by the marker) and earlier
+      # inline comments are hidden as outdated, so what shows is this review's alone (it
+      # raises anything still wrong again). A summary that can't be hidden is deleted. The
+      # last step replaces this comment with the summary.
+      - name: Post a review-in-progress comment
+        id: progress
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          marker='<!-- claude-review -->'
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          sha=${HEAD_SHA:-$(git rev-parse HEAD)}
+          older=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | \"\\(.id) \\(.node_id)\"")
+          inline=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .node_id')
+          body="$marker"$'\n### 🤖 Claude review\n\n'"⏳ Reviewing commit \`${sha:0:7}\`… [Watch it live]($run_url)."
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" --jq .id || true)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          while read -r old node; do
+            [ -n "$old" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql -f id="$node" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null \
+              || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$old"
+          done <<< "$older"
+          while read -r node; do
+            [ -n "$node" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql -f id="$node" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null || true
+          done <<< "$inline"
 
       - name: Review with Claude
         id: review
@@ -125,21 +168,40 @@ jobs:
             --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
 
-      # One summary comment per PR, found by its marker and updated in place: Claude's
-      # final message, plus a collapsed usage table. The table also goes to the run's
-      # summary page and this step's log, with a list-price estimate (a subscription token
-      # is not billed per token). Numbers only: the execution log itself holds the
-      # review's content and is not uploaded.
+      # The summary replaces the review-in-progress comment: Claude's final message, plus a
+      # collapsed usage table. If the review didn't finish, the comment says so and links
+      # to the run. The table also goes to the run's summary page and this step's log, with
+      # a list-price estimate (a subscription token is not billed per token). Numbers only:
+      # the execution log itself holds the review's content and is not uploaded.
       - name: Post the review summary
-        if: always() && steps.review.outputs.execution_file != ''
+        if: always() && steps.gate.outputs.run == 'true'
         env:
           LOG: ${{ steps.review.outputs.execution_file }}
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PROGRESS_ID: ${{ steps.progress.outputs.id }}
+          OUTCOME: ${{ steps.review.outcome }}
         run: |
-          if [ ! -f "$LOG" ] || ! result=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
-            echo "::warning title=No review result::The review's execution log has no result, so no summary was posted."
+          # A cancelled run was replaced by a newer one, which has already hidden this
+          # run's "⏳ reviewing" comment and posts its own.
+          [ "$OUTCOME" != cancelled ] || exit 0
+          marker='<!-- claude-review -->'
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          post() { # replace the review-in-progress comment, or add one if it wasn't posted
+            if [ -n "$PROGRESS_ID" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$PROGRESS_ID" -f body="$1" > /dev/null \
+                || echo "::warning title=Summary not posted::The review-in-progress comment is gone."
+            else
+              gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$1" --jq .html_url
+            fi
+          }
+          unfinished() {
+            echo "::warning title=No summary::$1"
+            post "$marker"$'\n### 🤖 Claude review\n\n'"😕 The review didn't finish. See the [workflow run]($run_url)."
             exit 0
+          }
+          if [ ! -f "$LOG" ] || ! result=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
+            unfinished "The review's execution log has no result."
           fi
           n() { jq -r 'def c: if length > 3 then (.[:-3] | c) + "," + .[-3:] else . end; '"$1" <<< "$result"; }
           total='((.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0))'
@@ -156,18 +218,22 @@ jobs:
             "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
 
           summary=$(n 'if .is_error then "" else (.result // "") end')
-          if [ -z "$summary" ]; then
-            echo "::warning title=No summary::The review ended without a summary (see the review step's log); nothing was posted."
-            exit 0
-          fi
-          marker='<!-- claude-review -->'
+          [ -n "$summary" ] || unfinished "The review ended without a summary (see the review step's log)."
           usage=$(printf '%s\n' "<details><summary>📊 Usage summary</summary>" "" "${rows[@]}" "" "</details>")
-          body="$marker"$'\n### 🤖 Claude review\n\n'"$summary"$'\n\n'"$usage"
-          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | tail -1)
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
-            echo "Updated the review summary comment."
-          else
-            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          post "$marker"$'\n### 🤖 Claude review\n\n'"$summary"$'\n\n'"$usage"
+
+      - name: Mark the @claude comment as done
+        if: always() && steps.ack.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.ack.outputs.reaction }}
+          OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          if [ -n "$REACTION" ]; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions/$REACTION" || true
           fi
+          [ "$OUTCOME" != cancelled ] || exit 0
+          done_as=rocket
+          [ "$OUTCOME" = success ] || done_as=confused
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content="$done_as" > /dev/null || true
