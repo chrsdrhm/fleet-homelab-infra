@@ -176,6 +176,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" --jq .html_url
           while read -r id node; do
             [ -n "$id" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
             gh api graphql -f id="$node" \
               -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null \
               || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
