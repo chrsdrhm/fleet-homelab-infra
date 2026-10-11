@@ -1,4 +1,5 @@
-# Terraform for this stack, in three jobs:
+# Terraform for this stack, in three jobs (plus lint-comment, which comments on the PR
+# when lint fails):
 #  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
 #           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
 #  - plan:  after lint, a read-only plan with the plan role, and one PR comment with a
@@ -54,6 +55,8 @@ jobs:
     concurrency:
       group: terraform-lint-${{ github.event.pull_request.number }}
       cancel-in-progress: true
+    outputs:
+      failed: ${{ steps.checks.outputs.failed }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,6 +77,7 @@ jobs:
         run: checks/install-tools.sh
 
       - name: Run checks
+        id: checks
         if: hashFiles('checks/run.sh') != ''
         env:
           PRIVATE_HASHES: ${{ secrets.PRIVATE_HASHES }}
@@ -89,7 +93,11 @@ jobs:
           if [ -z "$PRIVATE_HASHES" ]; then
             echo "::notice title=Patterns only::No PRIVATE_HASHES secret here (for example, a fork), so the private-values check uses its patterns only."
           fi
-          checks/run.sh
+          status=0
+          checks/run.sh | tee "$RUNNER_TEMP/checks.log" || status=$?
+          # Only the names of the failed checks go to the lint-comment job, never their output.
+          echo "failed=$(sed -n 's/^Failed: //p' "$RUNNER_TEMP/checks.log")" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
       - name: terraform fmt and validate (without checks/)
         if: hashFiles('checks/run.sh') == ''
@@ -99,6 +107,58 @@ jobs:
             terraform -chdir="$dir" init -input=false -backend=false > /dev/null
             terraform -chdir="$dir" validate
           done
+
+  # When lint fails, one PR comment names the failed checks and links to the job; it is
+  # updated in place, and deleted once lint passes. A separate job, so the pull
+  # request's own code (which lint runs) never holds a token that can write to the PR.
+  lint-comment:
+    name: lint-comment
+    needs: lint
+    if: >-
+      always() && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && (needs.lint.result == 'failure' || needs.lint.result == 'success')
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      actions: read
+    concurrency:
+      group: lint-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RESULT: ${{ needs.lint.result }}
+          FAILED: ${{ needs.lint.outputs.failed }}
+          LINT_JOB: terraform-lint
+        run: |
+          marker='<!-- lint-report -->'
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | tail -1)
+          if [ "$RESULT" = success ]; then
+            # Lint passes: remove the earlier failure comment, if there is one.
+            [ -z "$id" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
+            exit 0
+          fi
+          job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq ".jobs[] | select(.name == \"$LINT_JOB\") | .html_url" | head -1)
+          [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          names=$(printf '%s' "$FAILED" | tr -cd 'a-z -' | xargs) # check names only
+          if [ -n "$names" ]; then
+            read -ra each <<< "$names"
+            list=$(printf "\`%s\`, " "${each[@]}"); list=${list%, }
+            body="$marker"$'\n'"❌ **Lint failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
+          else
+            body="$marker"$'\n'"❌ **Lint failed.** See the [workflow job]($job_url) for the details."
+          fi
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          fi
 
   plan:
     name: terraform-plan
