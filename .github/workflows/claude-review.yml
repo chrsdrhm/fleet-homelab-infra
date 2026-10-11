@@ -180,12 +180,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
           PROGRESS_ID: ${{ steps.progress.outputs.id }}
+          OUTCOME: ${{ steps.review.outcome }}
         run: |
+          # A cancelled run was replaced by a newer one, which has already hidden this
+          # run's "⏳ reviewing" comment and posts its own.
+          [ "$OUTCOME" != cancelled ] || exit 0
           marker='<!-- claude-review -->'
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           post() { # replace the review-in-progress comment, or add one if it wasn't posted
             if [ -n "$PROGRESS_ID" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$PROGRESS_ID" -f body="$1" > /dev/null
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$PROGRESS_ID" -f body="$1" > /dev/null \
+                || echo "::warning title=Summary not posted::The review-in-progress comment is gone."
             else
               gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$1" --jq .html_url
             fi
