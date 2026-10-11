@@ -148,7 +148,7 @@ jobs:
             names=$(printf '%s' "$FAILED" | tr -cd 'a-z -' | xargs) # check names only
             if [ -n "$names" ]; then
               read -ra each <<< "$names"
-              list=$(printf '`%s`, ' "${each[@]}"); list=${list%, }
+              list=$(printf "\`%s\`, " "${each[@]}"); list=${list%, }
               body="$marker"$'\n'"❌ **Lint failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
             else
               body="$marker"$'\n'"❌ **Lint failed.** See the [workflow job]($job_url) for the details."
