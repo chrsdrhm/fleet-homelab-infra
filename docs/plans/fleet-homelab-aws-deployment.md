@@ -2738,7 +2738,20 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
 
 - [ ] **Step 1: 🎓 You run this — upgrade 4.92.0 → 4.93.0** by following the runbook end to end, and fix anything in it that turns out wrong or unclear.
 - [ ] **Step 2: Check `fleet-terraform`'s newer tags** (`tf-mod-root-*`, the add-ons) and their changelogs, and decide whether to bump them, as their own pull request.
-- [ ] **Step 3: Decide how to hear about releases:** GitHub's release notifications for `fleetdm/fleet`, or a scheduled workflow that opens an issue when the tag in `fleet.tf` falls behind the latest release.
+- [ ] **Step 3: Have Dependabot open the upgrade pull request.** Dependabot can't read the image tag in `fleet.tf`, but it reads Dockerfiles. So:
+  - move the tag to a one-line `fleet.Dockerfile` (`FROM fleetdm/fleet:v4.93.0`), and have `fleet.tf` read it (for example, `trimprefix(trimspace(file("${path.module}/fleet.Dockerfile")), "FROM ")`)
+  - add a `docker` entry to `.github/dependabot.yml` for it, with the same 7-day cooldown
+  - each new release then arrives as a pull request that already has its plan and Claude review; merging it applies the upgrade (the snapshot still comes first)
+  - watch whether Dependabot also bumps the `fleet-terraform` module tags (`tf-mod-root-*`); if it doesn't, cover them another way (a weekly check that opens an issue)
+  - update `docs/upgrading-fleet.md` to start from that pull request
+- [ ] **Step 4: Release notifications for the notes themselves:** on `fleetdm/fleet`, **Watch → Custom → Releases**, so the release notes arrive by email. That repo also publishes releases for other components (such as the agent), so filter on `fleet-v` in the title.
+- [ ] **Step 5: A Claude skill that reviews a Fleet upgrade** (`.claude/skills/fleet-upgrade/SKILL.md`, which Claude Code loads in this repo). Given the current and target versions (from `fleet.Dockerfile` and the pull request), it:
+  - reads every release in between (GitHub releases and `CHANGELOG.md`) and summarizes what changed, briefly
+  - flags **breaking changes and anything we must change**, checked against this setup: the server settings in `fleet.tf`, minimum MySQL and Redis versions against Aurora's and ElastiCache's, the `fleet-terraform` module and add-on versions, the GitOps YAML keys used in the GitOps repo, and CI (`fleetctl`, the GitOps action from Fleet's `fleetctl new` templates)
+  - lists what's worth adopting (new features or settings), separately from what's required
+  - ends with a verdict (✅ upgrade as is / ⚠️ upgrade with these changes / ❌ wait), and the runbook steps still to do (the snapshot)
+
+  Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
 
 
 ---
@@ -2759,7 +2772,7 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
 - Architecture diagram in the README (Mermaid): Task 22.
 - Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
 - Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
-- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0): Task 25.
+- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes): Task 25.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
