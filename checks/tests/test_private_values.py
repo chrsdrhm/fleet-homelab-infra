@@ -77,6 +77,10 @@ class Patterns(unittest.TestCase):
         self.clean("+@AGENTS.md")  # the same line in a diff
         self.flagged(f"+{EMAIL}", "email address")  # a real address in a diff is still caught
 
+    def test_name_server(self):
+        self.flagged("+ " + "ns-" + "4321" + ".awsdns-" + "87" + ".co.uk", "Route 53 name server")  # phony
+        self.clean("ns-0.awsdns-00.com")  # the placeholder
+
     def test_jwt(self):
         self.flagged(f"license {JWT}", "signed token (JWT)")
 

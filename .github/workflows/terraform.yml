@@ -261,7 +261,8 @@ jobs:
                      "$FLEET_LICENSE_KEY" "$CLOUDFLARE_API_TOKEN" "$WAF_CI_HEADER_VALUE" "$account"; do
               [ -n "$v" ] && text=${text//"$v"/***}
             done
-            printf '%s' "$text"
+            # Route 53 name servers: the set of four can lead back to the domain.
+            printf '%s' "$text" | sed -E 's/ns-[0-9]+\.awsdns-[0-9]+\.[a-z.]+/<name-server>/g'
           }
           has12() { printf '%s' "$1" | grep -qE '(^|[^0-9])[0-9]{12}([^0-9]|$)'; }
 
