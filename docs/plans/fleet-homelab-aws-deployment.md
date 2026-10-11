@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2668,12 +2668,30 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 **Possible follow-ups, not built:** keep Fleet's app logs beyond teardown (a subscription to S3, or a named log group kept outside the teardown), alarms on the error rate, and a scheduled version of this scan.
 
 **Repo and docs review** (both repos; no stack needed). Run it alongside the health scan, or after a run of changes. Each finding becomes a pull request, grouped by theme:
-1. **Accuracy:** the READMEs, `docs/setup.md`, `docs/github-setup.md`, `checks/README.md`, `AGENTS.md` and the spec match the code and each other. Commands still work, links and anchors resolve, and user-facing pages use the rounded cost figures.
+1. **Accuracy:** the README's architecture diagram (Task 22), the READMEs, `docs/setup.md`, `docs/github-setup.md`, `checks/README.md`, `AGENTS.md` and the spec match the code and each other. Commands still work, links and anchors resolve, and user-facing pages use the rounded cost figures.
 2. **Clarity and concision:** each topic has one home and is linked from elsewhere, not repeated. Plain language, setup steps before background, no meta remarks or incident narratives.
 3. **Tidy:** stale files, branches, comments and TODOs; comments in workflows and scripts that no longer match what the code does; unused variables and outputs.
 4. **Bug scrub:** workflows (permissions, `if:` conditions, concurrency and cancelled runs, untrusted input), scripts (quoting, error handling, `checks/run.sh` clean), and Terraform (identifying values `sensitive`, data-loss guard coverage, teardown and rebuild still restoring everything).
 5. **Privacy:** rerun the private-values scan over the full history of both repos, and check that recent PR comments and CI logs hold no identifying values.
 6. **Upkeep:** Dependabot pull requests, pinned versions still current, and the tools' maintenance (actionlint: check again from 2027-01).
+
+---
+
+### Task 22: Architecture diagram in the README
+
+Added at my request. A diagram of the stack for the README's **What this is** section, so a reader sees the shape of it before the details.
+
+**Format:** [Mermaid](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams), written in the README itself. GitHub renders it, it's plain text that a pull request can review and diff, and there's no image file to keep in step with the code.
+
+- [ ] **Step 1: Draft the diagram.** Show, at the level a reader needs (not every resource):
+  - **The request path:** devices running osquery/Fleet's agent and people in a browser → DNS (Cloudflare delegating to Route 53) → the WAF and the load balancer → Fleet on ECS Fargate → Aurora MySQL and Redis, in private subnets, with the NAT Gateway for outbound.
+  - **Around it:** Secrets Manager, SES for email, the ACM certificate, the S3 buckets.
+  - **Sign-in:** Okta for single sign-on (optional).
+  - **CI and GitOps:** GitHub Actions reaching AWS through OIDC (plan on pull requests, apply on merge, `up`/`down`), and the GitOps repo applying Fleet's configuration.
+  - **Optional and always-on parts:** Amazon Managed Grafana (optional, always on), and which resources survive a teardown (the database snapshot, secrets, buckets, the DNS zone and certificate, the budget), so the teardown story is visible too.
+- [ ] **Step 2: Check it against the code.** Every box maps to something in the Terraform or the workflows, and every optional part is marked optional. Check it renders on GitHub in light and dark mode and on a phone.
+- [ ] **Step 3: Add it to the README** under **What this is**, with a one-line caption. Link it from the GitOps README too, if it helps there.
+- [ ] **Step 4: Keep it current:** the repo review in Task 21 checks the diagram against the code.
 
 ---
 
@@ -2690,6 +2708,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
 - Health and error scan of the running stack (runbook plus baseline), and the repo and docs review: Task 21.
+- Architecture diagram in the README (Mermaid): Task 22.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
