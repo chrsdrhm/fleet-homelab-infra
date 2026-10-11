@@ -9,6 +9,16 @@ Terraform for a homelab Fleet Premium deployment on AWS (`us-east-1`), built fro
 - **Design and history:** [`docs/specs/`](docs/specs/fleet-homelab-aws-design.md) is the current design; [`docs/plans/`](docs/plans/fleet-homelab-aws-deployment.md) records how each part was built, task by task.
 - **Checks:** all lint checks, tests and guards are in [`checks/`](checks/README.md).
 
+## Fleet's own approach (prefer it)
+
+This project follows Fleet's documented approach wherever it can. Before changing or reviewing something, check what Fleet does, and call out deviations.
+
+- [Fleet docs](https://fleetdm.com/docs) and [guides](https://fleetdm.com/guides).
+- [`fleet-terraform`](https://github.com/fleetdm/fleet-terraform): the modules this repo uses, pinned to release tags. Read the module source before assuming what an input does.
+- [Deploying Fleet](https://fleetdm.com/docs/deploy/deploy-fleet) and the [reference architectures](https://fleetdm.com/docs/deploy/reference-architectures), for sizing (this repo's smaller sizing is explained in the spec).
+- [Fleet server configuration](https://fleetdm.com/docs/configuration/fleet-server-configuration), for the environment variables set in `fleet.tf`.
+- For anything in the GitOps repo: [Fleet's GitOps reference](https://fleetdm.com/docs/configuration/yaml-files), and Fleet's own GitOps setup for its company devices, [`fleetdm/fleet/it-and-security`](https://github.com/fleetdm/fleet/tree/main/it-and-security).
+
 ## Hard rules
 
 - **No private or identifying values, anywhere.** That covers files, commit messages, branch names, and PR titles, bodies and comments. Private values include the real hostname or domain, the AWS account ID (and ARNs or bucket names that contain it), Okta org names, IDs and URLs, email addresses, and any credential.
@@ -36,6 +46,7 @@ Focus on, in order:
 1. Private or identifying values, anywhere in the change.
 2. Security: IAM scope, the CI trust policies, workflow permissions, untrusted input in `run:` steps, unpinned actions.
 3. Anything that loses data across a teardown (see "What survives a teardown" in the README).
-4. Docs that no longer match the code.
+4. Departures from Fleet's documented approach, unless the spec explains them.
+5. Docs that no longer match the code.
 
 Skip style nits that the linters already enforce.
