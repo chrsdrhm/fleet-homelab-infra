@@ -85,7 +85,7 @@ jobs:
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
 
       # How much this review used: a table in the run's summary page and the step log,
-      # and one line at the end of Claude's summary comment. Numbers only: the execution
+      # and a collapsed "Usage summary" at the end of Claude's summary comment. Numbers only: the execution
       # log itself holds the review's content and is not uploaded. The cost is a
       # list-price estimate (summary page only); a subscription token is not billed per token.
       - name: Record usage
@@ -113,12 +113,17 @@ jobs:
             "| Duration | ${secs}s |" \
             "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
 
+          # Only this run's summary comment: posted since this run attempt started.
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at)
           id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("### 🤖 Claude review")) and (.body | contains("<sub>📊") | not)) | .id' | tail -1)
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .created_at >= \"$started\" and (.body | startswith(\"### 🤖 Claude review\")) and (.body | contains(\"📊 Usage summary\") | not)) | .id" | tail -1)
           if [ -n "$id" ]; then
             body=$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$id" --jq .body)
+            usage_block=$(printf '%s\n' "<details><summary>📊 Usage summary</summary>" "" "| | |" "|---|---|" \
+              "| Input tokens | $input ($cached read from cache) |" "| Output tokens | $output |" \
+              "| Turns | $turns |" "| Duration | ${secs}s |" "" "</details>")
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" \
-              -f body="$body"$'\n\n'"<sub>📊 $input input tokens ($cached from cache) · $output output tokens · $turns turns · ${secs}s</sub>" > /dev/null
+              -f body="$body"$'\n\n'"$usage_block" > /dev/null
           else
-            echo "No summary comment found to add the usage line to."
+            echo "::notice title=Usage not added to the PR::No summary comment from this run starting with the expected heading; the usage is in this run's summary."
           fi
