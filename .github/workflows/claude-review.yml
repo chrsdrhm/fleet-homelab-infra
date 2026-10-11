@@ -82,7 +82,8 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       # 👀 on the @claude comment while the review runs; the last step swaps it for 🚀
-      # when it's done, or 😕 if it failed. (GitHub has no ✅ reaction.)
+      # when it's done, or 😕 if it failed, and just removes it if the run was cancelled
+      # (a newer run takes over). GitHub has no ✅ reaction.
       - name: Acknowledge the @claude comment
         id: ack
         if: steps.gate.outputs.run == 'true' && github.event_name == 'issue_comment'
@@ -94,9 +95,10 @@ jobs:
           echo "reaction=$id" >> "$GITHUB_OUTPUT"
 
       # As soon as the review starts, a "⏳ reviewing" comment goes at the bottom of the pull
-      # request, linking to the live run; earlier summaries (found by the marker) are
-      # hidden as outdated, or deleted if that fails, so only one is ever shown. The last
-      # step replaces this comment with the summary.
+      # request, linking to the live run. Earlier summaries (found by the marker) and earlier
+      # inline comments are hidden as outdated, so what shows is this review's alone (it
+      # raises anything still wrong again). A summary that can't be hidden is deleted. The
+      # last step replaces this comment with the summary.
       - name: Post a review-in-progress comment
         id: progress
         if: steps.gate.outputs.run == 'true'
@@ -110,6 +112,8 @@ jobs:
           sha=${HEAD_SHA:-$(git rev-parse HEAD)}
           older=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | \"\\(.id) \\(.node_id)\"")
+          inline=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .node_id')
           body="$marker"$'\n### 🤖 Claude review\n\n'"⏳ Reviewing commit \`${sha:0:7}\`… [Watch it live]($run_url)."
           id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" --jq .id || true)
           echo "id=$id" >> "$GITHUB_OUTPUT"
@@ -120,6 +124,12 @@ jobs:
               -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null \
               || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$old"
           done <<< "$older"
+          while read -r node; do
+            [ -n "$node" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql -f id="$node" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null || true
+          done <<< "$inline"
 
       - name: Review with Claude
         id: review
@@ -218,6 +228,7 @@ jobs:
           if [ -n "$REACTION" ]; then
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions/$REACTION" || true
           fi
+          [ "$OUTCOME" != cancelled ] || exit 0
           done_as=rocket
           [ "$OUTCOME" = success ] || done_as=confused
           gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content="$done_as" > /dev/null || true
