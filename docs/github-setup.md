@@ -130,37 +130,10 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 ## 6. Optional: Claude reviews pull requests
 
-`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary comment with a ✅ / ⚠️ / ❌ verdict. While a review runs, the comment shows ⏳ with a link to watch it live. Each later review posts a new comment at the bottom of the pull request and hides the earlier ones as outdated (you can still expand them). **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
+Claude reviews each pull request when it's opened (`.github/workflows/claude-review.yml`, following `AGENTS.md`), with inline comments and one summary carrying a ✅ / ⚠️ / ❌ verdict. **It needs a Claude Pro or Max subscription**; reviews count against your plan, with no separate bill. Without the token the job skips, and it's never a required check.
 
-**How it signs in.** There are two separate sign-ins:
-- **To Claude, with a one-year token from your subscription.**
-  - **Creating it:** `claude setup-token` signs in to claude.ai in your browser and prints the token once; it isn't saved anywhere on your machine.
-  - **What it can do:** only make model requests. It can't open your chats, change your account, or use connectors.
-  - **Where it lives:** you store it as the encrypted `CLAUDE_CODE_OAUTH_TOKEN` secret. GitHub hands it only to workflow runs in that repo, never to forks or Dependabot, and masks it in logs.
-  - **During a review:** Claude Code on the runner uses it for its requests, and the usage counts against your plan's limits, with no separate bill.
-- **To GitHub, with the job's own token.** It's created for each run and expires when the run ends. It can read the repo and comment on the pull request, nothing else. Comments appear as `github-actions[bot]`. No GitHub App and no OIDC are involved.
-- **Who could read the secret:** any workflow running in the repo can, so it's only as safe as who can change workflows: here, only you, through pull requests.
-- **Stopping it:** delete the secret.
-- **After a year:** the token stops working, and the review job then fails (it isn't required, so merges aren't blocked) until you create a new token.
-- **What it can look at:** the repo, plus Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
-
-**How much it uses:**
-- **Per review:** expand **📊 Usage summary** at the end of the summary comment. The review's run in the Actions tab shows the same figures, plus a list-price estimate (not billed on a subscription).
-- **What the numbers mean:**
-  - **Input tokens:** how much text Claude read: the diff, files, `AGENTS.md`, any pages it fetched, and the conversation so far, which is sent again on every turn. That is why this number is large.
-  - **Read from cache:** the part of the input it had already sent earlier in the review. It costs about a tenth as much at API prices, so a high percentage (80–90% is typical) keeps a review cheap.
-  - **Output tokens:** what Claude wrote, its reasoning and comments. A token is roughly ¾ of a word.
-  - **Turns:** rounds of Claude using a tool, such as reading a file or fetching a page. More turns means it dug deeper.
-  - **Duration:** how long the review took.
-- **A lot or a little?** A small pull request here takes about 100,000 input tokens (most of it cached), 1,000–2,000 output tokens, 4–5 turns and under a minute: about $0.10 at API list prices. A large change can be several times that. The list-price estimate is the easiest way to compare reviews.
-- **Your plan overall:** see **claude.ai → Settings → Usage**, or `/usage` in Claude Code. Reviews draw on the same plan limits as your own sessions. To see what one review costs your plan, check that page before and after it.
-
-**Model:** your plan's default. To pin one, set a repository variable, for example:
-```bash
-gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet-homelab-infra
-```
-
-1. Create a token from your subscription. Run this in a terminal, not through an AI assistant, because it prints the token:
+**Set it up:**
+1. Create a token, valid for a year. Run this in a terminal, not through an AI assistant, because it prints the token:
    ```bash
    claude setup-token
    ```
@@ -170,30 +143,28 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
    gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $OWNER/fleet-homelab-gitops
    ```
 3. Make sure both actions it needs are in the allow-list (step 2).
-4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
+4. Set a reminder to renew the token in a year. Once it expires, the review fails until you do (merges aren't blocked).
 
-**To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts and 🚀 when it's done (😕 if it failed), and posts a new summary, hiding the earlier one.
-- **Only people with write access can trigger it:** you, and anyone you give write access. Anyone can comment on a public repo, and each review uses your plan, so other people's mentions are ignored. In a fork of this repo, that means the fork's owner and their collaborators.
-- **Drafts:** skipped when opened, but `@claude` reviews one anyway.
-- **Forks:** never reviewed. A fork's pull request doesn't get the token when opened, and `@claude` skips it too: the review would check out the fork's files, and Claude Code loads settings from them, including hooks that run commands, while holding your token.
-- **Dependabot:** its pull requests don't get the token, so they're skipped when opened; `@claude` reviews one (it's a branch in your repo).
-- **What the job can do:** read the repo and comment on the pull request, nothing else.
+**Using it:**
+- **While a review runs**, its comment shows ⏳ and a link to watch it live. Each new review goes at the bottom of the pull request, and earlier ones are hidden as outdated.
+- **To review again** after pushing, comment `@claude`. It reacts 👀, then 🚀 when done (😕 if it failed). Only people with write access can trigger it, since each review uses your plan. Re-running from the Checks tab reviews the old commit instead.
+- **Drafts** are skipped until you comment `@claude`. **Dependabot** pull requests don't get the token, but `@claude` reviews them. **Forks** are never reviewed: Claude Code would load the fork's settings, including hooks that run commands, while holding your token.
+- **Model:** your plan's default. To pin one, set a repository variable, for example `gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet-homelab-infra`.
 
-Re-running the workflow from the Checks tab reviews the commit it first ran on, not your latest push.
+**Security:**
+- **The Claude token** can only make model requests; it can't open your chats or change your account. GitHub gives it only to runs in your repo, never to forks or Dependabot, and masks it in logs. Any workflow in the repo could read it, so it's as safe as who can change workflows: here, only you, through pull requests. Delete the secret to stop reviews.
+- **GitHub access** uses the job's own token, which expires with the run and can only read the repo and comment on pull requests (as `github-actions[bot]`).
+- **What Claude can look at:** the repo, plus Fleet's docs, GitHub and the standards sites `AGENTS.md` lists.
+
+**Usage:** expand **📊 Usage summary** on the summary comment. The run's summary page adds a list-price estimate, which isn't billed on a subscription.
+- **Input tokens:** everything Claude read, including the diff, files, `AGENTS.md`, fetched pages, and the conversation so far, which is sent again every turn. **Read from cache** is the part already sent: about a tenth of the price, and 80–90% is typical.
+- **Output tokens:** what it wrote (a token is about ¾ of a word). **Turns:** how many times it used a tool, such as reading a file. **Duration:** how long it took.
+- **A lot or a little?** A small pull request takes about 100,000 input tokens, 1,000–2,000 output, 4–5 turns and under a minute: about $0.10 at API prices. To see the effect on your plan, check **claude.ai → Settings → Usage** (or `/usage` in Claude Code) before and after.
 
 ### Using a different reviewer, or none
 
-The review is optional and swappable. The instructions any reviewer should follow are in `AGENTS.md`, which most AI tools read as-is, so switching doesn't change them.
+`AGENTS.md` holds the review instructions, and most AI tools read it as-is, so switching tools doesn't change them.
+- **None:** do nothing; without the secret, the job skips. To remove it, delete `.github/workflows/claude-review.yml` and its two allow-list entries (`anthropics/claude-code-action@*` and `oven-sh/setup-bun@*`).
+- **GitHub Copilot:** needs Copilot Pro or higher (Copilot Free can't review pull requests), and each review uses Copilot AI credits. Turn on **Automatically request Copilot code review** in Settings → Rules → Rulesets → `protect-main`. Nothing else changes.
+- **Another tool:** for a GitHub App, follow its instructions and give it only the repos and permissions it asks for. For a GitHub Action, pin it to a full commit SHA, add it and any action it uses to the allow-list, store its credential as a secret, and limit it to reading the repo and commenting on pull requests.
 
-- **No AI review:** do nothing. Without the `CLAUDE_CODE_OAUTH_TOKEN` secret, the Claude job skips itself. To remove it entirely, delete `.github/workflows/claude-review.yml` and the two allow-list entries it needed (`anthropics/claude-code-action@*` and `oven-sh/setup-bun@*`).
-- **GitHub Copilot:** this needs Copilot Pro or higher. Copilot Free can't review pull requests, and each review uses Copilot AI credits.
-  - Turn it on with the ruleset setting **Automatically request Copilot code review**: Settings → Rules → Rulesets → `protect-main`.
-  - Nothing else changes: Copilot reads `AGENTS.md`, and needs no workflow, secret or allow-list entry.
-  - Remove the Claude workflow, or leave it in place without its token.
-- **Another review tool or GitHub Action:**
-  - **A GitHub App** (installed from its own site or the Marketplace): follow its instructions. Give it only the repositories and permissions it asks for.
-  - **A GitHub Action:**
-    - Pin it to a full commit SHA.
-    - Add it, and any action it uses internally, to the allow-list in step 2.
-    - Store its credential as a secret, and keep its permissions to reading the repo and commenting on pull requests.
-  - **Instructions:** most tools read `AGENTS.md`. If one doesn't, point it there rather than copying the rules.
