@@ -269,8 +269,8 @@ Two separate log streams, not one:
 ## Budget alerts
 
 One `aws_budgets_budget` (COST type, monthly), notifying
-the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target: well above the expected ~$25/mo (~$15 without the optional
+the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $50 (five alerts) against a
+$50/mo target: still above the expected ~$25/mo (~$15 without the optional
 Grafana workspace), so in practice the alerts
 catch a stack left running (about $6.45 a day). Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets

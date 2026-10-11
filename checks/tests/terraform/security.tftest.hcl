@@ -195,8 +195,8 @@ run "budget_alerts_every_ten_dollars" {
   command = plan
 
   assert {
-    condition     = toset([for n in aws_budgets_budget.fleet_homelab.notification : tonumber(n.threshold)]) == toset([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
-    error_message = "The budget must alert at every $10 from $10 to $100."
+    condition     = toset([for n in aws_budgets_budget.fleet_homelab.notification : tonumber(n.threshold)]) == toset([10, 20, 30, 40, 50])
+    error_message = "The budget must alert at every $10 from $10 to $50."
   }
 }
 
