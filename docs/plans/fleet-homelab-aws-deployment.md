@@ -1330,7 +1330,7 @@ git commit -m "Add AWS Budget: alert every \$10 of actual spend up to \$100/mo"
 
 ---
 
-**Budget lowered (2026-10-11):** the limit is now $50, with alerts at every $10 up to $50 (`range(10, 51, 10)`). The stack averages about $15–25 a month, so a lower ceiling still leaves headroom, and a stack left running reaches the first alert within about a day and a half either way.
+**Budget lowered (2026-10-11):** the limit is now $50, with alerts at every $10 up to $50 (`range(10, 51, 10)`). The stack averages about $15–25 a month, so a typical month stays under $50; a busy month with Grafana can come close, and that's accepted. The point of the budget is catching a stack left running, which reaches the first $10 alert within about a day and a half either way.
 
 ### Task 14: Cost-control scripts
 
