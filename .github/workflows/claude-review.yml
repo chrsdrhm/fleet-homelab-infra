@@ -146,6 +146,9 @@ jobs:
             pull request". Check changes against Fleet's documented approach and Fleet's own
             GitOps setup (the references in AGENTS.md); fetch them when it matters.
 
+            Get the change with `gh pr diff` (the checkout has no git history to diff
+            against), and read files from the checkout for context.
+
             Comment only on things that matter: put specific issues as inline comments on
             the lines concerned. Do not post any other comment. Your final message is posted
             for you as the review's summary comment (updated in place on later runs), so make
@@ -218,6 +221,10 @@ jobs:
             "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
 
           summary=$(n 'if .is_error then "" else (.result // "") end')
+          # Start at the verdict line, in case the final message has a stray line before it.
+          if grep -qE '^(✅|⚠️|❌)' <<< "$summary"; then
+            summary=$(sed -nE '/^(✅|⚠️|❌)/,$p' <<< "$summary")
+          fi
           [ -n "$summary" ] || unfinished "The review ended without a summary (see the review step's log)."
           usage=$(printf '%s\n' "<details><summary>📊 Usage summary</summary>" "" "${rows[@]}" "" "</details>")
           post "$marker"$'\n### 🤖 Claude review\n\n'"$summary"$'\n\n'"$usage"
