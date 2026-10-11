@@ -465,8 +465,10 @@ as a comment (mirroring the dry run the GitOps repo has for Fleet config), so
 merging to `main` is an informed decision. On merge, the `apply-on-merge` job
 plans `main` again and applies it if the stack is up (the state holds
 `module.fleet`). While the stack is down it applies nothing, since that would
-build the whole stack; the next `up` applies `main` instead. It shares a
-concurrency group with `up`/`down`, so they never overlap. **A data-loss guard** sits in that check: if the plan would destroy
+build the whole stack; the next `up` applies `main` instead. It waits for a
+running `up`/`down` to finish, and every apply waits on Terraform's state lock
+rather than failing, so they never overlap; if the stack went down meanwhile
+(its plan would create the ECS cluster or the database), it applies nothing. **A data-loss guard** sits in that check: if the plan would destroy
 or replace a resource that holds data or identity (the Aurora cluster, a
 Secrets Manager secret, an S3 bucket, the Route 53 zone, the ACM certificate,
 the SES identity or the Fleet server key), the comment opens with a caution
