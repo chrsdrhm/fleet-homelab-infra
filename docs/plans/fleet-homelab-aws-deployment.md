@@ -1179,6 +1179,8 @@ Expected: workflow completes successfully (the scaffold also dry-runs on pull re
 
 Note for later: because the Aurora snapshot/restore mechanism preserves the database, and this GitOps repo's own state lives in GitHub (not AWS), none of this Task needs repeating after a `down`/`up` cycle. `up.sh` starts a GitOps run after each rebuild (Task 14), so changes merged while the stack was down are applied straight away.
 
+**GitOps mode on (2026-10-11):** `org_settings.gitops.gitops_mode_enabled: true` in the GitOps repo's `default.yml`, with `repository_url` set from the workflow (`github.server_url`/`github.repository`). `default.yml` defines everything, so a change made in the UI was silently deleted by the next apply, merge or nightly, and the dry run can't warn about it (it doesn't compare with the server). Only Fleet's default exception (enroll secrets) is on; the GitOps README explains the labels and software exceptions.
+
 ---
 
 ### Task 12: Osquery log destination — Firehose → S3

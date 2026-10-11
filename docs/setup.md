@@ -126,6 +126,8 @@ Fleet picks up the Okta settings from the GitOps repo (step 7).
 
 From then on, `up.sh` starts this run after every rebuild.
 
+**GitOps mode is on** (in its `default.yml`): Fleet's UI shows everything the repo manages as read-only, so changes go through pull requests. Keep it on whenever you run this through CI: the repo defines everything, so anything made in the UI would be deleted by the next run, with no warning. Fleet can leave labels, software or enroll secrets editable in the UI; the [GitOps README](https://github.com/chrsdrhm/fleet-homelab-gitops#gitops-mode-the-ui-is-read-only) explains when you'd want that.
+
 ## 8. Optional: CI
 
 CI is optional, but worth it. **To set it up, follow [GitHub setup](github-setup.md)**, which covers both repos step by step.
