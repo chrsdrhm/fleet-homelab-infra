@@ -68,7 +68,9 @@ PATTERNS = [
     ("Okta app or client ID", re.compile(r"\b0oa[0-9A-Za-z]{17}\b"), {"0oaXXXXXXXXXXXXXXXXX"}),
     (
         "email address",
-        re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}"),
+        # The local part must start with a letter or digit, so file imports such as
+        # "@AGENTS.md" (and diff lines like "+@AGENTS.md") aren't read as addresses.
+        re.compile(r"(?<![A-Za-z0-9._%-])[A-Za-z0-9][A-Za-z0-9._%+-]*@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}"),
         None,  # allowed by domain, below
     ),
     ("signed token (JWT)", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), set()),

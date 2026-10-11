@@ -73,6 +73,9 @@ class Patterns(unittest.TestCase):
         self.clean("Co-Authored-By: Claude <noreply@anthropic.com>")
         self.clean("1+octo@users.noreply.github.com")
         self.clean("Signed-off-by: dependabot[bot] <support@github.com>")
+        self.clean("@AGENTS.md")  # a CLAUDE.md import, not an address
+        self.clean("+@AGENTS.md")  # the same line in a diff
+        self.flagged(f"+{EMAIL}", "email address")  # a real address in a diff is still caught
 
     def test_jwt(self):
         self.flagged(f"license {JWT}", "signed token (JWT)")
