@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2709,6 +2709,29 @@ Added at my request: a guided, read-only look at the compute side, to understand
 
 ---
 
+### Task 24: Hands-on inside Aurora and Redis
+
+Added at my request: look inside the data stores Fleet uses, read-only, to see how it keeps its state. There's no SQS in this stack (Fleet queues its work in Redis), so it's Aurora and Redis. Both sit in private subnets with no public access, so the way in is a short-lived "tools" container inside the VPC, opened with ECS Exec: no SSH, no bastion host, no open ports.
+
+- [ ] **Step 1: Build the way in** (`tools.tf`, off by default with a variable, so it costs nothing unless used):
+  - an ECS task definition for a small image with a MySQL client and `redis-cli`, pinned by digest, run in Fleet's private subnets with a security group that Aurora's and Redis's groups allow in
+  - ECS Exec: `enable_execute_command`, the task role's `ssmmessages` permissions, and the Session Manager plugin for the AWS CLI on my machine
+  - a read-only MySQL user for this, with its password in Secrets Manager; never the admin user
+  - torn down with the stack, like the rest of `module.fleet`
+- [ ] **Step 2: 🎓 You run this — Aurora.** Start the task, `aws ecs execute-command` into it, and connect with the read-only user. Look at:
+  - `SHOW TABLES` in Fleet's database, and the ones that matter: `hosts`, `labels` and `label_membership`, `policies` and `policy_membership`, `queries` and `scheduled_query_stats`, `software` and `host_software`, `activities`, `users`, `app_config_json`
+  - `migration_status_tables`: Fleet's schema version, which the migrations task advances
+  - how a GitOps change shows up here (a policy row appears after the apply)
+  - the largest tables (`information_schema.tables`), against the spec's sizing
+- [ ] **Step 3: 🎓 You run this — Redis.** From the same task, `redis-cli` with TLS. `INFO` (memory, clients, keyspace), then `SCAN` (never `KEYS`) to see what Fleet keeps there: live query campaigns and their results, locks for its scheduled jobs, and caches. Run a live query in Fleet and watch its keys appear and expire.
+- [ ] **Step 4: Fleet's own view.** Compare with `fleetctl debug` (for example `db-locks`, `migrations`, `errors`) and the `/api/v1/fleet/status/*` endpoints, which show the same state through Fleet.
+- [ ] **Step 5: Stop the task** and write up what each store holds: a short section in the spec ("What Fleet keeps where").
+
+The RDS **Query Editor** in the AWS console is a simpler way into Aurora only, but it needs the cluster's Data API turned on (`enable_http_endpoint`); weigh that against Step 1 before building.
+
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2724,6 +2747,7 @@ Added at my request: a guided, read-only look at the compute side, to understand
 - Health and error scan of the running stack (runbook plus baseline), and the repo and docs review: Task 21.
 - Architecture diagram in the README (Mermaid): Task 22.
 - Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
+- Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
