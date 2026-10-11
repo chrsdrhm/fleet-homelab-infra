@@ -174,7 +174,8 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
 **To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts, and updates the same summary comment.
 - **Only your comments trigger it.** Anyone can comment on a public repo, and each review uses your plan, so a mention from anyone but the repo owner is ignored.
 - **Drafts:** skipped when opened, but `@claude` reviews one anyway.
-- **Forks and Dependabot:** their pull requests never get the token on their own, so they're never sent to Claude automatically. Commenting `@claude` on one does send it. Claude only reads the code, never runs it.
+- **Forks:** never reviewed. A fork's pull request doesn't get the token when opened, and `@claude` skips it too: the review would check out the fork's files, and Claude Code loads settings from them, including hooks that run commands, while holding your token.
+- **Dependabot:** its pull requests don't get the token, so they're skipped when opened; `@claude` reviews one (it's a branch in your repo).
 - **What the job can do:** read the repo and comment on the pull request, nothing else.
 
 Re-running the workflow from the Checks tab reviews the commit it first ran on, not your latest push.

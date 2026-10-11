@@ -23,7 +23,7 @@ jobs:
     name: claude-review
     # A comment triggers it only on a pull request, only with @claude, and only from the
     # repository owner: anyone can comment on a public repo, and each review uses the
-    # owner's plan and secrets. Claude only reads the pull request's code; it never runs it.
+    # owner's plan and secrets. Pull requests from forks are skipped (see the first step).
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
       || (github.event_name == 'issue_comment' && github.event.issue.pull_request
@@ -42,10 +42,22 @@ jobs:
         id: gate
         env:
           TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
+          # From a comment the job holds the token even for a fork's pull request, and
+          # Claude Code loads settings (including hooks, which run commands) from the
+          # checked-out files. So @claude works only on this repository's own branches.
+          head_repo=$GITHUB_REPOSITORY
+          if [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
+            head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.head.repo.full_name // ""')
+          fi
           if [ -z "$TOKEN" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Claude review skipped::No CLAUDE_CODE_OAUTH_TOKEN secret here (it needs a Claude Pro or Max subscription; forks and Dependabot never get it)."
+          elif [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Claude review skipped::@claude doesn't review pull requests from forks, whose files could run code while the job holds the token."
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
