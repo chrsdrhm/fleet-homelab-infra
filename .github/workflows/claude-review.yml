@@ -54,7 +54,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }} # the job's own token: no OIDC, no app to install
-          use_sticky_comment: true
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -65,9 +64,13 @@ jobs:
 
             Comment only on things that matter: put specific issues as inline comments on
             the lines concerned. Always finish by posting exactly one summary comment with
-            `gh pr comment`, even when you found nothing: a one-line verdict, then each
-            finding as one line, most serious first, with its file. If there is nothing to
-            raise, the verdict is enough.
+            `gh pr comment`, even when you found nothing. Start it with a one-line verdict
+            that begins with exactly one of:
+              ✅ Good to merge: nothing that needs changing.
+              ⚠️ Mergeable with changes suggested: minor points worth fixing, nothing blocking.
+              ❌ Not ready to merge: a security problem, a private value, data loss, or a bug.
+            Then list each finding as one line, most serious first, with its file. If there
+            is nothing to raise, the verdict line is enough.
 
             This repository and its pull requests are public. Never quote, repeat or guess a
             private value (a hostname, domain, account ID, email address, token or ID); if
