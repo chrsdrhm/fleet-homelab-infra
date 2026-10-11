@@ -132,10 +132,17 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 `.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
 
-**How it signs in:**
-- **To Claude:** with a one-year OAuth token from your subscription. It can only make model requests.
-- **To GitHub:** with the job's own short-lived token. It can read the repo and comment on the pull request, nothing else.
-- **What it can look at:** the repo, Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
+**How it signs in.** There are two separate sign-ins:
+- **To Claude, with a one-year token from your subscription.**
+  - **Creating it:** `claude setup-token` signs in to claude.ai in your browser and prints the token once; it isn't saved anywhere on your machine.
+  - **What it can do:** only make model requests. It can't open your chats, change your account, or use connectors.
+  - **Where it lives:** you store it as the encrypted `CLAUDE_CODE_OAUTH_TOKEN` secret. GitHub hands it only to workflow runs in that repo, never to forks or Dependabot, and masks it in logs.
+  - **During a review:** Claude Code on the runner uses it for its requests, and the usage counts against your plan's limits, with no separate bill.
+- **To GitHub, with the job's own token.** It's created for each run and expires when the run ends. It can read the repo and comment on the pull request, nothing else. Comments appear as `github-actions[bot]`. No GitHub App and no OIDC are involved.
+- **Who could read the secret:** any workflow running in the repo can, so it's only as safe as who can change workflows: here, only you, through pull requests.
+- **Stopping it:** delete the secret.
+- **After a year:** the token stops working, and the review job then fails (it isn't required, so merges aren't blocked) until you create a new token.
+- **What it can look at:** the repo, plus Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
 
 **Model:** your plan's default. To pin one, set a repository variable, for example:
 ```bash
