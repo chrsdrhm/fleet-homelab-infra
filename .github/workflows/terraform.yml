@@ -381,10 +381,11 @@ jobs:
       group: terraform
       cancel-in-progress: false
     env:
-      # Wait for the state lock (held by an apply on merge, say) instead of failing.
-      TF_CLI_ARGS_plan: "-lock-timeout=30m"
-      TF_CLI_ARGS_apply: "-lock-timeout=30m"
-      TF_CLI_ARGS_destroy: "-lock-timeout=30m"
+      # Wait for the state lock (held by an apply on merge, say) instead of failing. 15
+      # minutes, so a wait and the work fit in the AWS session's hour.
+      TF_CLI_ARGS_plan: "-lock-timeout=15m"
+      TF_CLI_ARGS_apply: "-lock-timeout=15m"
+      TF_CLI_ARGS_destroy: "-lock-timeout=15m"
     steps:
       # Fails before touching AWS, and the message shows on the run's summary page.
       - name: Check the inputs
@@ -455,7 +456,7 @@ jobs:
     name: terraform-apply-on-merge
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
-    timeout-minutes: 120 # up to 40 waiting for a manual up/down, then the lock waits and the apply
+    timeout-minutes: 120 # up to 40 waiting for a manual up/down, then up to an hour signed in to AWS
     permissions:
       id-token: write
       contents: read
@@ -469,13 +470,28 @@ jobs:
       group: terraform-apply-on-merge
       cancel-in-progress: false
     env:
-      TF_CLI_ARGS_plan: "-lock-timeout=30m"
-      TF_CLI_ARGS_apply: "-lock-timeout=30m"
+      TF_CLI_ARGS_plan: "-lock-timeout=15m"
+      TF_CLI_ARGS_apply: "-lock-timeout=15m"
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Before signing in to AWS, so the wait doesn't eat into the session's hour.
+      - name: Wait for a running up or down
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 80); do
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
+            [ "$busy" = 0 ] && exit 0
+            echo "Waiting for a manual up or down to finish…"
+            sleep 30
+          done
+          echo "::error title=Still busy::a manual up or down is still running after 40 minutes. Nothing was applied; the next up applies main."
+          exit 1
 
       - name: Set up Terraform
         uses: ./.github/actions/terraform-setup
@@ -492,20 +508,6 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
-
-      - name: Wait for a running up or down
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for _ in $(seq 80); do
-            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
-              --json status --jq 'map(select(.status != "completed")) | length')
-            [ "$busy" = 0 ] && exit 0
-            echo "Waiting for a manual up or down to finish…"
-            sleep 30
-          done
-          echo "::error title=Still busy::a manual up or down is still running after 40 minutes. Nothing was applied; the next up applies main."
-          exit 1
 
       # down.sh destroys module.fleet, so its absence from the state means the stack is
       # down. Applying then would build the whole stack, so this waits for the next up.
@@ -544,7 +546,7 @@ jobs:
           fi
           # If the stack went down between the check above and this plan, the plan would
           # build it all: creating the ECS cluster or the database means exactly that.
-          if terraform show -json tfplan | jq -e '[.resource_changes[]? | select((.type | IN("aws_ecs_cluster", "aws_rds_cluster")) and (.change.actions | index("create")))] | length > 0' > /dev/null; then
+          if terraform show -json tfplan | jq -e '[.resource_changes[]? | select((.type | IN("aws_ecs_cluster", "aws_rds_cluster")) and .change.actions == ["create"])] | length > 0' > /dev/null; then
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Stack is down::this plan would build the stack, so nothing was applied. The next up applies main."
             exit 0
