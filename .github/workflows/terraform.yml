@@ -109,7 +109,7 @@ jobs:
           done
 
   # When lint fails, one PR comment names the failed checks and links to the job; it is
-  # updated in place, and marked as passing once lint passes. A separate job, so the pull
+  # updated in place, and deleted once lint passes. A separate job, so the pull
   # request's own code (which lint runs) never holds a token that can write to the PR.
   lint-comment:
     name: lint-comment
@@ -139,20 +139,20 @@ jobs:
           id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | tail -1)
           if [ "$RESULT" = success ]; then
-            [ -n "$id" ] || exit 0 # lint never failed on this PR: nothing to say
-            body="$marker"$'\n'"✅ **Lint passes now.**"
+            # Lint passes: remove the earlier failure comment, if there is one.
+            [ -z "$id" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
+            exit 0
+          fi
+          job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq ".jobs[] | select(.name == \"$LINT_JOB\") | .html_url" | head -1)
+          [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          names=$(printf '%s' "$FAILED" | tr -cd 'a-z -' | xargs) # check names only
+          if [ -n "$names" ]; then
+            read -ra each <<< "$names"
+            list=$(printf "\`%s\`, " "${each[@]}"); list=${list%, }
+            body="$marker"$'\n'"❌ **Lint failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
           else
-            job_url=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
-              --jq ".jobs[] | select(.name == \"$LINT_JOB\") | .html_url" | head -1)
-            [ -n "$job_url" ] || job_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            names=$(printf '%s' "$FAILED" | tr -cd 'a-z -' | xargs) # check names only
-            if [ -n "$names" ]; then
-              read -ra each <<< "$names"
-              list=$(printf "\`%s\`, " "${each[@]}"); list=${list%, }
-              body="$marker"$'\n'"❌ **Lint failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
-            else
-              body="$marker"$'\n'"❌ **Lint failed.** See the [workflow job]($job_url) for the details."
-            fi
+            body="$marker"$'\n'"❌ **Lint failed.** See the [workflow job]($job_url) for the details."
           fi
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
