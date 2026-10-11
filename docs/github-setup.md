@@ -62,13 +62,12 @@ for repo in fleet-homelab-infra fleet-homelab-gitops; do
   gh api -X PATCH $R -F delete_branch_on_merge=true -F has_wiki=false -F has_projects=false
 done
 
-# Allowed actions besides GitHub's own. The last two are only for the optional Claude review (step 6).
-gh api -X PUT repos/$OWNER/fleet-homelab-infra/actions/permissions/selected-actions \
-  -F github_owned_allowed=true -F verified_allowed=false -f 'patterns_allowed[]=aws-actions/*' -f 'patterns_allowed[]=hashicorp/*' \
-  -f 'patterns_allowed[]=anthropics/claude-code-action' -f 'patterns_allowed[]=oven-sh/setup-bun'
-gh api -X PUT repos/$OWNER/fleet-homelab-gitops/actions/permissions/selected-actions \
-  -F github_owned_allowed=true -F verified_allowed=false \
-  -f 'patterns_allowed[]=anthropics/claude-code-action' -f 'patterns_allowed[]=oven-sh/setup-bun'
+# Allowed actions besides GitHub's own (sent as JSON: the API rejects "@*" entries passed with -f).
+# The last two are only for the optional Claude review (step 6).
+echo '{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["aws-actions/*","hashicorp/*","anthropics/claude-code-action@*","oven-sh/setup-bun@*"]}' \
+  | gh api -X PUT repos/$OWNER/fleet-homelab-infra/actions/permissions/selected-actions --input -
+echo '{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["anthropics/claude-code-action@*","oven-sh/setup-bun@*"]}' \
+  | gh api -X PUT repos/$OWNER/fleet-homelab-gitops/actions/permissions/selected-actions --input -
 
 # The label that accepts a plan which destroys or replaces data (infra only)
 gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
@@ -133,6 +132,16 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 
 `.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
 
+**How it signs in:**
+- **To Claude:** with a one-year OAuth token from your subscription. It can only make model requests.
+- **To GitHub:** with the job's own short-lived token. It can read the repo and comment on the pull request, nothing else.
+- **What it can look at:** the repo, Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
+
+**Model:** your plan's default. To pin one, set a repository variable, for example:
+```bash
+gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet-homelab-infra
+```
+
 1. Create a token from your subscription. Run this in a terminal, not through an AI assistant, because it prints the token:
    ```bash
    claude setup-token
@@ -143,5 +152,6 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
    gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $OWNER/fleet-homelab-gitops
    ```
 3. Make sure both actions it needs are in the allow-list (step 2).
+4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
 
 To review again after pushing changes, re-run the **Claude review** workflow from the pull request's Checks tab. Draft pull requests are skipped. Forks and Dependabot never get the token, so their pull requests are never sent to Claude. The job can only read the repo and comment on the pull request.
