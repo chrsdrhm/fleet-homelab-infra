@@ -64,8 +64,9 @@ jobs:
 
             Comment only on things that matter: put specific issues as inline comments on
             the lines concerned. Always finish by posting exactly one summary comment with
-            `gh pr comment`, even when you found nothing. Start it with a one-line verdict
-            that begins with exactly one of:
+            `gh pr comment`, even when you found nothing. Start it with the heading line
+            `### 🤖 Claude review`, then a blank line, then a one-line verdict that begins
+            with exactly one of:
               ✅ Good to merge: nothing that needs changing.
               ⚠️ Mergeable with changes suggested: minor points worth fixing, nothing blocking.
               ❌ Not ready to merge: a security problem, a private value, data loss, or a bug.
