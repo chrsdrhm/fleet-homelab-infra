@@ -243,7 +243,7 @@ GitHub.
   Fleet's current template): push to `main` → apply; pull request → dry-run
   only, run with `pull_request_target` so the workflow comes from `main` and the
   pull request's YAML is only read; nightly cron → drift correction. `fleetctl`
-  comes from Fleet's installer script, matched to the server's version. Fleet's
+  is the server's exact release, downloaded from GitHub and checksum-verified. Fleet's
   `/fleet-gitops` Claude skill is in the repo, limited to dry runs.
   Every run first checks Fleet's `/healthz`; when the stack is torn down it
   skips with a warning instead of failing. Each `up` starts a run, so changes
