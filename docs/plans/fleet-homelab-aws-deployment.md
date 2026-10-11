@@ -1181,6 +1181,8 @@ Note for later: because the Aurora snapshot/restore mechanism preserves the data
 
 **GitOps mode on (2026-10-11):** `org_settings.gitops.gitops_mode_enabled: true` in the GitOps repo's `default.yml`, with `repository_url` set from the workflow (`github.server_url`/`github.repository`). `default.yml` defines everything, so a change made in the UI was silently deleted by the next apply, merge or nightly, and the dry run can't warn about it (it doesn't compare with the server). Only Fleet's default exception (enroll secrets) is on; the GitOps README explains the labels and software exceptions.
 
+**Caught up with Fleet's `fleetctl new` template (2026-10-11):** pull request dry runs use `pull_request_target` (fleetdm/fleet#53059): the workflow and action come from `main` and the pull request's YAML is checked out into `untrusted-pr/`. `pull_request` stays until a test shows the new run counts as the required `fleet-gitops` check (those runs belong to `main`'s commit), then it's removed, or the result is posted to the pull request's commit instead. `fleetctl` comes from Fleet's `install-fleetctl.sh` instead of npm (#52971), keeping our rules (fail if the server's version is unknown, no fallback to the latest). Fleet's `/fleet-gitops` skill is added, limited to `fleetctl gitops … --dry-run`, and the template's `CLAUDE.md` guidance is in `AGENTS.md`.
+
 ---
 
 ### Task 12: Osquery log destination — Firehose → S3

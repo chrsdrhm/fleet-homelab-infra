@@ -239,8 +239,12 @@ GitHub.
   (Windows/macOS/Linux); one fleet is sufficient at this scale. The scaffold's second
   `personal-mobile-devices` fleet is deleted. Note `default.yml` containing
   `org_settings` makes the workflow delete any Fleet not defined in the repo.
-- GitHub Actions workflow (from the `fleetctl new` scaffold): push to `main`
-  → apply; pull request → dry-run only; nightly cron → drift correction.
+- GitHub Actions workflow (from the `fleetctl new` scaffold, kept in step with
+  Fleet's current template): push to `main` → apply; pull request → dry-run
+  only, run with `pull_request_target` so the workflow comes from `main` and the
+  pull request's YAML is only read; nightly cron → drift correction. `fleetctl`
+  comes from Fleet's installer script, matched to the server's version. Fleet's
+  `/fleet-gitops` Claude skill is in the repo, limited to dry runs.
   Every run first checks Fleet's `/healthz`; when the stack is torn down it
   skips with a warning instead of failing. Each `up` starts a run, so changes
   merged while the stack was down are applied after the rebuild (see Remote
