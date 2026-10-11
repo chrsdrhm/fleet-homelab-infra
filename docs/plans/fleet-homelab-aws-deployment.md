@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook), 26 (GitOps dry-run comment).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook), 26 (GitOps dry-run comment), 27 (Fleet's GitOps mode).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2775,6 +2775,25 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 
 ---
 
+### Task 27: Turn on Fleet's GitOps mode, so the UI can't drift from the repo
+
+Added at my request. The GitOps repo's `default.yml` defines everything, so anything made in Fleet's UI that isn't in the repo is deleted on the next apply: on a merge, and by the nightly run with no pull request at all. The dry run doesn't compare with the server, so nothing warns about it. Fleet's [GitOps mode](https://fleetdm.com/guides/gitops-mode) stops it at the source: the UI shows everything GitOps manages as read-only, with a tooltip pointing to the repository. Anyone running this with CI should turn it on.
+
+- [ ] **Step 1: Turn it on** in the GitOps repo's `default.yml` (Premium; only under `org_settings`):
+  ```yaml
+  org_settings:
+    gitops:
+      gitops_mode_enabled: true
+      repository_url: https://github.com/<you>/fleet-homelab-gitops
+  ```
+  The repository URL is public, so it's fine in the file. The pull request's dry run checks Fleet accepts it.
+- [ ] **Step 2: Decide the exceptions.** Labels, software and enroll secrets can stay editable in the UI (Settings → Integrations → Change management; these can't be set in YAML). Enroll secrets are already managed in Fleet, not the repo (`gitops.exceptions.secrets`), so check that still works.
+- [ ] **Step 3: Verify** while the stack is up: as an admin in the UI, the GitOps-managed sections are read-only and point to the repo; the break-glass admin can still sign in; the next GitOps run passes.
+- [ ] **Step 4: Document it** as part of CI: the infra setup guide's GitOps and CI steps (if you run CI, turn on GitOps mode so UI changes can't happen), the GitOps README's **How it runs**, and why: without it, UI changes are silently deleted by the next run.
+
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2793,6 +2812,7 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 - Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
 - Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes): Task 25.
 - A pull request comment for the Fleet GitOps dry run (verdict, what changes by name, Fleet's output): Task 26.
+- Fleet's GitOps mode, so the UI can't drift from the repo: Task 27.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth and applies it while the stack is up): Task 16, with apply on merge added 2026-10-11. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
