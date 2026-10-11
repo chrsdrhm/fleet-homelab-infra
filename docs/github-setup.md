@@ -6,6 +6,10 @@ The GitHub side of both repos: secrets, repository settings, branch rules, a lab
 OWNER=$(gh api user --jq .login)
 ```
 
+**What you get:** every pull request is checked, and the results are posted as comments. These closed example pull requests show them:
+- **Infra:** [a change with its Terraform plan and Claude review](https://github.com/chrsdrhm/fleet-homelab-infra/pull/47), including an `@claude` re-review after a fix, and [a lint failure](https://github.com/chrsdrhm/fleet-homelab-infra/pull/44).
+- **GitOps:** [a new policy with Claude's review](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/27), and [a lint failure on a private value](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/30).
+
 Do the steps in this order. The branch rules require checks that must have run at least once; a required check that has never run blocks every merge.
 
 ## 1. Secrets
