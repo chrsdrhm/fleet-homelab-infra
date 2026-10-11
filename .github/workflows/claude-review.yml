@@ -61,9 +61,13 @@ jobs:
 
             Review this pull request as described in AGENTS.md, under "When reviewing a
             pull request". Check changes against Fleet's documented approach and Fleet's own
-            GitOps setup (the references in AGENTS.md); fetch them when it matters. Comment only on things that matter: put specific issues as inline
-            comments on the lines concerned, and add one short summary comment. If you find
-            nothing important, say so in one sentence.
+            GitOps setup (the references in AGENTS.md); fetch them when it matters.
+
+            Comment only on things that matter: put specific issues as inline comments on
+            the lines concerned. Always finish by posting exactly one summary comment with
+            `gh pr comment`, even when you found nothing: a one-line verdict, then each
+            finding as one line, most serious first, with its file. If there is nothing to
+            raise, the verdict is enough.
 
             This repository and its pull requests are public. Never quote, repeat or guess a
             private value (a hostname, domain, account ID, email address, token or ID); if
