@@ -68,7 +68,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 
 ## Built with AI assistance
 
-I planned and built this with [Claude Code](https://claude.com/claude-code). The design decisions, the account it runs in, and the review of what gets applied are mine; much of the plan text, and a lot of the fact-checking against upstream module source, were done with the assistant. The plan records where an early draft was wrong and got corrected, so those mistakes stay visible instead of being edited out.
+I planned and built this with [Claude Code](https://claude.com/claude-code). The design decisions, the account it runs in, and the review of what gets applied are mine; much of the plan text, and a lot of the fact-checking against upstream module source, were done with the assistant. The plan records where an early draft was wrong and got corrected, so those mistakes stay visible instead of being edited out. Rules for AI assistants working in or reviewing this repo are in [`AGENTS.md`](AGENTS.md), which Claude Code, GitHub Copilot and other tools read; `CLAUDE.md` only imports it, for Claude Code setups that read nothing else.
 
 ## License
 
