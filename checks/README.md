@@ -52,8 +52,8 @@ To skip the hooks for one commit, use `git commit --no-verify`. CI still runs th
 
 Delete this folder. Nothing else breaks:
 
-- the lint job falls back to `terraform fmt` and `terraform validate`
-- the plan job skips the data-loss guard
+- The lint job falls back to `terraform fmt` and `terraform validate`
+- The plan job skips the data-loss guard
 - `scripts/up.sh` skips the SSO check
 
 If the hooks were on, also run `git config --unset core.hooksPath`.
@@ -65,7 +65,7 @@ The checker catches private values two ways, and never stores or prints one.
 - **Patterns** (in `check.py`, safe to publish): AWS account IDs, Okta org names, URLs and app IDs, personal email addresses, and signed tokens (JWTs). They need no setup, so they also run on forks.
 - **Hashes** for values no pattern can single out, such as a hostname. Only the SHA-256 hash of each value (lowercased) is kept, with a plain label like `fleet hostname`. There are two copies of the list:
   - `~/.config/fleet-homelab/private-hashes`: the source of truth, used by the hooks
-  - the `PRIVATE_HASHES` secret: in both repos, in both the Actions and Dependabot stores, for CI
+  - The `PRIVATE_HASHES` secret: in both repos, in both the Actions and Dependabot stores, for CI
 
 A hash fully hides a long random value such as a token. A guessable value such as a domain can still be confirmed by someone who hashes their guess, so treat the list as private, not secret-proof.
 

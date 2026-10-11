@@ -81,7 +81,7 @@ Open a small pull request in each repo, such as a one-line README edit, and let 
 ## 4. Branch rules
 
 A ruleset named `protect-main` on the default branch, with no bypass, not even for you:
-- every change goes through a pull request whose required checks pass, on a branch that's up to date with `main` (so what's checked and planned is what gets merged, and in infra, applied)
+- Every change goes through a pull request whose required checks pass, on a branch that's up to date with `main` (so what's checked and planned is what gets merged, and in infra, applied)
 - `main` can't be deleted or force-pushed
 
 ```bash
