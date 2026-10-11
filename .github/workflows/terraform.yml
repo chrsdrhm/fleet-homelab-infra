@@ -1,4 +1,4 @@
-# Terraform for this stack, in three jobs (plus lint-comment, which comments on the PR
+# Terraform for this stack, in four jobs (plus lint-comment, which comments on the PR
 # when lint fails):
 #  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
 #           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
@@ -7,18 +7,26 @@
 #           Each plan is a new comment; earlier ones are hidden as outdated.
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
-#  - apply: started by hand (never on push): up or down with the apply role.
-# AWS access is keyless (OIDC). The apply role in oidc.tf only trusts manual runs on
-# main, so a pull request cannot get it even by editing this file. Values that identify
+#  - apply: started by hand: up or down with the apply role.
+#  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
+#           plan and apply main, so a change goes live on merge; if it's down, nothing
+#           happens (the next up applies main). The data-loss guard runs again here.
+# AWS access is keyless (OIDC). The apply role in oidc.tf only trusts runs on main,
+# which only a merge or a manual run can start, so a pull request cannot get it even by
+# editing this file. Values that identify
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
-run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || format('Terraform {0}', inputs.action) }}"
+run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || format('Terraform {0}', inputs.action) }}"
 
 on:
   pull_request:
     # labeled/unlabeled: re-check when the `allow-destroy` label is added or removed.
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+    # Docs-only merges change nothing in AWS.
+    paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
   workflow_dispatch:
     inputs:
       action:
@@ -372,6 +380,12 @@ jobs:
     concurrency:
       group: terraform
       cancel-in-progress: false
+    env:
+      # Wait for the state lock (held by an apply on merge, say) instead of failing. 15
+      # minutes, so a wait and the work fit in the AWS session's hour.
+      TF_CLI_ARGS_plan: "-lock-timeout=15m"
+      TF_CLI_ARGS_apply: "-lock-timeout=15m"
+      TF_CLI_ARGS_destroy: "-lock-timeout=15m"
     steps:
       # Fails before touching AWS, and the message shows on the run's summary page.
       - name: Check the inputs
@@ -437,3 +451,129 @@ jobs:
       - name: Remove the generated files
         if: always()
         run: rm -f terraform.tfvars backend.hcl
+
+  apply-on-merge:
+    name: terraform-apply-on-merge
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 120 # up to 40 waiting for a manual up/down, then up to an hour signed in to AWS
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read # the merged pull request's labels, for allow-destroy
+      actions: read # to wait for a running up or down
+    # Its own group: GitHub keeps one pending run per group, so sharing up/down's group
+    # could drop a queued up or down. A newer merge replacing an older pending one is
+    # fine: it applies a main that includes it. Against up/down, the job first waits for
+    # them to finish, and Terraform's state lock (waited on, not failed) covers the rest.
+    concurrency:
+      group: terraform-apply-on-merge
+      cancel-in-progress: false
+    env:
+      TF_CLI_ARGS_plan: "-lock-timeout=15m"
+      TF_CLI_ARGS_apply: "-lock-timeout=15m"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Before signing in to AWS, so the wait doesn't eat into the session's hour.
+      - name: Wait for a running up or down
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 80); do
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
+            [ "$busy" = 0 ] && exit 0
+            echo "Waiting for a manual up or down to finish…"
+            sleep 30
+          done
+          echo "::error title=Still busy::a manual up or down is still running after 40 minutes. Nothing was applied; the next up applies main."
+          exit 1
+
+      - name: Set up Terraform
+        uses: ./.github/actions/terraform-setup
+        with:
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+        env:
+          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
+          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
+          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER_ID: ${{ github.repository_owner_id }}
+          GH_REPO_ID: ${{ github.repository_id }}
+
+      # down.sh destroys module.fleet, so its absence from the state means the stack is
+      # down. Applying then would build the whole stack, so this waits for the next up.
+      - name: Check whether the stack is up
+        id: stack
+        run: |
+          # Captured first, so an error (credentials, backend) fails the step rather than
+          # reading as "down".
+          resources=$(terraform state list)
+          if grep -q '^module\.fleet\.' <<< "$resources"; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Stack is down::Nothing applied. The next up applies main, including this change."
+          fi
+
+      # The same data-loss guard as the pull request's check: a plan that destroys or
+      # replaces a resource holding data stops here unless the merged pull request had
+      # the allow-destroy label.
+      - name: Plan
+        id: plan
+        if: steps.stack.outputs.up == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set +e
+          terraform plan -input=false -var-file=terraform.tfvars -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          [ "$code" != 1 ] || exit 1
+          if [ "$code" = 0 ]; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No changes::main matches what's deployed."
+            exit 0
+          fi
+          # If the stack went down between the check above and this plan, the plan would
+          # build it all: creating the ECS cluster or the database means exactly that.
+          if terraform show -json tfplan | jq -e '[.resource_changes[]? | select((.type | IN("aws_ecs_cluster", "aws_rds_cluster")) and .change.actions == ["create"])] | length > 0' > /dev/null; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Stack is down::this plan would build the stack, so nothing was applied. The next up applies main."
+            exit 0
+          fi
+          echo "changes=true" >> "$GITHUB_OUTPUT"
+          # Without checks/data-loss-guard.sh (checks/ is optional), fail closed: any
+          # destroy or replace at all needs allow-destroy.
+          if [ -x checks/data-loss-guard.sh ]; then
+            at_risk=$(checks/data-loss-guard.sh tfplan)
+          else
+            at_risk=$(terraform show -json tfplan | jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address')
+          fi
+          if [ -n "$at_risk" ]; then
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" --jq '[.[0].labels[]?.name] | join(",")')
+            if [[ ",$labels," != *",allow-destroy,"* ]]; then
+              printf '%s\n' "$at_risk"
+              echo "::error title=Data at risk::this plan destroys or replaces resources, and the merged pull request had no allow-destroy label. Nothing was applied."
+              exit 1
+            fi
+            echo "::notice title=Destroy accepted::the merged pull request had the allow-destroy label."
+          fi
+
+      # tf-apply.sh retries the known IAM role-propagation race (see that file).
+      - name: Apply
+        if: steps.plan.outputs.changes == 'true'
+        run: ./scripts/tf-apply.sh tfplan -- -var-file=terraform.tfvars
+
+      - name: Remove the generated files
+        if: always()
+        run: rm -f terraform.tfvars backend.hcl tfplan

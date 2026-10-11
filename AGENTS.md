@@ -57,7 +57,6 @@ Cite a specific control only when you are sure of it.
 - small instance sizes
 - a US-only WAF
 - the one public bucket, which holds only the login logo
-- manual applies rather than applying on merge
 
 Reliability is deliberately traded for cost here. Raise a trade-off only if a change makes it worse than the spec describes.
 

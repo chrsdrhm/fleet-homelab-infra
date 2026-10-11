@@ -447,7 +447,8 @@ current, and its pull requests get a plan too. Nothing personal or secret is com
 the commit author is the GitHub noreply address, and the budget-alert email,
 license key and Cloudflare token live only in gitignored `terraform.tfvars`
 and GitHub secrets. The AWS trust policy is the second lock: the apply role
-only trusts `workflow_dispatch` on `main` in this repo's immutable ID.
+only trusts runs on `main` in this repo's immutable ID, which only a merge or a
+manual run can start.
 
 **The trust policy uses GitHub's newer immutable subject-claim format**
 (`repo:OWNER@OWNER-ID/REPO@REPO-ID:...`), not the older name-based one —
@@ -458,25 +459,26 @@ don't exist until the repo is actually pushed to GitHub, which is why the
 infra repo gets pushed to GitHub as this task's *first* step rather than
 its last — an ordering an earlier draft of this design got backwards.
 
-Deliberately a
-manual trigger, not auto-apply-on-push: an infra `destroy` is far more
-consequential than a Fleet config sync, and this deployment's shape (mostly
-torn down) doesn't suit "apply whenever something merges" the way an
-always-on service would. Every `.tf` change still gets reviewed before it
-takes effect: opening a PR runs `terraform plan` and posts the output as a
-comment (mirroring the dry-run behavior the GitOps repo already has for
-Fleet config), so merging to `main` is always an informed decision — the
-apply itself just waits for the next manual `up` trigger rather than firing
-immediately. **A data-loss guard** sits in that check: if the plan would destroy
+**Merging applies, while the stack is up.** Every `.tf` change is reviewed
+before it takes effect: opening a PR runs `terraform plan` and posts the output
+as a comment (mirroring the dry run the GitOps repo has for Fleet config), so
+merging to `main` is an informed decision. On merge, the `apply-on-merge` job
+plans `main` again and applies it if the stack is up (the state holds
+`module.fleet`). While the stack is down it applies nothing, since that would
+build the whole stack; the next `up` applies `main` instead. It waits for a
+running `up`/`down` to finish (before signing in to AWS), and every plan and
+apply waits up to 15 minutes on Terraform's state lock rather than failing, so they never overlap; if the stack went down meanwhile
+(its plan would create the ECS cluster or the database), it applies nothing. **A data-loss guard** sits in that check: if the plan would destroy
 or replace a resource that holds data or identity (the Aurora cluster, a
 Secrets Manager secret, an S3 bucket, the Route 53 zone, the ACM certificate,
 the SES identity or the Fleet server key), the comment opens with a caution
 listing them and the check fails. Accepting it on purpose takes the
-`allow-destroy` label on the pull request; the change then happens at the next
-`up`. The guard covers pull-request plans only: `down` still destroys the
+`allow-destroy` label on the pull request. The apply on merge runs the guard
+again on its own plan and stops unless the merged pull request had the label.
+The guard covers these plans only: `down` still destroys the
 cluster after its snapshot, by design, and `prevent_destroy` (the server key,
 the installers bucket) still has to be removed in code first. Two IAM roles serve this, not one: an **apply role**
-(assumable only by a `workflow_dispatch` run on `main`) for `up`/`down`,
+(assumable only by a run on `main`) for `up`/`down` and the apply on merge,
 and a **read-only plan role** (assumable only from the `pull_request` context)
 for the PR checks — a PR workflow runs the file from the PR's own branch, so it
 gets no write access. The apply role is scoped by AWS service (EC2/VPC, RDS,
@@ -579,7 +581,8 @@ the time by design, a red board usually means "torn down on purpose".
   `fleet-terraform` root module and addons, the separate `okta/` root for the
   Okta side and the optional `grafana/` root (both applied locally), the
   `up`/`down` operational scripts, and one GitHub Actions workflow
-  (`terraform.yml`: `lint` and `plan` on pull requests, `apply` for on-demand
-  up/down) with a shared setup action, that drives them remotely.
+  (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
+  merges, `apply` for on-demand up/down) with a shared setup action, that
+  drives them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own
   GitHub repo, driving Fleet server config via GitHub Actions.
