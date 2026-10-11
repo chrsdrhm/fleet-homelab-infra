@@ -1330,6 +1330,8 @@ git commit -m "Add AWS Budget: alert every \$10 of actual spend up to \$100/mo"
 
 ---
 
+**Budget lowered (2026-10-11):** the limit is now $50, with alerts at every $10 up to $50 (`range(10, 51, 10)`). The stack averages about $15–25 a month, so a lower ceiling still leaves headroom, and a stack left running reaches the first alert within about a day and a half either way.
+
 ### Task 14: Cost-control scripts
 
 **Built 2026-10-06: the files in `scripts/` are the source of truth and supersede the code blocks below** (kept as the original design). Differences, all from running the routine by hand first:
