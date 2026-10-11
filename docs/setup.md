@@ -128,15 +128,15 @@ From then on, `up.sh` starts this run after every rebuild.
 
 ## 8. Optional: CI
 
-CI is optional, but worth it. Every pull request is checked before it can merge, and the results land on the pull request itself:
+CI is optional, but worth it. **To set it up, follow [GitHub setup](github-setup.md)**, which covers both repos step by step.
+
+With CI, every pull request is checked before it can merge, and the results land on the pull request itself:
 - **Lint and tests:** a ❌ comment names any check that fails, including one that catches a private value about to go public.
 - **Terraform plan:** exactly what will change in AWS, with secrets masked, and a failed check if the change would destroy data.
 - **Claude review (optional):** a ✅ / ⚠️ / ❌ verdict against Fleet's approach and AWS and endpoint security baselines; comment `@claude` to review again after a fix.
 - **Changes go live on merge** while the stack is up (while it's down, the next `up` applies them), and **`up` and `down` run from GitHub**, without your terminal.
 
 See it on closed example pull requests: in infra, [a change with its plan and review](https://github.com/chrsdrhm/fleet-homelab-infra/pull/47) (including an `@claude` re-review after a fix) and [a lint failure](https://github.com/chrsdrhm/fleet-homelab-infra/pull/44); in GitOps, [a new policy with its review](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/27) and [a lint failure on a private value](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/30).
-
-[GitHub setup](github-setup.md) covers all of it for both repos, in order: secrets, repository settings, running the checks once, branch rules, and the optional GitHub App that lets a CI `up` reapply the GitOps configuration.
 
 To have CI check for your own private values (your hostname, account ID and so on, stored only as hashes), run:
 
