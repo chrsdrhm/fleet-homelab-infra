@@ -25,6 +25,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # inline and summary review comments
+      actions: read # the run's start time, so the usage goes on this run's comment
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
