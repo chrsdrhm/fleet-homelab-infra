@@ -8,9 +8,11 @@
 set -uo pipefail
 check="$(git rev-parse --show-toplevel)/checks/private-values/check.py"
 fail=0
-git diff --cached --name-only | python3 "$check" "staged file names" || fail=1
+# Input by redirection, not a pipe, so only the checker's own result counts (a pipe
+# under pipefail would also fail when a file has no added lines).
+python3 "$check" "staged file names" < <(git diff --cached --name-only) || fail=1
 while IFS= read -r f; do
-  git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | python3 "$check" "staged lines of $f" || fail=1
+  python3 "$check" "staged lines of $f" < <(git diff --cached -U0 -- "$f" | sed -n '/^+++/d; /^+/p') || fail=1
 done < <(git diff --cached --name-only --diff-filter=d)
 [ "$fail" -eq 0 ] || echo "Commit blocked. Remove the private value(s) and stage again." >&2
 exit "$fail"

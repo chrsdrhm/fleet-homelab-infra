@@ -39,14 +39,16 @@ private_values() {
   if [ -z "$base" ]; then
     base=$(git merge-base origin/main HEAD 2>/dev/null) || { echo "No origin/main to compare with; skipped the diff check."; return 0; }
   fi
+  # Each check reads its input by redirection, not a pipe, so it runs in this shell and
+  # a finding sets fail. sed, unlike grep, doesn't fail when a file has no added lines.
   check() { python3 "$checks/private-values/check.py" "$1" || fail=1; }
-  git diff --name-only "$base...$head" | check "the changed file names"
+  check "the changed file names" < <(git diff --name-only "$base...$head")
   while IFS= read -r f; do
-    git diff -U0 "$base...$head" -- "$f" | grep '^+' | grep -v '^+++' | check "the added lines of $f"
+    check "the added lines of $f" < <(git diff -U0 "$base...$head" -- "$f" | sed -n '/^+++/d; /^+/p')
   done < <(git diff --name-only --diff-filter=d "$base...$head")
-  git log --format=%B "$base..$head" | check "the commit messages"
+  check "the commit messages" < <(git log --format=%B "$base..$head")
   if [ -n "${TITLE:-}${BODY:-}" ]; then
-    printf '%s\n%s\n' "${TITLE:-}" "${BODY:-}" | check "the pull request title and body"
+    check "the pull request title and body" < <(printf '%s\n%s\n' "${TITLE:-}" "${BODY:-}")
   fi
   [ "$fail" -eq 0 ] || echo "::error title=Private value found::Remove it from the pull request (and from the history of its commits)."
   return "$fail"
