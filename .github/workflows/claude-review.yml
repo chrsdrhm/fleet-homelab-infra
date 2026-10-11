@@ -8,10 +8,12 @@
 name: Claude review
 
 on:
+  # Not on every push, to save the plan's usage. To review the latest commit again,
+  # comment @claude on the pull request (only the repository owner can trigger it).
   pull_request:
-    # Not on every push, to save the plan's usage. Re-run from the Actions tab
-    # after pushing changes you want reviewed again.
     types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -19,24 +21,54 @@ permissions:
 jobs:
   review:
     name: claude-review
-    if: github.event.pull_request.draft == false
+    # A comment triggers it only on a pull request, only with @claude, and only from
+    # someone with write access (checked in the first step; this is a cheap pre-filter):
+    # anyone can comment on a public repo, and each review uses the owner's plan and
+    # secrets. Pull requests from forks are skipped (also in the first step).
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment' && github.event.issue.pull_request
+          && contains(github.event.comment.body, '@claude')
+          && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write # inline and summary review comments
     concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
+      group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     steps:
       - name: Check that the Claude token is set
         id: gate
         env:
           TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
         run: |
-          if [ -z "$TOKEN" ]; then
+          # From a comment, only someone with write access (admin, maintain or write) can
+          # start a review.
+          permission="write"
+          if [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
+            permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$COMMENTER/permission" --jq .permission || echo none)
+          fi
+          # From a comment the job holds the token even for a fork's pull request, and
+          # Claude Code loads settings (including hooks, which run commands) from the
+          # checked-out files. So @claude works only on this repository's own branches.
+          head_repo=$GITHUB_REPOSITORY
+          if [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
+            head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.head.repo.full_name // ""')
+          fi
+          if [ "$permission" != admin ] && [ "$permission" != write ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Claude review skipped::@claude reviews only for people with write access to this repository."
+          elif [ -z "$TOKEN" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Claude review skipped::No CLAUDE_CODE_OAUTH_TOKEN secret here (it needs a Claude Pro or Max subscription; forks and Dependabot never get it)."
+          elif [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Claude review skipped::@claude doesn't review pull requests from forks, whose files could run code while the job holds the token."
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
@@ -46,6 +78,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # From a comment, the event is about the default branch: check out the PR's head.
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+      - name: Acknowledge the @claude comment
+        if: steps.gate.outputs.run == 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
 
       - name: Review with Claude
         id: review
@@ -56,7 +97,7 @@ jobs:
           github_token: ${{ github.token }} # the job's own token: no OIDC, no app to install
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
 
             Review this pull request as described in AGENTS.md, under "When reviewing a
             pull request". Check changes against Fleet's documented approach and Fleet's own
@@ -94,20 +135,22 @@ jobs:
         env:
           LOG: ${{ steps.review.outputs.execution_file }}
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           if [ ! -f "$LOG" ] || ! result=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
             echo "::warning title=No review result::The review's execution log has no result, so no summary was posted."
             exit 0
           fi
-          n() { jq -r "$1" <<< "$result"; }
-          cached=$(n '.usage.cache_read_input_tokens // 0')
-          input=$(n '(.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)')
-          output=$(n '.usage.output_tokens // 0')
+          n() { jq -r 'def c: if length > 3 then (.[:-3] | c) + "," + .[-3:] else . end; '"$1" <<< "$result"; }
+          total='((.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0))'
+          input=$(n "$total | tostring | c")
+          cached=$(n '.usage.cache_read_input_tokens // 0 | tostring | c')
+          cache_pct=$(n "if $total > 0 then (.usage.cache_read_input_tokens // 0) * 100 / $total | round else 0 end")
+          output=$(n '.usage.output_tokens // 0 | tostring | c')
           turns=$(n '.num_turns // 0')
           secs=$(n '(.duration_ms // 0) / 1000 | floor')
           cost=$(n '.total_cost_usd // 0 | . * 100 | round / 100')
-          rows=("| | |" "|---|---|" "| Input tokens | $input ($cached read from cache) |" \
+          rows=("| | |" "|---|---|" "| Input tokens | $input |" "| Read from cache | $cached ($cache_pct%) |" \
             "| Output tokens | $output |" "| Turns | $turns |" "| Duration | ${secs}s |")
           printf '%s\n' "### Claude review usage" "" "${rows[@]}" \
             "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
