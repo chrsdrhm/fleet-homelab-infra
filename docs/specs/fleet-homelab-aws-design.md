@@ -508,6 +508,15 @@ state. The mitigation that fits is the trust policy — only a manual dispatch o
 stronger gate (a GitHub Environment with a required reviewer) not built here.
 It would need revisiting in any shared or production account.
 
+**AI assistants and review.** Both repos have an `AGENTS.md` with the rules any
+AI assistant or reviewer must follow, and a review checklist against named
+standards (AWS Well-Architected and CIS for the infra; CIS, NIST mSCP, DISA STIG
+and Microsoft baselines for the endpoint configuration in the GitOps repo). An
+optional workflow asks Claude to review each pull request using the owner's
+Claude subscription. It skips without that token, is never a required check, can
+only read the repo and comment, and can be swapped for another reviewer or
+removed (see `docs/github-setup.md`).
+
 **Starting the GitOps run after `up`.** A workflow's own token is limited to
 its repo, so the infra workflow cannot start the GitOps repo's workflow with
 it. A private **GitHub App** fills that gap: created on the owner's account,
