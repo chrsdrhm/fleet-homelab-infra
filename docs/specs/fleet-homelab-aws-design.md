@@ -245,6 +245,10 @@ GitHub.
   skips with a warning instead of failing. Each `up` starts a run, so changes
   merged while the stack was down are applied after the rebuild (see Remote
   execution).
+- **GitOps mode is on** (`org_settings.gitops.gitops_mode_enabled`): the
+  UI is read-only for what the repo manages, since anything made there would be
+  deleted by the next run. `repository_url` comes from the workflow, so a fork
+  points to itself. No UI exceptions beyond Fleet's default:
 - Enroll secrets are not in Git: Fleet's GitOps excepts them by default
   (`gitops.exceptions.secrets: true`) and they are managed in Fleet.
 - Repo secrets: `FLEET_URL`, `FLEET_API_TOKEN` (the GitOps-role API user),
