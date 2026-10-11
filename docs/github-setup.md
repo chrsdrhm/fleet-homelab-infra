@@ -162,3 +162,20 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
 4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
 
 To review again after pushing changes, re-run the **Claude review** workflow from the pull request's Checks tab. Draft pull requests are skipped. Forks and Dependabot never get the token, so their pull requests are never sent to Claude. The job can only read the repo and comment on the pull request.
+
+### Using a different reviewer, or none
+
+The review is optional and swappable. The instructions any reviewer should follow are in `AGENTS.md`, which most AI tools read as-is, so switching doesn't change them.
+
+- **No AI review:** do nothing. Without the `CLAUDE_CODE_OAUTH_TOKEN` secret, the Claude job skips itself. To remove it entirely, delete `.github/workflows/claude-review.yml` and the two allow-list entries it needed (`anthropics/claude-code-action@*` and `oven-sh/setup-bun@*`).
+- **GitHub Copilot:** this needs Copilot Pro or higher. Copilot Free can't review pull requests, and each review uses Copilot AI credits.
+  - Turn it on with the ruleset setting **Automatically request Copilot code review**: Settings → Rules → Rulesets → `protect-main`.
+  - Nothing else changes: Copilot reads `AGENTS.md`, and needs no workflow, secret or allow-list entry.
+  - Remove the Claude workflow, or leave it in place without its token.
+- **Another review tool or GitHub Action:**
+  - **A GitHub App** (installed from its own site or the Marketplace): follow its instructions. Give it only the repositories and permissions it asks for.
+  - **A GitHub Action:**
+    - Pin it to a full commit SHA.
+    - Add it, and any action it uses internally, to the allow-list in step 2.
+    - Store its credential as a secret, and keep its permissions to reading the repo and commenting on pull requests.
+  - **Instructions:** most tools read `AGENTS.md`. If one doesn't, point it there rather than copying the rules.
