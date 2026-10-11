@@ -2638,7 +2638,7 @@ Added after Task 19, at my request. **Not the same thing as Task 10/11's SSO.** 
 
 ---
 
-### Task 21: Health and error scan — are all the components working?
+### Task 21: Health and error scan, and a repo review
 
 Added at my request. A read-only runbook to run **while the stack is up** (Fleet's CloudWatch logs are destroyed with the stack, and the app log group keeps only 5 days). First baseline run: 2026-10-05, after the Okta, GitOps and Aurora 3.13.0 work.
 
@@ -2667,6 +2667,14 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 
 **Possible follow-ups, not built:** keep Fleet's app logs beyond teardown (a subscription to S3, or a named log group kept outside the teardown), alarms on the error rate, and a scheduled version of this scan.
 
+**Repo and docs review** (both repos; no stack needed). Run it alongside the health scan, or after a run of changes. Each finding becomes a pull request, grouped by theme:
+1. **Accuracy:** the READMEs, `docs/setup.md`, `docs/github-setup.md`, `checks/README.md`, `AGENTS.md` and the spec match the code and each other. Commands still work, links and anchors resolve, and user-facing pages use the rounded cost figures.
+2. **Clarity and concision:** each topic has one home and is linked from elsewhere, not repeated. Plain language, setup steps before background, no meta remarks or incident narratives.
+3. **Tidy:** stale files, branches, comments and TODOs; comments in workflows and scripts that no longer match what the code does; unused variables and outputs.
+4. **Bug scrub:** workflows (permissions, `if:` conditions, concurrency and cancelled runs, untrusted input), scripts (quoting, error handling, `checks/run.sh` clean), and Terraform (identifying values `sensitive`, data-loss guard coverage, teardown and rebuild still restoring everything).
+5. **Privacy:** rerun the private-values scan over the full history of both repos, and check that recent PR comments and CI logs hold no identifying values.
+6. **Upkeep:** Dependabot pull requests, pinned versions still current, and the tools' maintenance (actionlint: check again from 2027-01).
+
 ---
 
 ## Spec coverage check
@@ -2681,7 +2689,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - AWS Budget alert ($100/mo, an alert every $10): Task 13. ✓ (built and applied)
 - Cost-control scripts, with real state preservation across teardown (Aurora snapshot restore, externalized private key, MDM secrets excluded from destroy): Task 14. ✓
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
-- Health and error scan of the running stack (runbook plus baseline): Task 21.
+- Health and error scan of the running stack (runbook plus baseline), and the repo and docs review: Task 21.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
