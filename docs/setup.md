@@ -153,5 +153,6 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 | Tear down (keeps your data) | `./scripts/down.sh` |
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
+| Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md) |
 
 If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

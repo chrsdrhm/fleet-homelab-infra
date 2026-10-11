@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2732,6 +2732,17 @@ The RDS **Query Editor** in the AWS console is a simpler way into Aurora only, b
 
 ---
 
+### Task 25: Upgrade Fleet, and a runbook for doing it
+
+Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot doesn't cover them: the version is the image tag in `fleet.tf`. The routine is in [`docs/upgrading-fleet.md`](../upgrading-fleet.md): read the release notes, snapshot Aurora, change the tag in a pull request, merge (applied on merge while the stack is up, otherwise at the next `up`), check, and roll back from the snapshot if needed. Database migrations can't be undone, which is why the snapshot comes first.
+
+- [ ] **Step 1: 🎓 You run this — upgrade 4.92.0 → 4.93.0** by following the runbook end to end, and fix anything in it that turns out wrong or unclear.
+- [ ] **Step 2: Check `fleet-terraform`'s newer tags** (`tf-mod-root-*`, the add-ons) and their changelogs, and decide whether to bump them, as their own pull request.
+- [ ] **Step 3: Decide how to hear about releases:** GitHub's release notifications for `fleetdm/fleet`, or a scheduled workflow that opens an issue when the tag in `fleet.tf` falls behind the latest release.
+
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2748,6 +2759,7 @@ The RDS **Query Editor** in the AWS console is a simpler way into Aurora only, b
 - Architecture diagram in the README (Mermaid): Task 22.
 - Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
 - Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
+- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0): Task 25.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
