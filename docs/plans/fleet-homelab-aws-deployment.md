@@ -2685,7 +2685,7 @@ Added at my request. A read-only runbook to run **while the stack is up** (Fleet
 - HA/replicas deliberately excluded regardless of cost: Global Constraints + Task 3 note. ✓
 - Health and error scan of the running stack (runbook plus baseline): Task 21.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
-- Full GitOps loop for infra (PR shows plan, merge updates the source of truth, on-demand apply — not auto-apply-on-merge): Task 16. ✓
+- Full GitOps loop for infra (PR shows plan, merge updates the source of truth and applies it while the stack is up): Task 16, with apply on merge added 2026-10-11. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
 - Entra (Microsoft Graph) data source for Grafana: Task 18, retired with the move to Okta.
 - Two-repo layout: this repo (all tasks except 11, including the `okta/` root from Task 10) + `fleet-homelab-gitops` (Task 11). ✓

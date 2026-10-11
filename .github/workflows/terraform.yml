@@ -455,7 +455,7 @@ jobs:
     name: terraform-apply-on-merge
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
-    timeout-minutes: 60
+    timeout-minutes: 120 # up to 40 waiting for a manual up/down, then the lock waits and the apply
     permissions:
       id-token: write
       contents: read
@@ -497,14 +497,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for _ in $(seq 120); do
+          for _ in $(seq 80); do
             busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
               --json status --jq 'map(select(.status != "completed")) | length')
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30
           done
-          echo "::error title=Still busy::a manual up or down is still running after an hour. Nothing was applied."
+          echo "::error title=Still busy::a manual up or down is still running after 40 minutes. Nothing was applied; the next up applies main."
           exit 1
 
       # down.sh destroys module.fleet, so its absence from the state means the stack is
@@ -512,7 +512,10 @@ jobs:
       - name: Check whether the stack is up
         id: stack
         run: |
-          if terraform state list | grep -q '^module\.fleet\.'; then
+          # Captured first, so an error (credentials, backend) fails the step rather than
+          # reading as "down".
+          resources=$(terraform state list)
+          if grep -q '^module\.fleet\.' <<< "$resources"; then
             echo "up=true" >> "$GITHUB_OUTPUT"
           else
             echo "up=false" >> "$GITHUB_OUTPUT"
