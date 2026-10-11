@@ -147,7 +147,8 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 **How much it uses:**
 - **Per review:** expand **📊 Usage summary** at the end of the summary comment. The review's run in the Actions tab shows the same figures, plus a list-price estimate (not billed on a subscription).
 - **What the numbers mean:**
-  - **Input tokens:** how much text Claude read: the diff, files, `AGENTS.md`, any pages it fetched, and the conversation so far, which is sent again on every turn. That is why this number is large. Most of it is "read from cache": text it already sent, which costs about a tenth as much at API prices.
+  - **Input tokens:** how much text Claude read: the diff, files, `AGENTS.md`, any pages it fetched, and the conversation so far, which is sent again on every turn. That is why this number is large.
+  - **Read from cache:** the part of the input it had already sent earlier in the review. It costs about a tenth as much at API prices, so a high percentage (80–90% is typical) keeps a review cheap.
   - **Output tokens:** what Claude wrote, its reasoning and comments. A token is roughly ¾ of a word.
   - **Turns:** rounds of Claude using a tool, such as reading a file or fetching a page. More turns means it dug deeper.
   - **Duration:** how long the review took.
@@ -172,7 +173,7 @@ gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet
 4. Put a reminder in your calendar: the token expires after a year. Then run `claude setup-token` again and update both secrets.
 
 **To review again** after pushing changes, comment `@claude` on the pull request. Claude reviews the latest commit, reacts with 👀 when it starts, and updates the same summary comment.
-- **Only your comments trigger it.** Anyone can comment on a public repo, and each review uses your plan, so a mention from anyone but the repo owner is ignored.
+- **Only people with write access can trigger it:** you, and anyone you give write access. Anyone can comment on a public repo, and each review uses your plan, so other people's mentions are ignored. In a fork of this repo, that means the fork's owner and their collaborators.
 - **Drafts:** skipped when opened, but `@claude` reviews one anyway.
 - **Forks:** never reviewed. A fork's pull request doesn't get the token when opened, and `@claude` skips it too: the review would check out the fork's files, and Claude Code loads settings from them, including hooks that run commands, while holding your token.
 - **Dependabot:** its pull requests don't get the token, so they're skipped when opened; `@claude` reviews one (it's a branch in your repo).
