@@ -84,21 +84,41 @@ jobs:
             --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
 
-      # How much this review used, in the run's summary page. Numbers only: the
-      # execution log itself holds the review's content and is not uploaded. The cost is
-      # a list-price estimate; with a subscription token, nothing is billed per token.
-      - name: Record usage in the job summary
+      # How much this review used: a table in the run's summary page and the step log,
+      # and one line at the end of Claude's summary comment. Numbers only: the execution
+      # log itself holds the review's content and is not uploaded. The cost is a
+      # list-price estimate (summary page only); a subscription token is not billed per token.
+      - name: Record usage
         if: always() && steps.review.outputs.execution_file != ''
         env:
           LOG: ${{ steps.review.outputs.execution_file }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          [ -f "$LOG" ] || exit 0
-          jq -r '[.[] | select(.type == "result")] | last // empty
-            | "### Claude review usage\n\n| | |\n|---|---|\n"
-              + "| Input tokens | \(.usage.input_tokens // 0) |\n"
-              + "| Cache read / write tokens | \(.usage.cache_read_input_tokens // 0) / \(.usage.cache_creation_input_tokens // 0) |\n"
-              + "| Output tokens | \(.usage.output_tokens // 0) |\n"
-              + "| Turns | \(.num_turns // "?") |\n"
-              + "| Duration | \((.duration_ms // 0) / 1000 | floor)s |\n"
-              + "| List-price estimate (not billed on a subscription) | $\(.total_cost_usd // 0 | . * 100 | round / 100) |"' \
-            "$LOG" >> "$GITHUB_STEP_SUMMARY" || echo "Could not read usage from the execution log."
+          if [ ! -f "$LOG" ] || ! usage=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
+            echo "::warning title=No usage figures::The review's execution log has no usage figures."
+            exit 0
+          fi
+          n() { jq -r "$1" <<< "$usage"; }
+          cached=$(n '.usage.cache_read_input_tokens // 0')
+          input=$(n '(.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)')
+          output=$(n '.usage.output_tokens // 0')
+          turns=$(n '.num_turns // 0')
+          secs=$(n '(.duration_ms // 0) / 1000 | floor')
+          cost=$(n '.total_cost_usd // 0 | . * 100 | round / 100')
+          printf '%s\n' "### Claude review usage" "" "| | |" "|---|---|" \
+            "| Input tokens | $input ($cached read from cache) |" \
+            "| Output tokens | $output |" \
+            "| Turns | $turns |" \
+            "| Duration | ${secs}s |" \
+            "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("### 🤖 Claude review")) and (.body | contains("<sub>📊") | not)) | .id' | tail -1)
+          if [ -n "$id" ]; then
+            body=$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$id" --jq .body)
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" \
+              -f body="$body"$'\n\n'"<sub>📊 $input input tokens ($cached from cache) · $output output tokens · $turns turns · ${secs}s</sub>" > /dev/null
+          else
+            echo "No summary comment found to add the usage line to."
+          fi
