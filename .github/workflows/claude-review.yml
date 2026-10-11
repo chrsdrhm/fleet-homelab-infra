@@ -48,6 +48,7 @@ jobs:
           persist-credentials: false
 
       - name: Review with Claude
+        id: review
         if: steps.gate.outputs.run == 'true'
         uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
         with:
@@ -74,3 +75,22 @@ jobs:
           claude_args: |
             --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
+
+      # How much this review used, in the run's summary page. Numbers only: the
+      # execution log itself holds the review's content and is not uploaded. The cost is
+      # a list-price estimate; with a subscription token, nothing is billed per token.
+      - name: Record usage in the job summary
+        if: always() && steps.review.outputs.execution_file != ''
+        env:
+          LOG: ${{ steps.review.outputs.execution_file }}
+        run: |
+          [ -f "$LOG" ] || exit 0
+          jq -r '[.[] | select(.type == "result")] | last // empty
+            | "### Claude review usage\n\n| | |\n|---|---|\n"
+              + "| Input tokens | \(.usage.input_tokens // 0) |\n"
+              + "| Cache read / write tokens | \(.usage.cache_read_input_tokens // 0) / \(.usage.cache_creation_input_tokens // 0) |\n"
+              + "| Output tokens | \(.usage.output_tokens // 0) |\n"
+              + "| Turns | \(.num_turns // "?") |\n"
+              + "| Duration | \((.duration_ms // 0) / 1000 | floor)s |\n"
+              + "| List-price estimate (not billed on a subscription) | $\(.total_cost_usd // 0 | . * 100 | round / 100) |"' \
+            "$LOG" >> "$GITHUB_STEP_SUMMARY" || echo "Could not read usage from the execution log."

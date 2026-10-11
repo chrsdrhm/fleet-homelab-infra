@@ -144,6 +144,10 @@ The key doesn't expire. Each `up` gets a token from it that only works on the Gi
 - **After a year:** the token stops working, and the review job then fails (it isn't required, so merges aren't blocked) until you create a new token.
 - **What it can look at:** the repo, plus Fleet's docs and GitHub, so it can compare a change with Fleet's own approach (see `AGENTS.md`).
 
+**How much it uses:**
+- **Per review:** open the review's run in the Actions tab. Its summary lists the tokens used, turns, duration and a list-price estimate (not billed on a subscription).
+- **Your plan overall:** see **claude.ai → Settings → Usage**, or `/usage` in Claude Code. Reviews draw on the same plan limits as your own sessions.
+
 **Model:** your plan's default. To pin one, set a repository variable, for example:
 ```bash
 gh variable set CLAUDE_REVIEW_MODEL --body claude-sonnet-5-5 --repo $OWNER/fleet-homelab-infra
