@@ -32,7 +32,7 @@ This project follows Fleet's documented approach wherever it can. Before changin
 
 ## How to work here
 
-- **Run the checks before pushing:** `checks/run.sh` (after `checks/install-tools.sh` once). It runs the same checks as CI.
+- **Run the checks before pushing:** `checks/run.sh` (after `checks/install-tools.sh` once). It runs the same checks as CI. For a security pass before opening a pull request, Claude Code's `/security-review` command reviews the branch's changes.
 - **Apply `oidc.tf` and `okta/` locally, never from CI:** the CI roles can't change themselves, and Okta is applied from a person's machine.
 - **Keep the docs matching the code:**
   - **The spec** says what the design is now.
@@ -42,11 +42,42 @@ This project follows Fleet's documented approach wherever it can. Before changin
 
 ## When reviewing a pull request
 
-Focus on, in order:
-1. Private or identifying values, anywhere in the change.
-2. Security: IAM scope, the CI trust policies, workflow permissions, untrusted input in `run:` steps, unpinned actions.
-3. Anything that loses data across a teardown (see "What survives a teardown" in the README).
-4. Departures from Fleet's documented approach, unless the spec explains them.
-5. Docs that no longer match the code.
+Comment only on what matters, with file and line, why it matters, and a suggested fix. Never quote a private value; point to where it is. Skip style nits the linters already enforce.
 
-Skip style nits that the linters already enforce.
+**Standards to review against:**
+- **The [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html):** mainly its [Security](https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html) and [Cost Optimization](https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html) pillars.
+- **The [CIS AWS Foundations Benchmark](https://docs.aws.amazon.com/securityhub/latest/userguide/cis-aws-foundations-benchmark.html).**
+- **Fleet's own approach** (above).
+
+Cite a specific control only when you are sure of it.
+
+**Intended trade-offs, not findings** (explained in the spec's Non-goals and sizing sections):
+- no failover or replicas, and a single NAT Gateway
+- small instance sizes
+- a US-only WAF
+- the one public bucket, which holds only the login logo
+- manual applies rather than applying on merge
+
+Reliability is deliberately traded for cost here. Raise a trade-off only if a change makes it worse than the spec describes.
+
+**Check, in this order:**
+1. **Private or identifying values** anywhere in the change, including PR text and file names.
+2. **Security:**
+   - least-privilege IAM, especially the CI roles' trust policies and denies
+   - network exposure (security groups, anything made public, WAF rules)
+   - encryption, and secrets kept in Secrets Manager or GitHub secrets, never in variables, outputs or logs
+   - workflow permissions, untrusted input reaching `run:` steps, and anything that could print a secret or the account ID to the public CI logs
+3. **Data and teardown:**
+   - destroying or replacing stateful resources
+   - a new resource either torn down by `down.sh` or deliberately kept
+   - restoring from the snapshot still working (see "What survives a teardown" in the README)
+4. **Cost:** new charges, especially anything kept through teardowns (it bills around the clock), and size changes. The spec's Cost section should be updated to match.
+5. **Departures from Fleet's documented approach,** unless the spec explains them.
+6. **Supply chain:** providers, modules, images, actions and tools pinned (versions, commit SHAs, checksums), and covered by Dependabot where it can be.
+7. **Completeness:** for a new variable or secret, check it's wired everywhere:
+   - `example.tfvars`
+   - the CI and Dependabot secrets
+   - `docs/setup.md` and `docs/github-setup.md`
+   - the hash list, if the value is identifying
+
+   Security-critical changes should come with matching `terraform test` assertions, and the spec, plan and READMEs should match the code.
