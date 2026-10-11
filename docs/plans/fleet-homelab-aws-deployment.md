@@ -12,7 +12,7 @@
 
 **Status as of 2026-10-10:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget; Step 5, checking the inbox, is open), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks) and 21 (health scan runbook).
-- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook).
+- **Open:** Task 3 Step 8b (read-only `fleetctl` tour), Task 8 Part B (Apple push certificate; optional), Task 11 Step 9 (its Apple half), Task 12 (osquery logs, not started), Task 15 Step 5 (fork test), 17 (Grafana plus alerting, optional; redesigned for Amazon Managed Grafana), 19 (activities webhook, written, not built), 20 (end-user SSO; Okta steps still to be derived), 22 (architecture diagram in the README), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 25 (upgrade Fleet to 4.93.0 with the new runbook), 26 (GitOps dry-run comment).
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
@@ -2760,6 +2760,21 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
 
 ---
 
+### Task 26: A pull request comment for the Fleet GitOps dry run
+
+Added at my request: make a GitOps pull request show what it changes in Fleet, the way the Terraform plan comment does in this repo. Fleet's `fleetctl gitops --dry-run` already runs on every GitOps pull request, but only in the job log, and it isn't a diff: it validates the files and counts what it would send ("would've applied 2 policies" when one was added), and calls existing fleets "new". So the comment is built from three things:
+- **The verdict:** ✅ Fleet accepts the change, ❌ with the errors, or ⏸️ not checked (Fleet is down, or no secrets).
+- **What changes, by name, from the pull request's diff:** policies, reports and labels compared by name (added, changed, removed); `default.yml` and fleet files by their top-level and second-level settings; scripts and profiles by file name. Names and keys only, never values. A removal gets a warning, since `default.yml` defines everything and what's removed is deleted on merge.
+- **Fleet's output, collapsed**, read from the dry run's job log (already masked by GitHub), without the empty-folder warnings.
+
+- [ ] **Step 1: Build it** as a `dry-run-comment` job in the GitOps repo's `workflow.yml`, after `fleet-gitops`, leaving Fleet's scaffold (`.github/fleet-gitops/`) untouched. Posted only when Fleet configuration changes; each run posts a new comment (heading "🧭 Fleet GitOps dry run") and hides the earlier ones as outdated, like the plan comment. A draft exists as an unpushed local commit (branch `dry-run-comment` in the GitOps clone): the summarizer (`.github/dry-run/summarize.py`, no YAML library needed) was tested on past pull requests and a synthetic change.
+- [ ] **Step 2: Test it on a throwaway pull request** while the stack is up: a new policy, a changed setting and a removed label, then a fix; check the comment, the hiding, and that nothing private appears.
+- [ ] **Step 3: Document it** in the GitOps README's **How it runs** table and the setup guide's CI step (with an example pull request).
+- [ ] **Not included:** drift (changes made in Fleet's UI that this repo would overwrite). `fleetctl generate-gitops` could export the server's config to compare, but the export holds real values (URLs, emails), too risky for a public comment; the nightly run corrects drift.
+
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2777,6 +2792,7 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
 - Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
 - Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
 - Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes): Task 25.
+- A pull request comment for the Fleet GitOps dry run (verdict, what changes by name, Fleet's output): Task 26.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth and applies it while the stack is up): Task 16, with apply on merge added 2026-10-11. ✓
 - Grafana dashboard and alerting (optional): Amazon Managed Grafana in its own `grafana/` root, CloudWatch through an IAM role + Fleet API through Infinity, alerts through SNS (replaces the standalone CloudWatch-alarms design and the earlier Proxmox design): Task 17. ✓
