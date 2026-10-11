@@ -305,6 +305,9 @@ jobs:
       cancel-in-progress: false
     steps:
       # Fails before touching AWS, and the message shows on the run's summary page.
+      - name: Note who asked for this run
+        run: echo "Requested for: ${{ github.event.pull_request.title }}"
+
       - name: Check the inputs
         env:
           ACTION: ${{ inputs.action }}
