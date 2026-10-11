@@ -23,6 +23,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN` | The same as in `terraform.tfvars`; skip both if your DNS isn't on Cloudflare | yes |
 | `GITOPS_APP_CLIENT_ID`, `GITOPS_APP_PRIVATE_KEY` | Optional, from the GitHub App in step 5 | |
 | `PRIVATE_HASHES` | Set by `checks/private-values/sync-hashes.sh` (see [`checks/README.md`](../checks/README.md#private-values)) | yes (the script sets both) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
 
 **`fleet-homelab-gitops`:**
 
@@ -33,12 +34,14 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `FLEET_CI_HEADER` | Your `waf_ci_header_value` |
 | `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL` | Only with Okta: `terraform output -raw metadata_url` (in `okta/`) and `terraform output -raw idp_logo_url` |
 | `PRIVATE_HASHES` | Set by `sync-hashes.sh`, which also sets the Dependabot copy |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) |
 
 ## 2. Repository settings
 
 These run the same in both repos; only the list of allowed actions differs:
 - **Infra:** the AWS and Terraform setup actions.
 - **GitOps:** GitHub's own actions only.
+- **Both:** the Claude review action and the action it uses internally, only if you use the optional review in step 6.
 
 ```bash
 for repo in fleet-homelab-infra fleet-homelab-gitops; do
@@ -59,10 +62,13 @@ for repo in fleet-homelab-infra fleet-homelab-gitops; do
   gh api -X PATCH $R -F delete_branch_on_merge=true -F has_wiki=false -F has_projects=false
 done
 
+# Allowed actions besides GitHub's own. The last two are only for the optional Claude review (step 6).
 gh api -X PUT repos/$OWNER/fleet-homelab-infra/actions/permissions/selected-actions \
-  -F github_owned_allowed=true -F verified_allowed=false -f 'patterns_allowed[]=aws-actions/*' -f 'patterns_allowed[]=hashicorp/*'
+  -F github_owned_allowed=true -F verified_allowed=false -f 'patterns_allowed[]=aws-actions/*' -f 'patterns_allowed[]=hashicorp/*' \
+  -f 'patterns_allowed[]=anthropics/claude-code-action' -f 'patterns_allowed[]=oven-sh/setup-bun'
 gh api -X PUT repos/$OWNER/fleet-homelab-gitops/actions/permissions/selected-actions \
-  -F github_owned_allowed=true -F verified_allowed=false
+  -F github_owned_allowed=true -F verified_allowed=false \
+  -f 'patterns_allowed[]=anthropics/claude-code-action' -f 'patterns_allowed[]=oven-sh/setup-bun'
 
 # The label that accepts a plan which destroys or replaces data (infra only)
 gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
@@ -122,3 +128,20 @@ When `up` runs from CI, it starts the GitOps repo's workflow so Fleet's configur
    ```
 
 The key doesn't expire. Each `up` gets a token from it that only works on the GitOps repo, only for Actions, and is revoked when the job ends. If the key ever leaks, generate a new one on the app's page and delete the old one.
+
+## 6. Optional: Claude reviews pull requests
+
+`.github/workflows/claude-review.yml` in each repo asks Claude to review every pull request when it's opened, reopened or marked ready. It follows `AGENTS.md`'s review section and posts inline comments plus one summary. **It needs a Claude Pro or Max subscription.** Reviews count against your plan's usage, with no separate bill. Without the token, the job skips with a notice. It's never a required check.
+
+1. Create a token from your subscription. Run this in a terminal, not through an AI assistant, because it prints the token:
+   ```bash
+   claude setup-token
+   ```
+2. Store it in both repos (the command prompts for the value):
+   ```bash
+   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $OWNER/fleet-homelab-infra
+   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $OWNER/fleet-homelab-gitops
+   ```
+3. Make sure both actions it needs are in the allow-list (step 2).
+
+To review again after pushing changes, re-run the **Claude review** workflow from the pull request's Checks tab. Draft pull requests are skipped. Forks and Dependabot never get the token, so their pull requests are never sent to Claude. The job can only read the repo and comment on the pull request.

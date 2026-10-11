@@ -14,7 +14,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **DNS and TLS:** a Route 53 hosted zone for a subdomain, with an ACM certificate. **Cloudflare is optional:** if the domain's DNS is on Cloudflare (as mine is), Terraform delegates the subdomain too; with any other DNS provider, you add four NS records by hand once.
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
-- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned; the checks live in [`checks/`](checks/README.md).
+- **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned; the checks live in [`checks/`](checks/README.md). Optionally, Claude reviews each pull request too (needs a Claude subscription; see [GitHub setup](docs/github-setup.md#6-optional-claude-reviews-pull-requests)).
 - **Observability (optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out; it stays up all the time for about $10 a month.
 
 ## Getting started

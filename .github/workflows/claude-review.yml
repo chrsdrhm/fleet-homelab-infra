@@ -1,0 +1,70 @@
+# Optional AI review of pull requests with Claude (anthropics/claude-code-action).
+# It needs a Claude Pro or Max subscription: the CLAUDE_CODE_OAUTH_TOKEN secret comes
+# from `claude setup-token`, and reviews count against that plan's usage, with no
+# separate bill. Without the secret (no subscription, forks, Dependabot) the job skips
+# with a notice. It is not a required check, so it never blocks a merge.
+# Claude follows AGENTS.md ("When reviewing a pull request"). Setup:
+# docs/github-setup.md in the infra repo.
+name: Claude review
+
+on:
+  pull_request:
+    # Not on every push, to save the plan's usage. Re-run from the Actions tab
+    # after pushing changes you want reviewed again.
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: claude-review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write # inline and summary review comments
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check that the Claude token is set
+        id: gate
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Claude review skipped::No CLAUDE_CODE_OAUTH_TOKEN secret here (it needs a Claude Pro or Max subscription; forks and Dependabot never get it)."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the repository
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Review with Claude
+        if: steps.gate.outputs.run == 'true'
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }} # the job's own token: no OIDC, no app to install
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request as described in AGENTS.md, under "When reviewing a
+            pull request". Comment only on things that matter: put specific issues as inline
+            comments on the lines concerned, and add one short summary comment. If you find
+            nothing important, say so in one sentence.
+
+            This repository and its pull requests are public. Never quote, repeat or guess a
+            private value (a hostname, domain, account ID, email address, token or ID); if
+            you find one, point to the file and line only.
+          claude_args: |
+            --allowedTools "Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
