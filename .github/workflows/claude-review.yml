@@ -49,7 +49,7 @@ jobs:
         run: |
           # From a comment, only someone with write access (admin, maintain or write) can
           # start a review.
-          permission=write
+          permission="write"
           if [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
             permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$COMMENTER/permission" --jq .permission || echo none)
           fi
