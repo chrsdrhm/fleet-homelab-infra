@@ -150,9 +150,9 @@ jobs:
           if [ -n "$names" ]; then
             read -ra each <<< "$names"
             list=$(printf "\`%s\`, " "${each[@]}"); list=${list%, }
-            body="$marker"$'\n'"❌ **Lint failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
+            body="$marker"$'\n### 🧹 Lint\n\n'"❌ **Failed:** $list."$'\n\n'"See the [workflow job]($job_url) for the details, or run \`checks/run.sh $names\` locally."
           else
-            body="$marker"$'\n'"❌ **Lint failed.** See the [workflow job]($job_url) for the details."
+            body="$marker"$'\n### 🧹 Lint\n\n'"❌ **Failed.** See the [workflow job]($job_url) for the details."
           fi
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
@@ -288,7 +288,7 @@ jobs:
             exit 1
           fi
 
-          head=$'<!-- terraform-plan -->\n### Terraform plan\n\n'
+          head=$'<!-- terraform-plan -->\n### 🏗️ Terraform plan\n\n'
           if [ -s data-loss.txt ]; then
             caution=$'> [!CAUTION]\n> **This plan destroys or replaces resources that hold data:**\n'
             while IFS= read -r line; do caution+=$'> - `'"$line"$'`\n'; done < data-loss.txt

@@ -63,9 +63,10 @@ jobs:
             GitOps setup (the references in AGENTS.md); fetch them when it matters.
 
             Comment only on things that matter: put specific issues as inline comments on
-            the lines concerned. Always finish by posting exactly one summary comment with
-            `gh pr comment`, even when you found nothing. Start it with a one-line verdict
-            that begins with exactly one of:
+            the lines concerned. Do not post any other comment. Your final message is posted
+            for you as the review's summary comment (updated in place on later runs), so make
+            it only that summary, with no heading or preamble. Start it with a one-line
+            verdict that begins with exactly one of:
               ✅ Good to merge: nothing that needs changing.
               ⚠️ Mergeable with changes suggested: minor points worth fixing, nothing blocking.
               ❌ Not ready to merge: a security problem, a private value, data loss, or a bug.
@@ -76,28 +77,54 @@ jobs:
             private value (a hostname, domain, account ID, email address, token or ID); if
             you find one, point to the file and line only.
           # Tools: read the repo, fetch the references AGENTS.md names (Fleet's docs and
-          # GitHub, plus the security standards' sites), and comment on this PR.
+          # GitHub, plus the security standards' sites), and comment inline on this PR.
           # Model: the plan's default, unless the CLAUDE_REVIEW_MODEL repository variable
           # names one (for example claude-sonnet-5-5).
           claude_args: |
-            --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
 
-      # How much this review used, in the run's summary page. Numbers only: the
-      # execution log itself holds the review's content and is not uploaded. The cost is
-      # a list-price estimate; with a subscription token, nothing is billed per token.
-      - name: Record usage in the job summary
+      # One summary comment per PR, found by its marker and updated in place: Claude's
+      # final message, plus a collapsed usage table. The table also goes to the run's
+      # summary page and this step's log, with a list-price estimate (a subscription token
+      # is not billed per token). Numbers only: the execution log itself holds the
+      # review's content and is not uploaded.
+      - name: Post the review summary
         if: always() && steps.review.outputs.execution_file != ''
         env:
           LOG: ${{ steps.review.outputs.execution_file }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          [ -f "$LOG" ] || exit 0
-          jq -r '[.[] | select(.type == "result")] | last // empty
-            | "### Claude review usage\n\n| | |\n|---|---|\n"
-              + "| Input tokens | \(.usage.input_tokens // 0) |\n"
-              + "| Cache read / write tokens | \(.usage.cache_read_input_tokens // 0) / \(.usage.cache_creation_input_tokens // 0) |\n"
-              + "| Output tokens | \(.usage.output_tokens // 0) |\n"
-              + "| Turns | \(.num_turns // "?") |\n"
-              + "| Duration | \((.duration_ms // 0) / 1000 | floor)s |\n"
-              + "| List-price estimate (not billed on a subscription) | $\(.total_cost_usd // 0 | . * 100 | round / 100) |"' \
-            "$LOG" >> "$GITHUB_STEP_SUMMARY" || echo "Could not read usage from the execution log."
+          if [ ! -f "$LOG" ] || ! result=$(jq -ec '[.[] | select(.type == "result")] | last' "$LOG"); then
+            echo "::warning title=No review result::The review's execution log has no result, so no summary was posted."
+            exit 0
+          fi
+          n() { jq -r "$1" <<< "$result"; }
+          cached=$(n '.usage.cache_read_input_tokens // 0')
+          input=$(n '(.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)')
+          output=$(n '.usage.output_tokens // 0')
+          turns=$(n '.num_turns // 0')
+          secs=$(n '(.duration_ms // 0) / 1000 | floor')
+          cost=$(n '.total_cost_usd // 0 | . * 100 | round / 100')
+          rows=("| | |" "|---|---|" "| Input tokens | $input ($cached read from cache) |" \
+            "| Output tokens | $output |" "| Turns | $turns |" "| Duration | ${secs}s |")
+          printf '%s\n' "### Claude review usage" "" "${rows[@]}" \
+            "| List-price estimate (not billed on a subscription) | \$$cost |" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          summary=$(n 'if .is_error then "" else (.result // "") end')
+          if [ -z "$summary" ]; then
+            echo "::warning title=No summary::The review ended without a summary (see the review step's log); nothing was posted."
+            exit 0
+          fi
+          marker='<!-- claude-review -->'
+          usage=$(printf '%s\n' "<details><summary>📊 Usage summary</summary>" "" "${rows[@]}" "" "</details>")
+          body="$marker"$'\n### 🤖 Claude review\n\n'"$summary"$'\n\n'"$usage"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | tail -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
+            echo "Updated the review summary comment."
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          fi
