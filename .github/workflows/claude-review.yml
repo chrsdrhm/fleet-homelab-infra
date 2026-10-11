@@ -67,10 +67,10 @@ jobs:
             This repository and its pull requests are public. Never quote, repeat or guess a
             private value (a hostname, domain, account ID, email address, token or ID); if
             you find one, point to the file and line only.
-          # Tools: read the repo, read Fleet's docs and GitHub (Fleet's own GitOps repo is
-          # the reference for best practice, per AGENTS.md), and comment on this PR.
+          # Tools: read the repo, fetch the references AGENTS.md names (Fleet's docs and
+          # GitHub, plus the security standards' sites), and comment on this PR.
           # Model: the plan's default, unless the CLAUDE_REVIEW_MODEL repository variable
           # names one (for example claude-sonnet-5-5).
           claude_args: |
-            --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Read,Glob,Grep,WebFetch(domain:fleetdm.com),WebFetch(domain:docs.aws.amazon.com),WebFetch(domain:github.com),WebFetch(domain:raw.githubusercontent.com),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
             ${{ vars.CLAUDE_REVIEW_MODEL && format('--model {0}', vars.CLAUDE_REVIEW_MODEL) || '' }}
