@@ -53,31 +53,31 @@ Comment only on what matters, with file and line, why it matters, and a suggeste
 Cite a specific control only when you are sure of it.
 
 **Intended trade-offs, not findings** (explained in the spec's Non-goals and sizing sections):
-- no failover or replicas, and a single NAT Gateway
-- small instance sizes
-- a US-only WAF
-- the one public bucket, which holds only the login logo
+- No failover or replicas, and a single NAT Gateway
+- Small instance sizes
+- A US-only WAF
+- The one public bucket, which holds only the login logo
 
 Reliability is deliberately traded for cost here. Raise a trade-off only if a change makes it worse than the spec describes.
 
 **Check, in this order:**
 1. **Private or identifying values** anywhere in the change, including PR text and file names. Treat an email address on any domain other than `example.com`, `example.org` or `example.net` as a finding, even one that looks made up: the private-values check fails on it too. Flag a new identifying variable or output that isn't `sensitive`.
 2. **Security:**
-   - least-privilege IAM, especially the CI roles' trust policies and denies
-   - network exposure (security groups, anything made public, WAF rules)
-   - encryption, and secrets kept in Secrets Manager or GitHub secrets, never in variables, outputs or logs
-   - workflow permissions, untrusted input reaching `run:` steps, and anything that could print a secret or the account ID to the public CI logs
+   - Least-privilege IAM, especially the CI roles' trust policies and denies
+   - Network exposure (security groups, anything made public, WAF rules)
+   - Encryption, and secrets kept in Secrets Manager or GitHub secrets, never in variables, outputs or logs
+   - Workflow permissions, untrusted input reaching `run:` steps, and anything that could print a secret or the account ID to the public CI logs
 3. **Data and teardown:**
-   - destroying or replacing stateful resources
-   - a new resource either torn down by `down.sh` or deliberately kept
-   - restoring from the snapshot still working (see "What survives a teardown" in the README)
+   - Destroying or replacing stateful resources
+   - A new resource either torn down by `down.sh` or deliberately kept
+   - Restoring from the snapshot still working (see "What survives a teardown" in the README)
 4. **Cost:** new charges, especially anything kept through teardowns (it bills around the clock), and size changes. The spec's Cost section should be updated to match.
 5. **Departures from Fleet's documented approach,** unless the spec explains them.
 6. **Supply chain:** providers, modules, images, actions and tools pinned (versions, commit SHAs, checksums), and covered by Dependabot where it can be.
 7. **Completeness:** for a new variable or secret, check it's wired everywhere:
    - `example.tfvars`
-   - the CI and Dependabot secrets
+   - The CI and Dependabot secrets
    - `docs/setup.md` and `docs/github-setup.md`
-   - the hash list, if the value is identifying
+   - The hash list, if the value is identifying
 
    Security-critical changes should come with matching `terraform test` assertions, and the spec, plan and READMEs should match the code.

@@ -81,7 +81,7 @@ Open a small pull request in each repo, such as a one-line README edit, and let 
 ## 4. Branch rules
 
 A ruleset named `protect-main` on the default branch, with no bypass, not even for you:
-- every change goes through a pull request whose required checks pass
+- Every change goes through a pull request whose required checks pass, on a branch that's up to date with `main` (so what's checked and planned is what gets merged, and in infra, applied)
 - `main` can't be deleted or force-pushed
 
 ```bash
@@ -99,7 +99,7 @@ ruleset() { # repo, then the required check names
       "dismiss_stale_reviews_on_push": true, "require_code_owner_review": false,
       "require_last_push_approval": false, "required_review_thread_resolution": false,
       "require_extra_approval_for_unattributed_changes": true } },
-    { "type": "required_status_checks", "parameters": { "strict_required_status_checks_policy": false,
+    { "type": "required_status_checks", "parameters": { "strict_required_status_checks_policy": true,
       "required_status_checks": $checks } }
   ] }
 EOF
