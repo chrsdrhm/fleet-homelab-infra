@@ -36,6 +36,13 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `PRIVATE_HASHES` | Set by `sync-hashes.sh`, which also sets the Dependabot copy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) |
 
+**Optional repository variables.** These aren't secret (anyone who can see the repo's settings can read them), so they're variables: `gh variable set NAME --body VALUE --repo $OWNER/<repo>`.
+
+| Variable | Repo | What it does |
+|---|---|---|
+| `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly 2am teardown skips until then (see **Nightly teardown** below). |
+| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude review's model; without it, your plan's default (step 6). |
+
 ## 2. Repository settings
 
 These run the same in both repos; only the list of allowed actions differs:
