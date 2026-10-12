@@ -1,6 +1,6 @@
 # GitHub setup
 
-The GitHub side of both repos: secrets, repository settings, branch rules, a label and an optional GitHub App. It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
+The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label and an optional GitHub App. It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
 
 ```bash
 OWNER=$(gh api user --jq .login)
@@ -8,7 +8,7 @@ OWNER=$(gh api user --jq .login)
 
 Do the steps in this order. The branch rules require checks that must have run at least once; a required check that has never run blocks every merge.
 
-## 1. Secrets
+## 1. Secrets and variables
 
 `gh secret set NAME --repo $OWNER/<repo>` prompts for the value, so it stays out of your shell history. Add `--app dependabot` to set the Dependabot copy: Dependabot's pull requests can only read Dependabot secrets.
 
