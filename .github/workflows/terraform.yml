@@ -414,7 +414,8 @@ jobs:
     steps:
       # Decides what this run does, before touching AWS: a manual run does what was
       # asked (down needs confirm=destroy); the nightly run continues only at 2am in
-      # Chicago, unless the AUTO_DOWN_SKIP_UNTIL variable (YYYY-MM-DD) is today or later.
+      # Chicago, and not before the night of AUTO_DOWN_SKIP_UNTIL (YYYY-MM-DD): set to
+      # tomorrow's date, it skips tonight and resumes tomorrow night.
       - name: Decide what to run
         id: mode
         env:
@@ -440,8 +441,9 @@ jobs:
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          today=$(TZ=America/Chicago date +%F)
-          if [ -n "$SKIP_UNTIL" ] && [[ ! "$today" > "$SKIP_UNTIL" ]]; then
+          # The night this 2am belongs to is the evening before, yesterday's date.
+          night=$(TZ=America/Chicago date -d yesterday +%F)
+          if [ -n "$SKIP_UNTIL" ] && [[ "$night" < "$SKIP_UNTIL" ]]; then
             echo "::notice title=Nightly teardown skipped::AUTO_DOWN_SKIP_UNTIL is $SKIP_UNTIL, so the stack stays up tonight."
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
