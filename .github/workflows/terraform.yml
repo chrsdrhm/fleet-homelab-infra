@@ -7,7 +7,7 @@
 #           Each plan is a new comment; earlier ones are hidden as outdated.
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
-#  - apply: started by hand (up or down with the apply role), and nightly at 2am Central,
+#  - apply: started by hand (up or down with the apply role), and nightly at 2am,
 #           when it tears the stack down if it was left up.
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
@@ -28,7 +28,7 @@ on:
     branches: [main]
     # Docs-only merges change nothing in AWS.
     paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
-  # Nightly at 2am Central: if the stack was left up, tear it down. Cron is UTC and
+  # Nightly at 2am: if the stack was left up, tear it down. Cron is UTC and
   # doesn't follow daylight saving, so both times are listed and the job acts only on
   # the one that is 2am in Chicago that night (07:00 UTC in CDT, 08:00 UTC in CST).
   schedule:
@@ -413,8 +413,8 @@ jobs:
       TF_CLI_ARGS_destroy: "-lock-timeout=15m"
     steps:
       # Decides what this run does, before touching AWS: a manual run does what was
-      # asked (down needs confirm=destroy); the nightly run continues only at 2am
-      # Central, unless the AUTO_DOWN_SKIP_UNTIL variable (YYYY-MM-DD) is today or later.
+      # asked (down needs confirm=destroy); the nightly run continues only at 2am in
+      # Chicago, unless the AUTO_DOWN_SKIP_UNTIL variable (YYYY-MM-DD) is today or later.
       - name: Decide what to run
         id: mode
         env:
@@ -481,7 +481,7 @@ jobs:
           resources=$(terraform state list)
           if grep -q '^module\.fleet\.' <<< "$resources"; then
             echo "down=true" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Stack left up::The stack was still up at 2am Central, so it's being torn down."
+            echo "::warning title=Stack left up::The stack was still up at 2am, so it's being torn down."
           else
             echo "down=false" >> "$GITHUB_OUTPUT"
             echo "The stack is down; nothing to do."

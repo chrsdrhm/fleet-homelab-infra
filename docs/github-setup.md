@@ -74,7 +74,7 @@ gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
   --description "Accept a plan that destroys or replaces a resource that holds data"
 ```
 
-**Nightly teardown.** With CI set up, the Terraform workflow checks every night at 2am Central and runs `down` if the stack is still up. To keep it up overnight on purpose, set a repository variable to the date of the 2am to skip (Central time), and delete it afterwards:
+**Nightly teardown.** With CI set up, the Terraform workflow checks every night at 2am and runs `down` if the stack is still up. To keep it up overnight on purpose, set a repository variable to the date of the 2am to skip, and delete it afterwards:
 
 ```bash
 gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-12 --repo $OWNER/fleet-homelab-infra   # keeps it up through 2am on 12 October
