@@ -31,7 +31,7 @@ Left running, the stack would cost about **$7 a day, or about $200 a month** (ro
 
 - **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so the latest Fleet configuration is reapplied, including any changes merged there while the stack was down.
-- **A nightly check** in GitHub Actions tears the stack down if it's still up at 2am, so a forgotten stack costs a few hours, not a month. To keep it up overnight on purpose, set the `AUTO_DOWN_SKIP_UNTIL` repository variable to a date: the check skips every 2am up to and including that date, so to keep it up tonight, use tomorrow's date (see [GitHub setup](docs/github-setup.md)).
+- **A nightly check** in GitHub Actions tears the stack down if it's still up at 2am, so a forgotten stack costs a few hours, not a month. To keep it up overnight, set the `AUTO_DOWN_SKIP_UNTIL` repository variable to tomorrow's date (see [GitHub setup](docs/github-setup.md)).
 
 The teardown only removes the expensive parts; everything that holds state stays. The database is snapshotted before it's deleted and restored on the way back up, and Apple MDM's push certificate and keys are stored in it. The Fleet server key that encrypts it, the Windows MDM certificate (in Secrets Manager), the software-installers bucket, DNS, the TLS certificate and the email sending identity are never torn down.
 
