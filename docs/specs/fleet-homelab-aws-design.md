@@ -590,7 +590,8 @@ the time by design, a red board usually means "torn down on purpose".
   Okta side and the optional `grafana/` root (both applied locally), the
   `up`/`down` operational scripts, and one GitHub Actions workflow
   (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down) with a shared setup action, that
+  merges, `apply` for on-demand up/down and a nightly 2am Central check that
+  tears the stack down if it was left up) with a shared setup action, that
   drives them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own
   GitHub repo, driving Fleet server config via GitHub Actions.

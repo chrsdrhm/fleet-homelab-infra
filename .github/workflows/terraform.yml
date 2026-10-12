@@ -7,7 +7,8 @@
 #           Each plan is a new comment; earlier ones are hidden as outdated.
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
-#  - apply: started by hand: up or down with the apply role.
+#  - apply: started by hand (up or down with the apply role), and nightly at 2am Central,
+#           when it tears the stack down if it was left up.
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
@@ -17,7 +18,7 @@
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
-run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || format('Terraform {0}', inputs.action) }}"
+run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || github.event_name == 'schedule' && 'Terraform nightly check (down if up)' || format('Terraform {0}', inputs.action) }}"
 
 on:
   pull_request:
@@ -27,6 +28,12 @@ on:
     branches: [main]
     # Docs-only merges change nothing in AWS.
     paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
+  # Nightly at 2am Central: if the stack was left up, tear it down. Cron is UTC and
+  # doesn't follow daylight saving, so both times are listed and the job acts only on
+  # the one that is 2am in Chicago that night (07:00 UTC in CDT, 08:00 UTC in CST).
+  schedule:
+    - cron: "0 7 * * *"
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       action:
@@ -389,7 +396,7 @@ jobs:
 
   apply:
     name: terraform-apply
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
     permissions:
@@ -405,23 +412,50 @@ jobs:
       TF_CLI_ARGS_apply: "-lock-timeout=15m"
       TF_CLI_ARGS_destroy: "-lock-timeout=15m"
     steps:
-      # Fails before touching AWS, and the message shows on the run's summary page.
-      - name: Check the inputs
+      # Decides what this run does, before touching AWS: a manual run does what was
+      # asked (down needs confirm=destroy); the nightly run continues only at 2am
+      # Central, unless the AUTO_DOWN_SKIP_UNTIL variable (YYYY-MM-DD) is today or later.
+      - name: Decide what to run
+        id: mode
         env:
+          EVENT: ${{ github.event_name }}
           ACTION: ${{ inputs.action }}
           CONFIRM: ${{ inputs.confirm }}
+          SCHEDULE: ${{ github.event.schedule }}
+          SKIP_UNTIL: ${{ vars.AUTO_DOWN_SKIP_UNTIL }}
         run: |
-          if [ "$ACTION" = "down" ] && [ "$CONFIRM" != "destroy" ]; then
-            echo "::error title=Down not confirmed::'down' needs the confirm input set to exactly: destroy. Nothing was changed."
-            exit 1
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$ACTION" = "down" ] && [ "$CONFIRM" != "destroy" ]; then
+              echo "::error title=Down not confirmed::'down' needs the confirm input set to exactly: destroy. Nothing was changed."
+              exit 1
+            fi
+            echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Nightly: which of the two UTC times is 2am in Chicago depends on daylight saving.
+          offset=$(TZ=America/Chicago date +%z)
+          if { [ "$SCHEDULE" = "0 7 * * *" ] && [ "$offset" != "-0500" ]; } \
+            || { [ "$SCHEDULE" = "0 8 * * *" ] && [ "$offset" != "-0600" ]; }; then
+            echo "Not 2am in Chicago at this schedule; the other one covers tonight."
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          today=$(TZ=America/Chicago date +%F)
+          if [ -n "$SKIP_UNTIL" ] && [[ ! "$today" > "$SKIP_UNTIL" ]]; then
+            echo "::notice title=Nightly teardown skipped::AUTO_DOWN_SKIP_UNTIL is $SKIP_UNTIL, so the stack stays up tonight."
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "action=nightly" >> "$GITHUB_OUTPUT"
 
       - name: Check out the repository
+        if: steps.mode.outputs.action != 'none'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Terraform
+        if: steps.mode.outputs.action != 'none'
         uses: ./.github/actions/terraform-setup
         with:
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
@@ -437,12 +471,28 @@ jobs:
           GH_OWNER_ID: ${{ github.repository_owner_id }}
           GH_REPO_ID: ${{ github.repository_id }}
 
+      # Nightly only: down.sh destroys module.fleet, so its absence from the state means
+      # the stack is already down and there's nothing to do. Captured first, so an error
+      # fails the run instead of reading as "down".
+      - name: Is the stack up?
+        id: nightly
+        if: steps.mode.outputs.action == 'nightly'
+        run: |
+          resources=$(terraform state list)
+          if grep -q '^module\.fleet\.' <<< "$resources"; then
+            echo "down=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Stack left up::The stack was still up at 2am Central, so it's being torn down."
+          else
+            echo "down=false" >> "$GITHUB_OUTPUT"
+            echo "The stack is down; nothing to do."
+          fi
+
       # A GitHub App token (GitOps repo only, Actions write, revoked when the job ends)
       # lets up.sh start the GitOps workflow; this run's own token cannot. Best effort:
       # without it, up.sh still rebuilds and warns that the GitOps run did not start.
       - name: Get a token for the GitOps repo
         id: gitops-token
-        if: inputs.action == 'up'
+        if: steps.mode.outputs.action == 'up'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -454,16 +504,16 @@ jobs:
 
       # FLEET_CI_HEADER gets up.sh's health check past the WAF's US-only rule.
       - name: Up
-        if: inputs.action == 'up'
+        if: steps.mode.outputs.action == 'up'
         env:
           GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: ./scripts/up.sh
 
       - name: Down
-        if: inputs.action == 'down'
+        if: steps.mode.outputs.action == 'down' || steps.nightly.outputs.down == 'true'
         env:
-          CONFIRM: ${{ inputs.confirm }}
+          CONFIRM: destroy # a manual run was checked above; the nightly one is automatic
         run: ./scripts/down.sh
 
       - name: Remove the generated files
@@ -502,8 +552,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 80); do
-            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
-              --json status --jq 'map(select(.status != "completed")) | length')
+            busy=0
+            for event in workflow_dispatch schedule; do
+              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
+                --json status --jq 'map(select(.status != "completed")) | length')
+              busy=$((busy + n))
+            done
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30

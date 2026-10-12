@@ -152,7 +152,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 
 | To | Run |
 |---|---|
-| Tear down (keeps your data) | `./scripts/down.sh` |
+| Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it at 2am Central if the stack is still up. |
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md) |
