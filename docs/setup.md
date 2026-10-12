@@ -152,9 +152,14 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 
 | To | Run |
 |---|---|
-| Tear down (keeps your data) | `./scripts/down.sh` |
+| Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it at 2am if the stack is still up (see below to change or skip it). |
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md) |
+
+**Changing the nightly teardown.** It's the `schedule` in `.github/workflows/terraform.yml`:
+- **Another time:** cron is in UTC, so the workflow lists two times (07:00 and 08:00 UTC) and its "Decide what to run" step acts only on the one that's 2am in `America/Chicago`. Change both times and the time zone there; for a zone without daylight saving, one time is enough.
+- **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
+- **Off for good:** delete the `schedule` block.
 
 If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

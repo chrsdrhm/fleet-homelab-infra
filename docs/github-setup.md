@@ -1,6 +1,6 @@
 # GitHub setup
 
-The GitHub side of both repos: secrets, repository settings, branch rules, a label and an optional GitHub App. It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
+The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label and an optional GitHub App. It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
 
 ```bash
 OWNER=$(gh api user --jq .login)
@@ -8,7 +8,7 @@ OWNER=$(gh api user --jq .login)
 
 Do the steps in this order. The branch rules require checks that must have run at least once; a required check that has never run blocks every merge.
 
-## 1. Secrets
+## 1. Secrets and variables
 
 `gh secret set NAME --repo $OWNER/<repo>` prompts for the value, so it stays out of your shell history. Add `--app dependabot` to set the Dependabot copy: Dependabot's pull requests can only read Dependabot secrets.
 
@@ -35,6 +35,13 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL` | Only with Okta: `terraform output -raw metadata_url` (in `okta/`) and `terraform output -raw idp_logo_url` |
 | `PRIVATE_HASHES` | Set by `sync-hashes.sh`, which also sets the Dependabot copy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) |
+
+**Optional repository variables.** These aren't secret (anyone who can see the repo's settings can read them), so they're variables: `gh variable set NAME --body VALUE --repo $OWNER/<repo>`.
+
+| Variable | Repo | What it does |
+|---|---|---|
+| `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly 2am teardown skips until then (see **Nightly teardown** below). |
+| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude review's model; without it, your plan's default (step 6). |
 
 ## 2. Repository settings
 
@@ -73,6 +80,15 @@ echo '{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":[
 gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
   --description "Accept a plan that destroys or replaces a resource that holds data"
 ```
+
+**Nightly teardown.** With CI set up, the Terraform workflow checks every night at 2am and runs `down` if the stack is still up. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the 2am check the next morning brings it down as usual. Delete the variable when you're done:
+
+```bash
+gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homelab-infra   # up through Wednesday the 14th; down at 2am on the 15th
+gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
+```
+
+GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 
 ## 3. Run the checks once
 
