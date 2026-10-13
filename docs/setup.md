@@ -158,7 +158,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md) |
 
 **Changing the nightly teardown.** It's the `schedule` in `.github/workflows/terraform.yml`:
-- **Another time:** cron is in UTC, so the workflow lists two times (07:00 and 08:00 UTC) and its "Decide what to run" step acts only on the one that's 2am in `America/Chicago`. Change both times and the time zone there; for a zone without daylight saving, one time is enough.
+- **Another time:** cron is in UTC, so the workflow lists two times (07:17 and 08:17 UTC) and its "Decide what to run" step acts only on the one that's 2am in `America/Chicago`. Change both times and the time zone there; for a zone without daylight saving, one time is enough.
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the `schedule` block.
 
