@@ -30,10 +30,11 @@ on:
     paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
   # Nightly at 2am: if the stack was left up, tear it down. Cron is UTC and
   # doesn't follow daylight saving, so both times are listed and the job acts only on
-  # the one that is 2am in Chicago that night (07:00 UTC in CDT, 08:00 UTC in CST).
+  # the one that is 2am in Chicago that night (07:17 UTC in CDT, 08:17 UTC in CST).
+  # :17, not :00: GitHub delays scheduled runs most at the top of the hour.
   schedule:
-    - cron: "0 7 * * *"
-    - cron: "0 8 * * *"
+    - cron: "17 7 * * *"
+    - cron: "17 8 * * *"
   workflow_dispatch:
     inputs:
       action:
@@ -435,9 +436,17 @@ jobs:
           fi
           # Nightly: which of the two UTC times is 2am in Chicago depends on daylight saving.
           offset=$(TZ=America/Chicago date +%z)
-          if { [ "$SCHEDULE" = "0 7 * * *" ] && [ "$offset" != "-0500" ]; } \
-            || { [ "$SCHEDULE" = "0 8 * * *" ] && [ "$offset" != "-0600" ]; }; then
+          if { [ "$SCHEDULE" = "17 7 * * *" ] && [ "$offset" != "-0500" ]; } \
+            || { [ "$SCHEDULE" = "17 8 * * *" ] && [ "$offset" != "-0600" ]; }; then
             echo "Not 2am in Chicago at this schedule; the other one covers tonight."
+            echo "action=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # GitHub can start a scheduled run hours late (it once ran at 11:34am), so act
+          # only between 2:00 and 5:59 in Chicago, never during the day.
+          hour=$(TZ=America/Chicago date +%-H)
+          if [ "$hour" -lt 2 ] || [ "$hour" -gt 5 ]; then
+            echo "::notice title=Nightly check ran late::GitHub started it at $(TZ=America/Chicago date +%H:%M) in Chicago, so it did nothing rather than risk tearing down a stack in use."
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
