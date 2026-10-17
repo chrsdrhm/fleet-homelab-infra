@@ -2779,8 +2779,6 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
   - ends with a verdict (✅ upgrade as is / ⚠️ upgrade with these changes / ❌ wait), and the runbook steps still to do (the snapshot)
   - **compares Fleet's `fleetctl new` template** (`cmd/fleetctl/fleetctl/templates/new` in `fleetdm/fleet`) between the two release tags, and lists what changed in the workflow, the action, `gitops.sh`, the skill and `default.yml`, with what's worth adopting in the GitOps repo. The GitOps repo records which Fleet version its scaffold matches (for example a `fleet-template: v4.93.0` line), so the comparison starts from there, and an adopting pull request updates it.
 
-  Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
-
 - [x] **Step 7: Widen the skill to run the whole upgrade** (added 2026-10-16, at my request; build it right after the first real upgrade, from what that run actually did rather than from the runbook as written). Invoked by hand only (`disable-model-invocation`), like `/session-start` and `/session-end`, and with the same rule of keeping identifying values out of the conversation. It:
   - **Reviews:** Step 6's review, covering every release between the two versions, patch releases included (4.92.1-4.92.3 had to be checked separately on the first run).
   - **Picks the order:** reads whether the stack is up, and asks which of the runbook's two orders to use. Either merge while it's down (the teardown snapshot is the restore point), or `up` on the old version, take a fresh snapshot, then merge.
@@ -2790,7 +2788,8 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
   - **On a failed check:** sets out the runbook's rollback (revert, `down`, rebuild from the pre-upgrade snapshot), and runs nothing without a yes.
   - **Cleans up:** reminds that `/session-end` offers to delete the pre-upgrade snapshot once the new version has run cleanly.
   - Updates `docs/upgrading-fleet.md` to point to the skill, and keeps the runbook as the manual way.
-  - **Built 2026-10-17** as `.claude/skills/fleet-upgrade/SKILL.md`, covering Steps 6 and 7, from the first upgrade's run. Not built yet: running it automatically from the Claude review on an upgrade pull request (Step 6's last paragraph), which waits for Step 3's `fleet.Dockerfile`.
+  - **Built 2026-10-17** as `.claude/skills/fleet-upgrade/SKILL.md`, covering Steps 6 and 7, from the first upgrade's run.
+- [ ] **Step 8: Run the skill automatically on upgrade pull requests** (split out of Step 6; waits for Step 3's `fleet.Dockerfile`). When a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
 
 ---
 
