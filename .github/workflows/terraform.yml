@@ -554,7 +554,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: ./scripts/notify-issue.sh resolve "The teardown failed" "A teardown succeeded: $RUN_URL"
+        run: |
+          ./scripts/notify-issue.sh resolve "The teardown failed" "A teardown succeeded: $RUN_URL"
 
       # Snapshots other than down.sh's own teardown ones are kept on purpose (such as a
       # pre-upgrade snapshot) and bill until someone deletes them. Nightly, list any older
