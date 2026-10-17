@@ -46,7 +46,7 @@ case "$mode" in
     ;;
   resolve)
     if [ -n "$number" ]; then
-      gh issue close "$number" --repo "$repo" --comment "$arg" > /dev/null 2>&1
+      gh issue close "$number" --repo "$repo" --comment "$arg" > /dev/null
       echo "Closed issue #$number."
     fi
     ;;
