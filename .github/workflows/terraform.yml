@@ -8,7 +8,8 @@
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
 #  - apply: started by hand (up or down with the apply role), and nightly at 2am,
-#           when it tears the stack down if it was left up.
+#           when it tears the stack down if it was left up and says so in an issue, and
+#           lists kept snapshots older than 14 days in another (scripts/notify-issue.sh).
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
@@ -403,6 +404,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      issues: write # the nightly run's notices (scripts/notify-issue.sh)
     concurrency:
       group: terraform
       cancel-in-progress: false
@@ -521,14 +523,68 @@ jobs:
         run: ./scripts/up.sh
 
       - name: Down
+        id: down
         if: steps.mode.outputs.action == 'down' || steps.nightly.outputs.down == 'true'
         env:
           CONFIRM: destroy # a manual run was checked above; the nightly one is automatic
         run: ./scripts/down.sh
 
+      # The stack was left up: say so in an issue (or a comment on the open one), which
+      # GitHub sends to the owner by email and in its app. /session-start closes it.
+      - name: Report the nightly teardown
+        if: always() && steps.nightly.outputs.down == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.down.outcome }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the schedule
+          if [ "$OUTCOME" = success ]; then
+            msg="The stack was still up at the nightly check, so it was torn down ($when Chicago time). The data is in the new teardown snapshot; \`up\` restores it."
+          else
+            msg="The stack was still up at the nightly check, and **the teardown failed** ($when Chicago time). It may still be partly up and billing: check the run, then run \`down\` again."
+          fi
+          printf '@%s %s\n\nRun: %s\n' "$OWNER" "$msg" "$RUN_URL" > notice.md
+          ./scripts/notify-issue.sh report "The nightly check tore down the stack" notice.md
+
+      # Snapshots other than down.sh's own teardown ones are kept on purpose (such as a
+      # pre-upgrade snapshot) and bill until someone deletes them. Nightly, list any older
+      # than 14 days in one issue, and close it once there are none. Never deletes.
+      - name: Check for kept snapshots
+        if: always() && steps.mode.outputs.action == 'nightly'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # Captured first, so an AWS error fails the step instead of reading as "none".
+          kept=$(aws rds describe-db-cluster-snapshots --snapshot-type manual \
+            --query "DBClusterSnapshots[?!starts_with(DBClusterSnapshotIdentifier, 'fleet-homelab-teardown-')].[DBClusterSnapshotIdentifier,SnapshotCreateTime]" \
+            --output text)
+          now=$(date -u +%s)
+          old=""
+          while read -r name created; do
+            [ -n "$name" ] || continue
+            days=$(( (now - $(date -u -d "$created" +%s)) / 86400 ))
+            if [ "$days" -ge 14 ]; then
+              old+="- \`$name\`: $days days old"$'\n'
+            fi
+          done <<< "$kept"
+          title="Kept snapshots older than 14 days"
+          if [ -z "$old" ]; then
+            ./scripts/notify-issue.sh resolve "$title" "None left; closing."
+          else
+            {
+              printf '@%s These Aurora snapshots are not teardown snapshots, so `down.sh` keeps them, and each bills until deleted:\n\n%s\n' "$OWNER" "$old"
+              printf 'Delete one once you no longer need it (after an upgrade has run cleanly, say), with `/session-end` or:\n\n'
+              printf '```bash\naws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <name>\n```\n\nThis issue updates nightly and closes itself when none are left.\n'
+            } > snapshots.md
+            ./scripts/notify-issue.sh update "$title" snapshots.md
+          fi
+
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl
+        run: rm -f terraform.tfvars backend.hcl notice.md snapshots.md
 
   apply-on-merge:
     name: terraform-apply-on-merge

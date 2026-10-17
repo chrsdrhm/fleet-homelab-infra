@@ -164,4 +164,6 @@ With [Claude Code](https://claude.com/claude-code), `/session-start` and `/sessi
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the `schedule` block.
 
+**Notices from the nightly run.** If it tears the stack down, it opens an issue in this repo, "The nightly check tore down the stack" (or comments on the open one), so you hear about a stack left up; GitHub sends it to you by email and in its app. `/session-start` closes it. The same run lists Aurora snapshots that aren't teardown snapshots and are older than 14 days (a pre-upgrade snapshot, say) in a "Kept snapshots older than 14 days" issue, since they bill until deleted; it updates nightly and closes itself once there are none. Neither deletes anything.
+
 If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

@@ -88,6 +88,8 @@ gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homel
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
+The nightly run also opens issues: one when it tears the stack down, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). Leave **Issues** turned on in the repo's settings for them.
+
 GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 
 ## 3. Run the checks once
