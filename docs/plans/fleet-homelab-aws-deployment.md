@@ -2829,6 +2829,34 @@ Added at my request: enroll a Windows device in Intune first, the way a real org
 
 ---
 
+### Task 28: Deploy a PSADT-wrapped app with Fleet
+
+Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and deploy it through Fleet, silently and from self-service, the way organizations moving from Intune or ConfigMgr often already package their apps.
+
+**What Fleet accepts, and why PSADT needs wrapping** (read from Fleet's docs and source at `fleet-v4.93.0`):
+- Fleet takes one installer file per package. For Windows that's `.msi`, `.exe`, or a `.ps1` script-only package (`deploy-software-packages.md`; `SoftwareInstallerPlatformFromExtension` in `server/fleet/software_installer.go`). A `.tar.gz` is extracted by `fleetd` before the install script runs, but Fleet assigns it to Linux; a plain `.zip` upload is detected as an iOS `.ipa` by its magic bytes (`pkg/file/file.go`). A PSADT package is a folder (`Invoke-AppDeployToolkit.exe`, the module, `Files\`), so it has to become one `.exe` or `.msi`.
+- Fleet reads the software's name and version from the file (an `.exe`'s version resource, an `.msi`'s properties) and uses them to match the package to what the host reports as installed. A wrapper `.exe` must carry the wrapped app's name and version, or Fleet tracks the wrong title.
+- For an `.exe`, Fleet has no default scripts: the install script runs the file at `$env:INSTALLER_PATH`, and the uninstall script gets the name in `$PACKAGE_ID`. **Uninstall scripts run without the installer being downloaded**, so a PSADT uninstall can't run from the package; either the install copies the PSADT folder somewhere that stays (for example under `C:\ProgramData`), or the uninstall uses the app's own uninstaller.
+- Fleet takes the install script's exit code as the result. Fleet's default MSI script treats 0, 3010 (restart needed) and 1641 (restart started) as success; the PSADT install script has to map PSADT's own codes the same way, and decide what a user deferring the install reports.
+- `fleetd` runs install scripts as SYSTEM, with no user session. **Check:** that PSADT 4.x shows its dialogs (close apps, defer, restart) to the signed-in user when started as SYSTEM, without ServiceUI.
+- GitOps mode means the package is defined in the GitOps repo: `software.packages` in `fleets/workstations.yml` pointing at a package YAML in `lib/` with a `url` Fleet downloads from and a `hash_sha256`, or `hash_sha256` alone for a package already added to Fleet through the API (Fleet's YAML reference).
+
+**Prerequisites:** a Windows host running `fleetd` (Task 20 Part B, or Task 27's VM); the stack up.
+
+**Files:**
+- Create in the GitOps repo: `lib/software/<app>.package.yml`, the install and uninstall scripts beside it, and the PSADT deployment script (`Invoke-AppDeployToolkit.ps1`). The vendor's installer and the built wrapper are not committed.
+- Modify in the GitOps repo: `fleets/workstations.yml` (`software.packages`).
+
+- [ ] **Step 1: Pick the app and build the PSADT package.** A free app with an MSI and something for PSADT to do: close the app if it's running (with a deferral), apply a setting after install, and show a message. Start from PSADT's v4 template (`New-ADTTemplate`), and test it on the VM by hand first, silent and interactive.
+- [ ] **Step 2: Make it one file Fleet accepts.** Try a self-extracting `.exe` (7-Zip SFX or IExpress) with the app's name and version set in its version resource, and an `.msi` wrapper if that fails. Upload it to Fleet through the API on a test fleet and check the name, version and software title Fleet shows. Record the build steps, so a new app version is a repeatable change.
+- [ ] **Step 3: Write the install and uninstall scripts.** Install: run the wrapper, then `Invoke-AppDeployToolkit.exe -DeploymentType Install` (`-DeployMode Silent` or interactive), copy the PSADT folder to a fixed place for later uninstalls, map the exit codes, and print the end of PSADT's log so it shows in Fleet's install output. Uninstall: PSADT's uninstall from the copied folder.
+- [ ] **Step 4: Host it and add it through the GitOps repo.** Choose where Fleet downloads it from (a release asset, or a private S3 location with a presigned URL), or add it through the API and reference it by hash only; then the package YAML with the scripts, `self_service: true`, and labels. The dry run on the pull request checks Fleet accepts it.
+- [ ] **Step 5: Test the deployments.** An install an admin starts from Host details (silent); a self-service install from Fleet Desktop's My device page with the app running, to see the close-apps prompt and a deferral; an uninstall; and a restart-required result. Check Fleet's install output and activities, and PSADT's log on the device.
+- [ ] **Step 6: Optional: automatic install** through a policy that fails when the app is missing, and an upgrade to a newer app version through the same package.
+- [ ] **Step 7: Document** the packaging steps, the scripts, and what PSADT does under Fleet that it doesn't under Intune (and the reverse).
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2855,3 +2883,4 @@ Added at my request: enroll a Windows device in Intune first, the way a real org
 - Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at my request, to learn API Gateway/Lambda): Task 19.
 - Enrolling devices, Windows first: an Okta sign-in at enrollment (a second Okta app), Fleet's agent with local Windows accounts, manual MDM, automatic enrollment through Entra, Autopilot, and federating Entra with Okta: Task 20.
 - Migrating a Windows device from Intune to Fleet with Fleet's automatic Windows MDM migration (`windows_migration_enabled`): Task 27.
+- Deploying a PSADT-wrapped Windows app through Fleet (one wrapper file, install and uninstall scripts, silent and self-service): Task 28.
