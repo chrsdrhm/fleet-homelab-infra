@@ -2826,6 +2826,7 @@ Added at my request: enroll a Windows device in Intune first, the way a real org
 - [ ] **Step 5: Check what's left behind and what happens next.** Does Intune show the device as unmanaged or stale? Is the Entra join (and sign-in with the Entra account) still working? Are the Intune settings removed or kept? Is the Intune Management Extension still installed? Is the BitLocker key still in Entra, and does Fleet escrow its own? Watch the device for a day for a re-enrollment into Intune. If it happens, find what triggers it (Intune's MDM scope, or a scheduled enrollment task Entra created) and the fix, such as taking the device's user out of Intune's scope or retiring the device record in Intune. Never wipe it from Intune: a wipe resets the VM.
 - [ ] **Step 6: Optional: the other common starting points.** A device enrolled in Intune only, with no Entra join (Settings → Access work or school → Enroll only in device management), and a device that came through Autopilot. Note any difference from Step 4.
 - [ ] **Step 7: Document** the migration runbook: the order (Intune scope, agent, setting, watch, clean up in Intune), the errors seen and their fixes, and what Intune leaves behind. Never commit tenant-specific values.
+- [ ] **Step 8: Contribute back to Fleet** (each one shown to me before it's posted): what Fleet's migration guide doesn't cover yet, such as whether Entra-joined devices go back to Intune and what Intune leaves behind, as an issue or a pull request to `articles/windows-mdm-setup.md`, and a bug report for anything that fails.
 
 ---
 
@@ -2856,6 +2857,10 @@ Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and d
 - [ ] **Step 5: Test the deployments.** An install an admin starts from Host details (silent); a self-service install from Fleet Desktop's My device page with the app running, to see the close-apps prompt and a deferral; an uninstall; and a restart-required result. Check Fleet's install output and activities, and PSADT's log on the device.
 - [ ] **Step 6: Optional: automatic install** through a policy that fails when the app is missing, and an upgrade to a newer app version through the same package.
 - [ ] **Step 7: Document** the packaging steps, the scripts, and what PSADT does under Fleet that it doesn't under Intune (and the reverse).
+- [ ] **Step 8: Contribute back to Fleet** (each one shown to me before it's posted):
+  - A comment on [fleetdm/fleet#38800](https://github.com/fleetdm/fleet/issues/38800) with what worked for PSADT: the adapted scripts, the exit-code mapping, and whether its dialogs reach the user from SYSTEM.
+  - An issue for the `.tar.gz` conflict, with what Step 2 found: either Windows `.tar.gz` packages work and the docs should say so, or the printer guide needs fixing.
+  - If the result is solid, a guide pull request in the style of Fleet's `articles/` (for example "Deploy PSAppDeployToolkit apps with Fleet"), from the fork with Fleet's pull request template filled in, as for fleetdm/fleet#55353.
 
 ---
 
