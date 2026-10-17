@@ -8,7 +8,8 @@
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
 #  - apply: started by hand (up or down with the apply role), and nightly at 2am,
-#           when it tears the stack down if it was left up and says so in an issue, and
+#           when it tears the stack down if it was left up. A failed down (either kind)
+#           opens an issue that the next successful down closes, and the nightly run
 #           lists kept snapshots older than 14 days in another (scripts/notify-issue.sh).
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
@@ -529,24 +530,31 @@ jobs:
           CONFIRM: destroy # a manual run was checked above; the nightly one is automatic
         run: ./scripts/down.sh
 
-      # The stack was left up: say so in an issue (or a comment on the open one), which
-      # GitHub sends to the owner by email and in its app. /session-start closes it.
-      - name: Report the nightly teardown
-        if: always() && steps.nightly.outputs.down == 'true'
+      # A failed teardown may leave the stack partly up and billing, so it opens an issue
+      # (or comments on the open one) that stays open until a later down succeeds, which
+      # closes it. GitHub sends issues to the owner by email and in its app. A successful
+      # teardown needs no notice.
+      - name: Report a failed teardown
+        if: always() && steps.down.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.down.outcome }}
+          EVENT: ${{ github.event_name }}
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the schedule
-          if [ "$OUTCOME" = success ]; then
-            msg="The stack was still up at the nightly check, so it was torn down ($when Chicago time). The data is in the new teardown snapshot; \`up\` restores it."
-          else
-            msg="The stack was still up at the nightly check, and **the teardown failed** ($when Chicago time). It may still be partly up and billing: check the run, then run \`down\` again."
-          fi
-          printf '@%s %s\n\nRun: %s\n' "$OWNER" "$msg" "$RUN_URL" > notice.md
-          ./scripts/notify-issue.sh report "The nightly check tore down the stack" notice.md
+          if [ "$EVENT" = schedule ]; then what="The nightly check found the stack up, and its teardown failed"; else what="A manual teardown failed"; fi
+          # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
+          printf '@%s %s (%s Chicago time). The stack may still be partly up and billing: check the run, fix the cause, and run `down` again. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
+            "$OWNER" "$what" "$when" "$RUN_URL" > notice.md
+          ./scripts/notify-issue.sh report "The teardown failed" notice.md
+
+      - name: Close the failed-teardown issue
+        if: steps.down.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./scripts/notify-issue.sh resolve "The teardown failed" "A teardown succeeded: $RUN_URL"
 
       # Snapshots other than down.sh's own teardown ones are kept on purpose (such as a
       # pre-upgrade snapshot) and bill until someone deletes them. Nightly, list any older

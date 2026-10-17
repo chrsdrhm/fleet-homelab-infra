@@ -2911,7 +2911,7 @@ Added at my request; follows Task 27. Fleet points to a community tool for this:
 
 Added at my request. If the 2am check tears the stack down, the stack was left up, and nothing tells me. Make the nightly run say so.
 
-**Built 2026-10-17.** The channel is a GitHub issue, which needs no new secret. The nightly `apply` job opens "The nightly check tore down the stack", or comments on it if it's already open, after a nightly `down` (also when the `down` fails, saying so). It @-mentions the owner, through `scripts/notify-issue.sh`, with `issues: write` on that job only. `/session-start` offers to close it. The helper was tested against the repo with a throwaway issue (create, quiet body update, comment, close, then deleted). It lists issues rather than searching, because GitHub's search index lags and found a just-closed issue in the first test. It acts only on issues opened by GitHub Actions: in a public repo anyone can open an issue with the same title, and the nightly run must not comment on, rewrite or close theirs. The nightly path itself runs for real only at 2am.
+**Built 2026-10-17, then narrowed at my request:** an issue for a successful nightly teardown would be noise that needs no action (the run already shows a "Stack left up" warning), so the issue is only for a **failed** `down`, of either kind, manual or nightly. "The teardown failed" @-mentions the owner, links the run, says the stack may be partly up and billing, and closes itself when a later `down` succeeds. GitHub's own failure email has no such lasting marker. It goes through `scripts/notify-issue.sh`, with `issues: write` on the `apply` job only, and `/session-start` raises it first. The helper was tested against the repo with throwaway issues (create, quiet body update, comment, close, then deleted). It lists issues rather than searching, because GitHub's search index lags and found a just-closed issue in the first test. It acts only on issues opened by GitHub Actions: in a public repo anyone can open an issue with the same title, and the run must not comment on, rewrite or close theirs.
 
 - [x] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
 - [x] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
@@ -2991,7 +2991,7 @@ Added at my request. `okta/` is the only Terraform applied from a laptop with no
 - A health-scan skill built from Task 21: Task 30.
 - A Windows packaging skill, from Task 28: Task 31.
 - Migrating Intune policies (Fleet's community converter, and maybe a skill): Task 32.
-- A notification when the nightly teardown runs: Task 33. ✓
+- A notice when a teardown fails (any run), closed by the next one that succeeds: Task 33. ✓
 - An expiry and rotation watch (license, certificates, tokens): Task 34.
 - A reminder for kept snapshots: Task 35 (nightly, in the `apply` job). ✓
 - CI for the Okta Terraform (plan only): Task 36.
