@@ -164,4 +164,6 @@ With [Claude Code](https://claude.com/claude-code), `/session-start` and `/sessi
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the `schedule` block.
 
+**Notices in issues.** If a teardown fails (the nightly one or one you started), the run opens an issue in this repo, "The teardown failed", because the stack may still be partly up and billing; GitHub sends it to you by email and in its app, and the next successful teardown closes it. The nightly run also lists Aurora snapshots that aren't teardown snapshots and are older than 14 days (a pre-upgrade snapshot, say) in a "Kept snapshots older than 14 days" issue, since they bill until deleted; it updates nightly and closes itself once there are none. Neither deletes anything.
+
 If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

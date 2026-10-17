@@ -597,7 +597,10 @@ the time by design, a red board usually means "torn down on purpose".
   `up`/`down` operational scripts, and one GitHub Actions workflow
   (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
   merges, `apply` for on-demand up/down and a nightly 2am check that
-  tears the stack down if it was left up) with a shared setup action, that
+  tears the stack down if it was left up and keeps an issue listing kept
+  snapshots older than 14 days; a failed `down` of either kind opens an issue
+  that the next successful one closes, through `scripts/notify-issue.sh`) with
+  a shared setup action, that
   drives them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own
   GitHub repo, driving Fleet server config via GitHub Actions.

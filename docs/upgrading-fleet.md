@@ -25,7 +25,7 @@ aws rds create-db-cluster-snapshot --db-cluster-identifier fleet-homelab --db-cl
 aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$SNAP"
 ```
 
-`down.sh` only prunes `fleet-homelab-teardown-*` snapshots, so this one stays until you delete it. Delete it once the new version has run cleanly for a while; it bills while it exists.
+`down.sh` only prunes `fleet-homelab-teardown-*` snapshots, so this one stays until you delete it. Delete it once the new version has run cleanly for a while; it bills while it exists. With CI, the nightly run lists it in a "Kept snapshots older than 14 days" issue once it's two weeks old, as a reminder.
 
 ## 3. Open the pull request
 
