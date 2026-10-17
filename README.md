@@ -15,7 +15,6 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned, and merging it applies the change while the stack is up; the checks live in [`checks/`](checks/README.md). Optionally, an AI reviews each pull request too: Claude with a Claude subscription, or GitHub Copilot or another tool instead. With Claude, comment `@claude` on a pull request to review its latest commit again (see [GitHub setup](docs/github-setup.md#6-optional-claude-reviews-pull-requests)).
-- **Observability (optional):** a Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It runs self-hosted (mine is on a Proxmox host at home), not in AWS. The repo holds its Docker Compose file, data source and alert settings and the dashboard code, and it reads CloudWatch with short-lived credentials (IAM Roles Anywhere), so no AWS key is stored.
 
 ## Getting started
 
@@ -51,7 +50,6 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 |---|---|
 | `*.tf` | The Terraform configuration: AWS, plus the optional Cloudflare delegation (`cloudflare.tf`) |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
-| `grafana/` | Optional, not applied to AWS. The self-hosted Grafana: Docker Compose, provisioned data sources and alert rules, and the dashboard code |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |

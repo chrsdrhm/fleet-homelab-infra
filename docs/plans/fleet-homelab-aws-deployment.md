@@ -2252,7 +2252,7 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
 **Files (in this repo, none applied by Terraform except the IAM part):**
 - Create: `grafana/compose.yaml` (Grafana OSS, image pinned by digest), `grafana/provisioning/datasources/*.yaml` (CloudWatch and Infinity, with `$__env{…}` placeholders for the token and the Fleet URL), `grafana/provisioning/dashboards/*.yaml` and `grafana/dashboards/*.json` (the dashboard code), `grafana/provisioning/alerting/*.yaml` (rules and contact points), `grafana/.env.example`, and `grafana/README.md` (how to run it, and what it reads).
 - Create (if Roles Anywhere): `grafana_access.tf`, with the trust anchor, profile and read-only role, plus its test.
-- Modify: `.github/dependabot.yml` (the `docker-compose` ecosystem for `grafana/`), the README, the spec, `.gitignore` (`grafana/.env`).
+- Modify: `.github/dependabot.yml` (the `docker-compose` ecosystem for `grafana/`), the spec, `.gitignore` (`grafana/.env`). The README leaves Grafana out until it's deployed; whether to document it there, and where, is decided then.
 - Never commit: `grafana/.env`, the CA key, the host certificate and key, or Grafana's database.
 
 **Privacy:** dashboard JSON exported from Grafana can carry the Fleet URL, account IDs in ARNs, and data source UIDs. Use template variables and data source references by name, and let the private-values check run over `grafana/` like everything else.
@@ -2274,7 +2274,7 @@ git commit -m "Add PR-triggered terraform plan checks, closing the GitOps loop f
   - **Unhealthy while up:** ALB `UnHealthyHostCount` above 0, and ECS `RunningTaskCount` below 1 while the load balancer exists. **No data means OK**, not Alerting, or every `down` would alert.
   - **Stack left running (optional):** the NAT Gateway or load balancer has reported metrics for more than, say, 8 hours. It catches a forgotten stack before the 2am teardown does.
   - Verify with a real alert: lower a threshold for a moment, check the notification arrives, then revert.
-- [ ] **Step 9: Repo wiring:** Dependabot's `docker-compose` ecosystem for the pinned image, `grafana/.env` in `.gitignore`, the private-values check covering `grafana/`, and the README, spec and setup guide describing it as optional and self-hosted.
+- [ ] **Step 9: Repo wiring:** Dependabot's `docker-compose` ecosystem for the pinned image, `grafana/.env` in `.gitignore`, the private-values check covering `grafana/`, and the spec describing it as optional and self-hosted. Once it's running, decide whether the README or the setup guide should mention it.
 - [ ] **Step 10: Commit** the `grafana/` files, and `grafana_access.tf` if used. Never the `.env`, keys or certificates.
 
 ---
