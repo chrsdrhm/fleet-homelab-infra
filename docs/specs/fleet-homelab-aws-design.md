@@ -324,6 +324,9 @@ $0.40 each), the two newest Aurora teardown snapshots (storage for a small
 database, cents), and the S3 buckets (state, software installers, IdP logo;
 cents). Free: the ACM certificate, the SES identity and the budget. Okta's
 Free Plan and GitHub Actions on public repos cost nothing.
+A pre-upgrade snapshot (`fleet-homelab-pre-upgrade-*`, `docs/upgrading-fleet.md`)
+costs the same as a teardown snapshot (cents a month) until it's deleted by hand:
+`down.sh` doesn't prune it.
 
 **Always on, whether the stack is up or not:**
 
