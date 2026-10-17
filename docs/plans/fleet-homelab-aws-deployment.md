@@ -2864,6 +2864,88 @@ Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and d
 
 ---
 
+### Task 29: Fleet's MCP server with Claude Code
+
+Added at my request. Fleet ships an experimental MCP server ([`cmd/fleet-mcp`](https://github.com/fleetdm/fleet/tree/main/cmd/fleet-mcp), Fleet's [article](https://fleetdm.com/guides/fleet-mcp) of 2026-04-29) that lets an AI client list hosts, read policies, software and vulnerabilities from Fleet's stored inventory, and run live osquery (`prepare_live_query`, then `run_live_query`). It takes `FLEET_BASE_URL`, `FLEET_API_KEY` and an `MCP_AUTH_TOKEN` (at least 32 characters, required even over stdio), and runs over stdio or SSE.
+
+- [ ] **Step 1: Build and run it locally over stdio** for Claude Code, from the Fleet tag that matches the server. Use an API-only user with the **observer** role, so it can read and run live queries but change nothing; the token goes in the local MCP configuration, never in a repo.
+- [ ] **Step 2: Try it** on the devices from Tasks 20, 27 and 28: "is BitLocker on?", "did the PSADT app install?", "which hosts fail the firewall policy?". Note what's useful and what's missing.
+- [ ] **Step 3: Decide on running it in AWS** (SSE behind the ALB) or keeping it local. Local is simpler and exposes nothing new; record the reason.
+- [ ] **Step 4: Document** the setup, and contribute anything Fleet's README doesn't cover yet (each draft shown to me first).
+
+### Task 30: A health-scan skill
+
+Added at my request. Turns Task 21's twelve read-only checks into a Claude Code skill (`.claude/skills/health-scan/SKILL.md`): it runs them while the stack is up, compares the results with the baseline in Task 21, and reports what's new. Run it after every upgrade (the "check the logs" step in `docs/upgrading-fleet.md`) and at the end of a session.
+
+- [ ] **Step 1: Write the skill** from Task 21's checks, with read-only `allowed-tools` (AWS describe and get commands, CloudWatch Logs Insights queries, `curl` to the health endpoints), and the baseline as its reference.
+- [ ] **Step 2: Run it** on the running stack and compare with a manual run of Task 21.
+- [ ] **Step 3: Link it** from `docs/upgrading-fleet.md` and from `/session-end`.
+
+### Task 31: A Windows packaging skill
+
+Added at my request; follows Task 28. A Claude Code skill that, given a vendor installer, produces what Task 28 builds by hand: a PSADT deployment from the v4 template, the self-extracting bundle settings (name and version matching Add/Remove Programs), the install, post-install and uninstall scripts, and the GitOps package YAML.
+
+- [ ] **Step 1: Write the skill** once Task 28 has a working package, from its steps and scripts.
+- [ ] **Step 2: Package a second app with it** and deploy it, to prove it works for more than one.
+- [ ] **Step 3: Consider contributing it** to Fleet, with Task 28's write-up (each draft shown to me first).
+
+### Task 32: An Intune policy migration skill
+
+Added at my request; follows Task 27. Fleet points to a community tool for this: [`intune-to-fleet`](https://github.com/tux234/intune-to-fleet) (`Convert-IntuneToFleetCSP.ps1`, described in Fleet's article [Migrating Intune policies to Fleet with the CSP converter](https://fleetdm.com/guides/migrating-intune-policies-to-fleet-csp-converter)). It runs on an Intune-enrolled device, reads the CSP NodeCache registry for an exported Intune policy, and writes Fleet profiles (SyncML). By its own account it covers about 70-75% of policies; ADMX-backed and complex ones need manual review.
+
+- [ ] **Step 1: Use the tool in Task 27**, before migrating the VM (it needs the device still in Intune): convert the Intune policies Task 27 applied and deploy them through the GitOps repo.
+- [ ] **Step 2: Decide whether a Claude skill adds anything:** for example, reviewing the tool's output, handling what it skips (looking settings up in Microsoft's CSP documentation), working from the Intune export alone without a device, and writing the GitOps YAML. Build it only if Step 1 shows a real gap.
+- [ ] **Step 3: Contribute** fixes or findings to the tool or Fleet's article (each draft shown to me first).
+
+### Task 33: A notification when the nightly teardown runs
+
+Added at my request. If the 2am check tears the stack down, the stack was left up, and nothing tells me. Make the nightly run say so.
+
+- [ ] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
+- [ ] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
+- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section.
+
+### Task 34: An expiry and rotation watch
+
+Added at my request. Several things here expire or age silently. A monthly scheduled workflow checks them and opens an issue 30 days ahead.
+
+**What Fleet has (checked 2026-10-16):** banners in the UI for an expiring APNs certificate, Apple Business and VPP tokens, and the Premium license ([#15974](https://github.com/fleetdm/fleet/issues/15974), [#26477](https://github.com/fleetdm/fleet/issues/26477)). [#9376](https://github.com/fleetdm/fleet/issues/9376) (warn 30 days before the license expires) and [#49842](https://github.com/fleetdm/fleet/issues/49842) (a server log line when an Apple Business token expires, because customers alert from logs, not the UI) are open. I found nothing for Windows MDM certificates, identity-provider certificates or tokens, and no community tool.
+
+**API tokens (read from Fleet's source at `fleet-v4.93.0`, `server/service/sessions.go`):** an API-only user's token never expires (its session duration is set to unlimited); other users' tokens end after `session_duration` without use (5 days by default). So the GitOps repo's `FLEET_API_TOKEN` (an API-only user) doesn't expire. The risk is a token that's never rotated, so the watch reports its age instead.
+
+**What to watch:**
+
+| Item | How to read it | Notes |
+|---|---|---|
+| Fleet Premium license | The `FLEET_LICENSE_KEY` secret is a signed JWT: its `exp` claim | Works with the stack down |
+| Windows MDM (WSTEP) certificate | Its `notAfter`, from Secrets Manager | Needs read access to that one secret |
+| Okta SAML signing certificates | Okta's app metadata (admin app, and Task 20's end-user app) | |
+| Okta Free Plan org | Last admin sign-in | The setup guide says to sign in monthly to keep it active |
+| `CLAUDE_CODE_OAUTH_TOKEN` (both repos) | The secret's last update date | `claude setup-token` tokens last a year |
+| `FLEET_API_TOKEN`, `CLOUDFLARE_API_TOKEN` | The secret's last update date; Cloudflare's token-verify API also returns `expires_on` | Rotation by age |
+| Fleet's Entra MDM app client secret | Its end date in Entra | Once Task 20 Part C exists |
+
+- [ ] **Step 1: Write the workflow** (monthly, plus manual), reading only dates: never print a value, and keep the issue free of identifying details.
+- [ ] **Step 2: Test it** with a short threshold, then set 30 days.
+- [ ] **Step 3: Contribute** what Fleet lacks (each draft shown to me first): for example a comment on #9376 or #49842, or an issue for Windows MDM certificate expiry.
+
+### Task 35: A reminder for kept snapshots
+
+Added at my request. `down.sh` prunes only `fleet-homelab-teardown-*` snapshots (keeping two). Others, like `fleet-homelab-pre-upgrade-*`, are kept on purpose and bill until someone deletes them.
+
+- [ ] **Step 1: A weekly scheduled workflow** (read-only, with the plan role) lists manual snapshots that aren't teardown snapshots and are older than 14 days, and opens or updates one issue listing them with their age and size. It never deletes anything.
+- [ ] **Step 2: Document** it next to the snapshot step in `docs/upgrading-fleet.md`.
+
+### Task 36: CI for the Okta Terraform
+
+Added at my request. `okta/` is the only Terraform applied from a laptop with no pull request plan or review. Give it a plan on pull requests, with the same plan comment and Claude review as the main stack, and keep applying it locally.
+
+- [ ] **Step 1: Decide on the credentials.** The provider signs in as an OAuth service app with a private key. CI would need a second service app with read-only scopes (`okta.apps.read`, `okta.groups.read`) and its key as a GitHub secret, never the apply app's. Weigh that against a public repo's CI holding any Okta credential.
+- [ ] **Step 2: If yes, add a plan job** for `okta/` to `terraform.yml`, triggered by changes under `okta/`, with masking for Okta's identifying values in the comment.
+- [ ] **Step 3: Document** it in `docs/github-setup.md` and the setup guide's Okta step.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2891,3 +2973,11 @@ Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and d
 - Enrolling devices, Windows first: an Okta sign-in at enrollment (a second Okta app), Fleet's agent with local Windows accounts, manual MDM, automatic enrollment through Entra, Autopilot, and federating Entra with Okta: Task 20.
 - Migrating a Windows device from Intune to Fleet with Fleet's automatic Windows MDM migration (`windows_migration_enabled`): Task 27.
 - Deploying a PSADT-wrapped Windows app through Fleet (one wrapper file, install and uninstall scripts, silent and self-service): Task 28.
+- Fleet's MCP server with Claude Code (local, observer role): Task 29.
+- A health-scan skill built from Task 21: Task 30.
+- A Windows packaging skill, from Task 28: Task 31.
+- Migrating Intune policies (Fleet's community converter, and maybe a skill): Task 32.
+- A notification when the nightly teardown runs: Task 33.
+- An expiry and rotation watch (license, certificates, tokens): Task 34.
+- A reminder for kept snapshots: Task 35.
+- CI for the Okta Terraform (plan only): Task 36.
