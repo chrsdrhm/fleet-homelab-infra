@@ -2760,7 +2760,8 @@ The RDS **Query Editor** in the AWS console is a simpler way into Aurora only, b
 
 Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot doesn't cover them: the version is the image tag in `fleet.tf`. The routine is in [`docs/upgrading-fleet.md`](../upgrading-fleet.md): read the release notes, snapshot Aurora, change the tag in a pull request, merge (applied on merge while the stack is up, otherwise at the next `up`), check, and roll back from the snapshot if needed. Database migrations can't be undone, which is why the snapshot comes first.
 
-- [ ] **Step 1: 🎓 You run this — upgrade 4.92.0 → 4.93.0** by following the runbook end to end, and fix anything in it that turns out wrong or unclear.
+- [x] **Step 1: 🎓 You run this — upgrade 4.92.0 → 4.93.0** by following the runbook end to end, and fix anything in it that turns out wrong or unclear.
+  - **Done 2026-10-17.** Order: `up` on 4.92.0, a pre-upgrade snapshot, then the merge. The pull request had been opened while the stack was down, so it was updated with `main` to re-plan against the running stack first. The apply on merge took about 8 minutes, and `fleet prepare db` ran 21 migrations in about a second. The only errors were `unlock failed` while the old task shut down. The GitOps run installed `fleetctl` 4.93.0. The runbook now says to update the branch before merging.
 - [ ] **Step 2: Check `fleet-terraform`'s newer tags** (`tf-mod-root-*`, the add-ons) and their changelogs, and decide whether to bump them, as their own pull request.
 - [ ] **Step 3: Have Dependabot open the upgrade pull request.** Dependabot can't read the image tag in `fleet.tf`, but it reads Dockerfiles. So:
   - move the tag to a one-line `fleet.Dockerfile` (`FROM fleetdm/fleet:v4.93.0`), and have `fleet.tf` read it (for example, `trimprefix(trimspace(file("${path.module}/fleet.Dockerfile")), "FROM ")`)
@@ -2771,16 +2772,14 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
   - **Now:** Insights → Dependency graph → Dependabot → the `terraform` entry → **Check for updates**, and read its log: it lists every dependency it found. Are the four `fleet-terraform` sources there?
   - **At the next Dependabot pull request, or the next `fleet-terraform` release:** a newer tag should produce a pull request within about two weeks (weekly checks plus the 7-day cooldown). If it doesn't, cover the modules another way, such as a weekly workflow that compares the pinned tags with the latest and opens an issue.
 - [ ] **Step 5: Release notifications for the notes themselves:** on `fleetdm/fleet`, **Watch → Custom → Releases**, so the release notes arrive by email. That repo also publishes releases for other components (such as the agent), so filter on `fleet-v` in the title.
-- [ ] **Step 6: A Claude skill that reviews a Fleet upgrade** (`.claude/skills/fleet-upgrade/SKILL.md`, which Claude Code loads in this repo). Given the current and target versions (from `fleet.Dockerfile` and the pull request), it:
+- [x] **Step 6: A Claude skill that reviews a Fleet upgrade** (`.claude/skills/fleet-upgrade/SKILL.md`, which Claude Code loads in this repo). Given the current and target versions (from `fleet.Dockerfile` and the pull request), it:
   - reads every release in between (GitHub releases and `CHANGELOG.md`) and summarizes what changed, briefly
   - flags **breaking changes and anything we must change**, checked against this setup: the server settings in `fleet.tf`, minimum MySQL and Redis versions against Aurora's and ElastiCache's, the `fleet-terraform` module and add-on versions, the GitOps YAML keys used in the GitOps repo, and CI (`fleetctl`, the GitOps action from Fleet's `fleetctl new` templates)
   - lists what's worth adopting (new features or settings), separately from what's required
   - ends with a verdict (✅ upgrade as is / ⚠️ upgrade with these changes / ❌ wait), and the runbook steps still to do (the snapshot)
   - **compares Fleet's `fleetctl new` template** (`cmd/fleetctl/fleetctl/templates/new` in `fleetdm/fleet`) between the two release tags, and lists what changed in the workflow, the action, `gitops.sh`, the skill and `default.yml`, with what's worth adopting in the GitOps repo. The GitOps repo records which Fleet version its scaffold matches (for example a `fleet-template: v4.93.0` line), so the comparison starts from there, and an adopting pull request updates it.
 
-  Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
-
-- [ ] **Step 7: Widen the skill to run the whole upgrade** (added 2026-10-16, at my request; build it right after the first real upgrade, from what that run actually did rather than from the runbook as written). Invoked by hand only (`disable-model-invocation`), like `/session-start` and `/session-end`, and with the same rule of keeping identifying values out of the conversation. It:
+- [x] **Step 7: Widen the skill to run the whole upgrade** (added 2026-10-16, at my request; build it right after the first real upgrade, from what that run actually did rather than from the runbook as written). Invoked by hand only (`disable-model-invocation`), like `/session-start` and `/session-end`, and with the same rule of keeping identifying values out of the conversation. It:
   - **Reviews:** Step 6's review, covering every release between the two versions, patch releases included (4.92.1-4.92.3 had to be checked separately on the first run).
   - **Picks the order:** reads whether the stack is up, and asks which of the runbook's two orders to use. Either merge while it's down (the teardown snapshot is the restore point), or `up` on the old version, take a fresh snapshot, then merge.
   - **Snapshots:** takes `fleet-homelab-pre-upgrade-<UTC timestamp>` and waits until it's available, only on a yes, since it bills until deleted.
@@ -2789,6 +2788,8 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
   - **On a failed check:** sets out the runbook's rollback (revert, `down`, rebuild from the pre-upgrade snapshot), and runs nothing without a yes.
   - **Cleans up:** reminds that `/session-end` offers to delete the pre-upgrade snapshot once the new version has run cleanly.
   - Updates `docs/upgrading-fleet.md` to point to the skill, and keeps the runbook as the manual way.
+  - **Built 2026-10-17** as `.claude/skills/fleet-upgrade/SKILL.md`, covering Steps 6 and 7, from the first upgrade's run.
+- [ ] **Step 8: Run the skill automatically on upgrade pull requests** (split out of Step 6; waits for Step 3's `fleet.Dockerfile`). When a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
 
 ---
 
