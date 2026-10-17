@@ -332,23 +332,16 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | Item | ~$/month |
 |---|---|
 | What the teardown leaves (above) | $1.40 |
-| The self-hosted Grafana's CloudWatch queries (optional; `GetMetricData`, $0.01 per 1,000 metrics, never in the free tier): ~5 alert rules every 5 minutes ≈ 43,000 metrics. Grafana itself runs on my own hardware, and IAM Roles Anywhere is free | ~$0.50 |
 | Activities webhook: API Gateway, Lambda, DynamoDB (per request; Lambda and DynamoDB stay in the free tier at this volume) | ~$0 |
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
-| **Total** | **~$2 (about $0.06/day); ~$1.40 without Grafana** |
-
-Watch Grafana's query costs: evaluating alert rules every minute instead of
-every five roughly quadruples them (~$2/mo), and a dashboard left open and
-auto-refreshing every minute adds about $5–6/mo.
+| **Total** | **~$1.40 (about $0.05/day)** |
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
-- 50 × $0.27 + ~$2 ≈ **$15/mo**, with or without the optional Grafana (a
-  difference of about $0.50).
+- 50 × $0.27 + ~$1.40 ≈ **$15/mo**.
 
-The hourly cost while up stays about $0.27, since Grafana's queries and the webhook are
-fixed monthly charges; left running for a whole month, everything comes to
-about $207.
+The hourly cost while up stays about $0.27; left running for a whole month,
+everything comes to about $207.
 
 Each extra hour up adds about $0.27; each full day left running adds about
 $6.45. A stack left running is capped at about a day: the nightly 2am
