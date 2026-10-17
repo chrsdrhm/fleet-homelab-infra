@@ -2798,6 +2798,154 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 
 ---
 
+### Task 27: Migrate a Windows device from Intune to Fleet
+
+Added at my request: enroll a Windows device in Intune first, the way a real organization's devices start out, then move it to Fleet with Fleet's automatic Windows MDM migration, and record what moves, what's left behind and what breaks.
+
+**How Fleet's migration works** (Fleet's [Windows MDM guide](https://fleetdm.com/guides/windows-mdm-setup#automatic-windows-mdm-migration), and read from Fleet's source at `fleet-v4.93.0`):
+- It's one setting for all fleets: `controls.windows_migration_enabled: true` in `default.yml`. It requires `enable_turn_on_windows_mdm_manually: false`, which is the default. Fleet Premium only.
+- It only acts on hosts running Fleet's agent (`fleetd`). The server marks a host for migration when it's a Windows workstation (not a server), enrolled in osquery, and reports an MDM that's on and isn't Fleet (`isEligibleForWindowsMDMMigration` in `server/service/orbit.go`).
+- The agent then unenrolls the device from its current MDM with Windows' `UnregisterDeviceWithManagement` API (`orbit/pkg/update/notifications.go`). Once Fleet sees the device has no MDM, the agent enrolls it in Fleet with `RegisterDeviceWithManagement`, the same programmatic enrollment Fleet uses for devices with no MDM. Fleet's guide says this usually takes a few minutes and needs nothing from the person using the device.
+- Known problems, from Fleet's guide: enrollment errors (400 or `0x8018000a`) or locked local accounts caused by leftover enrollment data from the old MDM. The fix is Fleet's [`fix-windows-mdm-migration.ps1`](https://github.com/fleetdm/fleet/blob/main/docs/solutions/windows/scripts/fix-windows-mdm-migration.ps1), a reboot and a refetch. Other management agents (RMM tools) can also interfere.
+
+**Not verified, so this task tests it:**
+- Whether an Entra-joined device whose Intune enrollment came from Entra's automatic enrollment ends up back in Intune after Fleet unenrolls it, and what in Intune or Entra prevents that.
+- What Intune leaves behind after an unenrollment it didn't start: settings it applied, the Intune Management Extension, its device record, and the BitLocker key it escrowed in Entra.
+- What the device shows in Fleet: the MDM status ("On (manual)" is expected for programmatic enrollment) and the activities.
+
+**Prerequisites:** Task 25 done (Fleet 4.93.0); Windows MDM on in Fleet; the stack up; a Windows test VM (Hyper-V works); an Intune license and Entra ID P1 for the test user. Intune's MDM scope (Entra → Mobility (MDM and WIP) → Microsoft Intune) has to include the test user; scope it to a test group, whose membership I set by hand, not to All. If Task 20 Part C has created Fleet's own MDM app in Entra by then, make sure the test user isn't in its scope, so the device enrolls in Intune and not in Fleet. Don't run this between a pre-upgrade snapshot and checking the upgrade (see "Rolling back" in `docs/upgrading-fleet.md`): a rollback would lose the migrated enrollment.
+
+**Files:**
+- Modify: the GitOps repo's `default.yml` (`windows_migration_enabled`).
+- Create or modify: a migration section in the GitOps README or the setup guide, and the spec's MDM section.
+
+- [ ] **Step 1: Enroll the VM in Intune.** Join it to Entra during setup (or later, from Settings → Accounts → Access work or school) as the test user, so Intune's automatic enrollment runs: the most common way real devices are in Intune. Check it in the Intune admin center. To make the migration realistic, give it a little Intune management: one configuration profile (for example a lock-screen message), BitLocker with the key escrowed to Entra, and a Windows Update ring. Record the device's state: Settings → Access work or school, the Intune device record, and the applied settings.
+- [ ] **Step 2: Install Fleet's agent.** Build the MSI with the workstations fleet's enroll secret (Fleet's UI, or `fleetctl package --type=msi`) and install it, or deploy it from Intune as a line-of-business app, which is how an organization would reach every device at once. Check the host shows in Fleet with Intune as its MDM.
+- [ ] **Step 3: Turn on migration through the GitOps repo.** A pull request setting `controls.windows_migration_enabled: true` in `default.yml`; the dry run checks Fleet accepts it. On merge, the GitOps run applies it.
+- [ ] **Step 4: Watch the migration.** Time it, and check: Fleet's activities (MDM unenrolled and enrolled), the host's MDM status in Fleet, Settings → Access work or school on the device, and the device's log (Event Viewer → Applications and Services → Microsoft → Windows → DeviceManagement-Enterprise-Diagnostics-Provider → Admin). If it fails, run Fleet's fix script as above and record the error.
+- [ ] **Step 5: Check what's left behind and what happens next.** Does Intune show the device as unmanaged or stale? Is the Entra join (and sign-in with the Entra account) still working? Are the Intune settings removed or kept? Is the Intune Management Extension still installed? Is the BitLocker key still in Entra, and does Fleet escrow its own? Watch the device for a day for a re-enrollment into Intune. If it happens, find what triggers it (Intune's MDM scope, or a scheduled enrollment task Entra created) and the fix, such as taking the device's user out of Intune's scope or retiring the device record in Intune. Never wipe it from Intune: a wipe resets the VM.
+- [ ] **Step 6: Optional: the other common starting points.** A device enrolled in Intune only, with no Entra join (Settings → Access work or school → Enroll only in device management), and a device that came through Autopilot. Note any difference from Step 4.
+- [ ] **Step 7: Document** the migration runbook: the order (Intune scope, agent, setting, watch, clean up in Intune), the errors seen and their fixes, and what Intune leaves behind. Never commit tenant-specific values.
+- [ ] **Step 8: Contribute back to Fleet** (each one shown to me before it's posted): what Fleet's migration guide doesn't cover yet, such as whether Entra-joined devices go back to Intune and what Intune leaves behind, as an issue or a pull request to `articles/windows-mdm-setup.md`, and a bug report for anything that fails.
+
+---
+
+### Task 28: Deploy a PSADT-wrapped app with Fleet
+
+Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and deploy it through Fleet, silently and from self-service, the way organizations moving from Intune or ConfigMgr often already package their apps.
+
+**What Fleet accepts, and why PSADT needs wrapping** (read from Fleet's docs and source at `fleet-v4.93.0`):
+- Fleet takes one installer file per package. For Windows that's `.msi`, `.exe`, or a `.ps1` script-only package (`deploy-software-packages.md`; `SoftwareInstallerPlatformFromExtension` in `server/fleet/software_installer.go`). A `.tar.gz` is extracted by `fleetd` before the install script runs, but Fleet assigns it to Linux; a plain `.zip` upload is detected as an iOS `.ipa` by its magic bytes (`pkg/file/file.go`). A PSADT package is a folder (`Invoke-AppDeployToolkit.exe`, the module, `Files\`), so it has to become one `.exe` or `.msi`.
+- Fleet reads the software's name and version from the file (an `.exe`'s version resource, an `.msi`'s properties) and uses them to match the package to what the host reports as installed. A wrapper `.exe` must carry the wrapped app's name and version, or Fleet tracks the wrong title.
+- For an `.exe`, Fleet has no default scripts: the install script runs the file at `$env:INSTALLER_PATH`, and the uninstall script gets the name in `$PACKAGE_ID`. **Uninstall scripts run without the installer being downloaded**, so a PSADT uninstall can't run from the package; either the install copies the PSADT folder somewhere that stays (for example under `C:\ProgramData`), or the uninstall uses the app's own uninstaller.
+- Fleet takes the install script's exit code as the result. Fleet's default MSI script treats 0, 3010 (restart needed) and 1641 (restart started) as success; the PSADT install script has to map PSADT's own codes the same way, and decide what a user deferring the install reports.
+- `fleetd` runs install scripts as SYSTEM, with no user session. **Check:** that PSADT 4.x shows its dialogs (close apps, defer, restart) to the signed-in user when started as SYSTEM, without ServiceUI.
+- **What Fleet has said about it** (checked 2026-10-16): a customer asked to deploy PSADT's packages as `.zip` files in [fleetdm/fleet#20950](https://github.com/fleetdm/fleet/issues/20950) (2024). It was closed into a `.zip` feature that only covered Fleet-maintained apps. Their workaround was a script that downloads the `.zip` from S3, extracts it and runs PSADT. `.zip` packages for macOS and Windows are now [fleetdm/fleet#38800](https://github.com/fleetdm/fleet/issues/38800), in the 5.1.0 milestone (due 2026-12-25). Until it ships, Fleet's own suggestion there ([comment of 2026-10-08](https://github.com/fleetdm/fleet/issues/38800), with three linked scripts) is a self-extracting `.exe`: a small C# extractor stub compiled with Windows' built-in `csc.exe`, with the app's name and version as its version resource, so it needs no 7-Zip or other tools. The install script extracts it to `C:\ProgramData\FleetSfx\Staging`, the post-install script runs the `.msi` and handles the extra files, and the uninstall script removes them. It's written for an `.msi` plus files, not for PSADT, so this task adapts it: the post-install runs PSADT instead. No Fleet doc, article or issue describes running PSADT under Fleet.
+- **Conflicting `.tar.gz` guidance:** Fleet's guide for deploying printers on Windows (`articles/deploy-printers-on-windows.md`, 2026-08) has the driver folder uploaded as a `.tar.gz` for Windows hosts, but the code maps `.tar.gz` to Linux, both at `fleet-v4.93.0` and on `main`. If a `.tar.gz` does install on Windows, it's a simpler route for PSADT (no wrapper), so Step 2 tests it first.
+- GitOps mode means the package is defined in the GitOps repo: `software.packages` in `fleets/workstations.yml` pointing at a package YAML in `lib/` with a `url` Fleet downloads from and a `hash_sha256`, or `hash_sha256` alone for a package already added to Fleet through the API (Fleet's YAML reference).
+
+**Prerequisites:** a Windows host running `fleetd` (Task 20 Part B, or Task 27's VM); the stack up.
+
+**Files:**
+- Create in the GitOps repo: `lib/software/<app>.package.yml`, the install and uninstall scripts beside it, and the PSADT deployment script (`Invoke-AppDeployToolkit.ps1`). The vendor's installer and the built wrapper are not committed.
+- Modify in the GitOps repo: `fleets/workstations.yml` (`software.packages`).
+
+- [ ] **Step 1: Pick the app and build the PSADT package.** A free app with an MSI and something for PSADT to do: close the app if it's running (with a deferral), apply a setting after install, and show a message. Start from PSADT's v4 template (`New-ADTTemplate`), and test it on the VM by hand first, silent and interactive.
+- [ ] **Step 2: Make it one file Fleet accepts.** First check whether a `.tar.gz` of the PSADT folder installs on a Windows host (see above). If not, build the self-extracting `.exe` with Fleet's `make-self-extracting-exe.ps1` from #38800, setting its name and version to the app's Add/Remove Programs values. Upload it to Fleet through the API on a test fleet and check the name, version and software title Fleet shows. Record the build steps, so a new app version is a repeatable change.
+- [ ] **Step 3: Write the install and uninstall scripts.** Install: extract the bundle (Fleet's `install-script-example.ps1`); post-install: `Invoke-AppDeployToolkit.exe -DeploymentType Install` (`-DeployMode Silent` or interactive), copy the PSADT folder to a fixed place for later uninstalls, map the exit codes, and print the end of PSADT's log so it shows in Fleet's install output. Uninstall: PSADT's uninstall from the copied folder.
+- [ ] **Step 4: Host it and add it through the GitOps repo.** Choose where Fleet downloads it from (a release asset, or a private S3 location with a presigned URL), or add it through the API and reference it by hash only; then the package YAML with the scripts, `self_service: true`, and labels. The dry run on the pull request checks Fleet accepts it.
+- [ ] **Step 5: Test the deployments.** An install an admin starts from Host details (silent); a self-service install from Fleet Desktop's My device page with the app running, to see the close-apps prompt and a deferral; an uninstall; and a restart-required result. Check Fleet's install output and activities, and PSADT's log on the device.
+- [ ] **Step 6: Optional: automatic install** through a policy that fails when the app is missing, and an upgrade to a newer app version through the same package.
+- [ ] **Step 7: Document** the packaging steps, the scripts, and what PSADT does under Fleet that it doesn't under Intune (and the reverse).
+- [ ] **Step 8: Contribute back to Fleet** (each one shown to me before it's posted):
+  - A comment on [fleetdm/fleet#38800](https://github.com/fleetdm/fleet/issues/38800) with what worked for PSADT: the adapted scripts, the exit-code mapping, and whether its dialogs reach the user from SYSTEM.
+  - An issue for the `.tar.gz` conflict, with what Step 2 found: either Windows `.tar.gz` packages work and the docs should say so, or the printer guide needs fixing.
+  - If the result is solid, a guide pull request in the style of Fleet's `articles/` (for example "Deploy PSAppDeployToolkit apps with Fleet"), from the fork with Fleet's pull request template filled in, as for fleetdm/fleet#55353.
+
+---
+
+### Task 29: Fleet's MCP server with Claude Code
+
+Added at my request. Fleet ships an experimental MCP server ([`cmd/fleet-mcp`](https://github.com/fleetdm/fleet/tree/main/cmd/fleet-mcp), Fleet's [article](https://fleetdm.com/guides/fleet-mcp) of 2026-04-29) that lets an AI client list hosts, read policies, software and vulnerabilities from Fleet's stored inventory, and run live osquery (`prepare_live_query`, then `run_live_query`). It takes `FLEET_BASE_URL`, `FLEET_API_KEY` and an `MCP_AUTH_TOKEN` (at least 32 characters, required even over stdio), and runs over stdio or SSE.
+
+- [ ] **Step 1: Build and run it locally over stdio** for Claude Code, from the Fleet tag that matches the server. Use an API-only user with the **observer** role, so it can read and run live queries but change nothing; the token goes in the local MCP configuration, never in a repo.
+- [ ] **Step 2: Try it** on the devices from Tasks 20, 27 and 28: "is BitLocker on?", "did the PSADT app install?", "which hosts fail the firewall policy?". Note what's useful and what's missing.
+- [ ] **Step 3: Decide on running it in AWS** (SSE behind the ALB) or keeping it local. Local is simpler and exposes nothing new; record the reason.
+- [ ] **Step 4: Document** the setup, and contribute anything Fleet's README doesn't cover yet (each draft shown to me first).
+
+### Task 30: A health-scan skill
+
+Added at my request. Turns Task 21's twelve read-only checks into a Claude Code skill (`.claude/skills/health-scan/SKILL.md`): it runs them while the stack is up, compares the results with the baseline in Task 21, and reports what's new. Run it after every upgrade (the "check the logs" step in `docs/upgrading-fleet.md`) and at the end of a session.
+
+- [ ] **Step 1: Write the skill** from Task 21's checks, with read-only `allowed-tools` (AWS describe and get commands, CloudWatch Logs Insights queries, `curl` to the health endpoints), and the baseline as its reference.
+- [ ] **Step 2: Run it** on the running stack and compare with a manual run of Task 21.
+- [ ] **Step 3: Link it** from `docs/upgrading-fleet.md` and from `/session-end`.
+
+### Task 31: A Windows packaging skill
+
+Added at my request; follows Task 28. A Claude Code skill that, given a vendor installer, produces what Task 28 builds by hand: a PSADT deployment from the v4 template, the self-extracting bundle settings (name and version matching Add/Remove Programs), the install, post-install and uninstall scripts, and the GitOps package YAML.
+
+- [ ] **Step 1: Write the skill** once Task 28 has a working package, from its steps and scripts.
+- [ ] **Step 2: Package a second app with it** and deploy it, to prove it works for more than one.
+- [ ] **Step 3: Consider contributing it** to Fleet, with Task 28's write-up (each draft shown to me first).
+
+### Task 32: An Intune policy migration skill
+
+Added at my request; follows Task 27. Fleet points to a community tool for this: [`intune-to-fleet`](https://github.com/tux234/intune-to-fleet) (`Convert-IntuneToFleetCSP.ps1`, described in Fleet's article [Migrating Intune policies to Fleet with the CSP converter](https://fleetdm.com/guides/migrating-intune-policies-to-fleet-csp-converter)). It runs on an Intune-enrolled device, reads the CSP NodeCache registry for an exported Intune policy, and writes Fleet profiles (SyncML). By its own account it covers about 70-75% of policies; ADMX-backed and complex ones need manual review.
+
+- [ ] **Step 1: Use the tool in Task 27**, before migrating the VM (it needs the device still in Intune): convert the Intune policies Task 27 applied and deploy them through the GitOps repo.
+- [ ] **Step 2: Decide whether a Claude skill adds anything:** for example, reviewing the tool's output, handling what it skips (looking settings up in Microsoft's CSP documentation), working from the Intune export alone without a device, and writing the GitOps YAML. Build it only if Step 1 shows a real gap.
+- [ ] **Step 3: Contribute** fixes or findings to the tool or Fleet's article (each draft shown to me first).
+
+### Task 33: A notification when the nightly teardown runs
+
+Added at my request. If the 2am check tears the stack down, the stack was left up, and nothing tells me. Make the nightly run say so.
+
+- [ ] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
+- [ ] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
+- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section.
+
+### Task 34: An expiry and rotation watch
+
+Added at my request. Several things here expire or age silently. A monthly scheduled workflow checks them and opens an issue 30 days ahead.
+
+**What Fleet has (checked 2026-10-16):** banners in the UI for an expiring APNs certificate, Apple Business and VPP tokens, and the Premium license ([#15974](https://github.com/fleetdm/fleet/issues/15974), [#26477](https://github.com/fleetdm/fleet/issues/26477)). [#9376](https://github.com/fleetdm/fleet/issues/9376) (warn 30 days before the license expires) and [#49842](https://github.com/fleetdm/fleet/issues/49842) (a server log line when an Apple Business token expires, because customers alert from logs, not the UI) are open. I found nothing for Windows MDM certificates, identity-provider certificates or tokens, and no community tool.
+
+**API tokens (read from Fleet's source at `fleet-v4.93.0`, `server/service/sessions.go`):** an API-only user's token never expires (its session duration is set to unlimited); other users' tokens end after `session_duration` without use (5 days by default). So the GitOps repo's `FLEET_API_TOKEN` (an API-only user) doesn't expire. The risk is a token that's never rotated, so the watch reports its age instead.
+
+**What to watch:**
+
+| Item | How to read it | Notes |
+|---|---|---|
+| Fleet Premium license | The `FLEET_LICENSE_KEY` secret is a signed JWT: its `exp` claim | Works with the stack down |
+| Windows MDM (WSTEP) certificate | Its `notAfter`, from Secrets Manager | Needs read access to that one secret |
+| Okta SAML signing certificates | Okta's app metadata (admin app, and Task 20's end-user app) | |
+| Okta Free Plan org | Last admin sign-in | The setup guide says to sign in monthly to keep it active |
+| `CLAUDE_CODE_OAUTH_TOKEN` (both repos) | The secret's last update date | `claude setup-token` tokens last a year |
+| `FLEET_API_TOKEN`, `CLOUDFLARE_API_TOKEN` | The secret's last update date; Cloudflare's token-verify API also returns `expires_on` | Rotation by age |
+| Fleet's Entra MDM app client secret | Its end date in Entra | Once Task 20 Part C exists |
+
+- [ ] **Step 1: Write the workflow** (monthly, plus manual), reading only dates: never print a value, and keep the issue free of identifying details.
+- [ ] **Step 2: Test it** with a short threshold, then set 30 days.
+- [ ] **Step 3: Contribute** what Fleet lacks (each draft shown to me first): for example a comment on #9376 or #49842, or an issue for Windows MDM certificate expiry.
+
+### Task 35: A reminder for kept snapshots
+
+Added at my request. `down.sh` prunes only `fleet-homelab-teardown-*` snapshots (keeping two). Others, like `fleet-homelab-pre-upgrade-*`, are kept on purpose and bill until someone deletes them.
+
+- [ ] **Step 1: A weekly scheduled workflow** (read-only, with the plan role) lists manual snapshots that aren't teardown snapshots and are older than 14 days, and opens or updates one issue listing them with their age and size. It never deletes anything.
+- [ ] **Step 2: Document** it next to the snapshot step in `docs/upgrading-fleet.md`.
+
+### Task 36: CI for the Okta Terraform
+
+Added at my request. `okta/` is the only Terraform applied from a laptop with no pull request plan or review. Give it a plan on pull requests, with the same plan comment and Claude review as the main stack, and keep applying it locally.
+
+- [ ] **Step 1: Decide on the credentials.** The provider signs in as an OAuth service app with a private key. CI would need a second service app with read-only scopes (`okta.apps.read`, `okta.groups.read`) and its key as a GitHub secret, never the apply app's. Weigh that against a public repo's CI holding any Okta credential.
+- [ ] **Step 2: If yes, add a plan job** for `okta/` to `terraform.yml`, triggered by changes under `okta/`, with masking for Okta's identifying values in the comment.
+- [ ] **Step 3: Document** it in `docs/github-setup.md` and the setup guide's Okta step.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2823,3 +2971,13 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 - Two-repo layout: this repo (all tasks except 11, including the `okta/` root from Task 10) + `fleet-homelab-gitops` (Task 11). ✓
 - Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at my request, to learn API Gateway/Lambda): Task 19.
 - Enrolling devices, Windows first: an Okta sign-in at enrollment (a second Okta app), Fleet's agent with local Windows accounts, manual MDM, automatic enrollment through Entra, Autopilot, and federating Entra with Okta: Task 20.
+- Migrating a Windows device from Intune to Fleet with Fleet's automatic Windows MDM migration (`windows_migration_enabled`): Task 27.
+- Deploying a PSADT-wrapped Windows app through Fleet (one wrapper file, install and uninstall scripts, silent and self-service): Task 28.
+- Fleet's MCP server with Claude Code (local, observer role): Task 29.
+- A health-scan skill built from Task 21: Task 30.
+- A Windows packaging skill, from Task 28: Task 31.
+- Migrating Intune policies (Fleet's community converter, and maybe a skill): Task 32.
+- A notification when the nightly teardown runs: Task 33.
+- An expiry and rotation watch (license, certificates, tokens): Task 34.
+- A reminder for kept snapshots: Task 35.
+- CI for the Okta Terraform (plan only): Task 36.
