@@ -2780,6 +2780,15 @@ Added at my request. Fleet is self-hosted, so upgrades are ours, and Dependabot 
 
   Then run it automatically: when a pull request changes `fleet.Dockerfile`, the Claude review workflow uses the skill and posts the summary on the pull request. It needs `WebFetch(domain:github.com)` and `raw.githubusercontent.com`, which the review already allows. Fleet's own releases describe themselves, so the skill shouldn't guess: if a release note is unclear, it says so and links it.
 
+- [ ] **Step 7: Widen the skill to run the whole upgrade** (added 2026-10-16, at my request; build it right after the first real upgrade, from what that run actually did rather than from the runbook as written). Invoked by hand only (`disable-model-invocation`), like `/session-start` and `/session-end`, and with the same rule of keeping identifying values out of the conversation. It:
+  - **Reviews:** Step 6's review, covering every release between the two versions, patch releases included (4.92.1-4.92.3 had to be checked separately on the first run).
+  - **Picks the order:** reads whether the stack is up, and asks which of the runbook's two orders to use. Either merge while it's down (the teardown snapshot is the restore point), or `up` on the old version, take a fresh snapshot, then merge.
+  - **Snapshots:** takes `fleet-homelab-pre-upgrade-<UTC timestamp>` and waits until it's available, only on a yes, since it bills until deleted.
+  - **Opens the pull request:** the tag bump and the spec line, with a body summarizing the release notes (as infra #65 did). Once Step 3 moves the tag to `fleet.Dockerfile`, Dependabot opens it instead, and this step reviews that pull request.
+  - **Checks after the merge:** watches the apply on merge, confirms `/api/v1/fleet/version`, checks Fleet's logs for migration errors (Task 30's health scan, once it exists), and watches the GitOps run that installs the matching `fleetctl`.
+  - **On a failed check:** sets out the runbook's rollback (revert, `down`, rebuild from the pre-upgrade snapshot), and runs nothing without a yes.
+  - **Cleans up:** reminds that `/session-end` offers to delete the pre-upgrade snapshot once the new version has run cleanly.
+  - Updates `docs/upgrading-fleet.md` to point to the skill, and keeps the runbook as the manual way.
 
 ---
 
@@ -2962,7 +2971,7 @@ Added at my request. `okta/` is the only Terraform applied from a laptop with no
 - Architecture diagram in the README (Mermaid): Task 22.
 - Deep dive into how Fargate runs Fleet and where its image comes from: Task 23.
 - Hands-on inside Aurora and Redis (a tools container through ECS Exec): Task 24.
-- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes): Task 25.
+- Upgrading Fleet (runbook in `docs/upgrading-fleet.md`, first run 4.92.0 → 4.93.0; Dependabot opens the upgrade pull request, release notifications, and a Claude skill that reviews the release notes and runs the whole upgrade): Task 25.
 - A pull request comment for the Fleet GitOps dry run (verdict, what changes by name, Fleet's output): Task 26.
 - Remote (non-laptop) execution of `up`/`down` via GitHub Actions OIDC, no long-lived AWS keys in GitHub: Task 15. ✓
 - Full GitOps loop for infra (PR shows plan, merge updates the source of truth and applies it while the stack is up): Task 16, with apply on merge added 2026-10-11. ✓
