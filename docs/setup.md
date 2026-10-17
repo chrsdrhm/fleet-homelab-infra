@@ -155,7 +155,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 | Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it at 2am if the stack is still up (see below to change or skip it). |
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
-| Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md) |
+| Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md), or run `/fleet-upgrade` in Claude Code |
 
 With [Claude Code](https://claude.com/claude-code), `/session-start` and `/session-end` (in `.claude/skills/`) do the routine around these: check sign-ins, open pull requests and runs in progress, run `up` or `down`, check the result, and handle the nightly teardown and leftover snapshots. They ask before setting the teardown variable or deleting anything, and `/session-end` asks before tearing down.
 
