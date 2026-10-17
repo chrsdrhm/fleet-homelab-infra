@@ -75,7 +75,7 @@ A hash fully hides a long random value such as a token. A guessable value such a
 |---|---|
 | You rotate the Cloudflare token, WAF header, license key or Okta key | `check.py --from-tfvars`, then `sync-hashes.sh` |
 | The hostname, domain, state bucket, Okta org or AWS account changes | Same |
-| You add an identifying value that isn't in the tfvars (e.g. a Grafana workspace ID) | `check.py --add "grafana workspace id"` (prompts, no echo), then `sync-hashes.sh` |
+| You add an identifying value that isn't in the tfvars (e.g. a Roles Anywhere trust anchor ID) | `check.py --add "trust anchor id"` (prompts, no echo), then `sync-hashes.sh` |
 | A value is gone for good | `check.py --remove "label"`, then `sync-hashes.sh` |
 | You want to see what's covered | `check.py --list` (labels only) |
 | The local file is lost | `check.py --from-tfvars`, then re-add any extras, then `sync-hashes.sh` |
