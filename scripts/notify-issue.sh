@@ -9,16 +9,21 @@
 #   notify-issue.sh resolve "<title>" "<comment>"   close the open one, if any
 #
 # Needs GH_TOKEN with issues: write and GITHUB_REPOSITORY. Never put identifying values in
-# a body: issues are public.
+# a body: issues are public. Only issues opened by NOTIFY_AUTHOR (the workflow's own
+# GitHub Actions bot, as `gh` names it) count: in a public repo anyone can open an issue
+# with the same title, and this must never comment on, rewrite or close theirs.
 set -euo pipefail
 
 mode="${1:?mode}" title="${2:?title}" arg="${3:?body file or comment}"
 repo="${GITHUB_REPOSITORY:?}"
+author="${NOTIFY_AUTHOR:-app/github-actions}"
 
-# The open issue with exactly this title, if any. Listed, not searched: GitHub's search
-# index lags, so a search can miss an issue opened moments ago, or find one just closed.
-number=$(gh issue list --repo "$repo" --state open --limit 200 --json number,title \
-  | jq -r --arg t "$title" 'map(select(.title == $t)) | first | .number // empty')
+# The open issue with exactly this title, opened by $author, if any. Listed, not searched:
+# GitHub's search index lags, so a search can miss an issue opened moments ago, or find
+# one just closed.
+number=$(gh issue list --repo "$repo" --state open --limit 200 --json number,title,author \
+  | jq -r --arg t "$title" --arg a "$author" \
+    'map(select(.title == $t and .author.login == $a)) | first | .number // empty')
 
 case "$mode" in
   report)

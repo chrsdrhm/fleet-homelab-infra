@@ -2909,13 +2909,13 @@ Added at my request; follows Task 27. Fleet points to a community tool for this:
 
 ### Task 33: A notification when the nightly teardown runs
 
-
-**Built 2026-10-17.** The channel is a GitHub issue, which needs no new secret. The nightly `apply` job opens "The nightly check tore down the stack", or comments on it if it's already open, after a nightly `down` (also when the `down` fails, saying so). It @-mentions the owner, through `scripts/notify-issue.sh`, with `issues: write` on that job only. `/session-start` offers to close it. The helper was tested against the repo with a throwaway issue (create, quiet body update, comment, close, then deleted). It lists issues rather than searching, because GitHub's search index lags and found a just-closed issue in the first test. The nightly path itself runs for real only at 2am.
 Added at my request. If the 2am check tears the stack down, the stack was left up, and nothing tells me. Make the nightly run say so.
+
+**Built 2026-10-17.** The channel is a GitHub issue, which needs no new secret. The nightly `apply` job opens "The nightly check tore down the stack", or comments on it if it's already open, after a nightly `down` (also when the `down` fails, saying so). It @-mentions the owner, through `scripts/notify-issue.sh`, with `issues: write` on that job only. `/session-start` offers to close it. The helper was tested against the repo with a throwaway issue (create, quiet body update, comment, close, then deleted). It lists issues rather than searching, because GitHub's search index lags and found a just-closed issue in the first test. It acts only on issues opened by GitHub Actions: in a public repo anyone can open an issue with the same title, and the nightly run must not comment on, rewrite or close theirs. The nightly path itself runs for real only at 2am.
 
 - [x] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
 - [x] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
-- [x] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section.
+- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. (Still open: the helper is tested and the docs are done, but the nightly path itself first runs for real the next time the stack is left up at 2am.)
 
 ### Task 34: An expiry and rotation watch
 
@@ -2943,12 +2943,12 @@ Added at my request. Several things here expire or age silently. A monthly sched
 
 ### Task 35: A reminder for kept snapshots
 
-
-**Built 2026-10-17, differently from Step 1:** the plan role only trusts pull request runs, so a scheduled workflow can't use it without an IAM change applied locally. Instead, the nightly `apply` job, already signed in with the apply role every night, gets one more step. It lists manual snapshots that aren't `fleet-homelab-teardown-*` and are at least 14 days old, and keeps one issue ("Kept snapshots older than 14 days") up to date: opened when there are some, its body quietly replaced when the list changes, and closed when none are left. An AWS error fails the step rather than closing the issue. It never deletes anything. The filter and age formatting were tested against the real snapshot list.
 Added at my request. `down.sh` prunes only `fleet-homelab-teardown-*` snapshots (keeping two). Others, like `fleet-homelab-pre-upgrade-*`, are kept on purpose and bill until someone deletes them.
 
+**Built 2026-10-17, differently from Step 1:** the plan role only trusts pull request runs, so a scheduled workflow can't use it without an IAM change applied locally. Instead, the nightly `apply` job, already signed in with the apply role every night, gets one more step. It lists manual snapshots that aren't `fleet-homelab-teardown-*` and are at least 14 days old, and keeps one issue ("Kept snapshots older than 14 days") up to date: opened when there are some, its body quietly replaced when the list changes, and closed when none are left. An AWS error fails the step rather than closing the issue. It never deletes anything. The filter and age formatting were tested against the real snapshot list.
+
 - [x] **Step 1: A weekly scheduled workflow** (read-only, with the plan role) lists manual snapshots that aren't teardown snapshots and are older than 14 days, and opens or updates one issue listing them with their age and size. It never deletes anything.
-- [x] **Step 2: Document** it next to the snapshot step in `docs/upgrading-fleet.md`.
+- [x] **Step 2: Document** it next to the snapshot step in `docs/upgrading-fleet.md` (and in the setup guide's Day to day).
 
 ### Task 36: CI for the Okta Terraform
 

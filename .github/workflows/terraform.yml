@@ -574,6 +574,7 @@ jobs:
           if [ -z "$old" ]; then
             ./scripts/notify-issue.sh resolve "$title" "None left; closing."
           else
+            # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
             {
               printf '@%s These Aurora snapshots are not teardown snapshots, so `down.sh` keeps them, and each bills until deleted:\n\n%s\n' "$OWNER" "$old"
               printf 'Delete one once you no longer need it (after an upgrade has run cleanly, say), with `/session-end` or:\n\n'
