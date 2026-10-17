@@ -69,7 +69,7 @@ module "fleet" {
   }
 
   fleet_config = {
-    image = "fleetdm/fleet:v4.92.0"
+    image = "fleetdm/fleet:v4.93.0"
     cpu   = 512
     mem   = 4096
 
