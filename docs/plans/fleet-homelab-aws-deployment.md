@@ -2798,6 +2798,37 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 
 ---
 
+### Task 27: Migrate a Windows device from Intune to Fleet
+
+Added at my request: enroll a Windows device in Intune first, the way a real organization's devices start out, then move it to Fleet with Fleet's automatic Windows MDM migration, and record what moves, what's left behind and what breaks.
+
+**How Fleet's migration works** (Fleet's [Windows MDM guide](https://fleetdm.com/guides/windows-mdm-setup#automatic-windows-mdm-migration), and read from Fleet's source at `fleet-v4.93.0`):
+- It's one setting for all fleets: `controls.windows_migration_enabled: true` in `default.yml`. It requires `enable_turn_on_windows_mdm_manually: false`, which is the default. Fleet Premium only.
+- It only acts on hosts running Fleet's agent (`fleetd`). The server marks a host for migration when it's a Windows workstation (not a server), enrolled in osquery, and reports an MDM that's on and isn't Fleet (`isEligibleForWindowsMDMMigration` in `server/service/orbit.go`).
+- The agent then unenrolls the device from its current MDM with Windows' `UnregisterDeviceWithManagement` API (`orbit/pkg/update/notifications.go`). Once Fleet sees the device has no MDM, the agent enrolls it in Fleet with `RegisterDeviceWithManagement`, the same programmatic enrollment Fleet uses for devices with no MDM. Fleet's guide says this usually takes a few minutes and needs nothing from the person using the device.
+- Known problems, from Fleet's guide: enrollment errors (400 or `0x8018000a`) or locked local accounts caused by leftover enrollment data from the old MDM. The fix is Fleet's [`fix-windows-mdm-migration.ps1`](https://github.com/fleetdm/fleet/blob/main/docs/solutions/windows/scripts/fix-windows-mdm-migration.ps1), a reboot and a refetch. Other management agents (RMM tools) can also interfere.
+
+**Not verified, so this task tests it:**
+- Whether an Entra-joined device whose Intune enrollment came from Entra's automatic enrollment ends up back in Intune after Fleet unenrolls it, and what in Intune or Entra prevents that.
+- What Intune leaves behind after an unenrollment it didn't start: settings it applied, the Intune Management Extension, its device record, and the BitLocker key it escrowed in Entra.
+- What the device shows in Fleet: the MDM status ("On (manual)" is expected for programmatic enrollment) and the activities.
+
+**Prerequisites:** Task 25 done (Fleet 4.93.0); Windows MDM on in Fleet; the stack up; a Windows test VM (Hyper-V works); an Intune license and Entra ID P1 for the test user. Intune's MDM scope (Entra → Mobility (MDM and WIP) → Microsoft Intune) has to include the test user; scope it to a test group, whose membership I set by hand, not to All. If Task 20 Part C has created Fleet's own MDM app in Entra by then, make sure the test user isn't in its scope, so the device enrolls in Intune and not in Fleet. Don't run this between a pre-upgrade snapshot and checking the upgrade (see "Rolling back" in `docs/upgrading-fleet.md`): a rollback would lose the migrated enrollment.
+
+**Files:**
+- Modify: the GitOps repo's `default.yml` (`windows_migration_enabled`).
+- Create or modify: a migration section in the GitOps README or the setup guide, and the spec's MDM section.
+
+- [ ] **Step 1: Enroll the VM in Intune.** Join it to Entra during setup (or later, from Settings → Accounts → Access work or school) as the test user, so Intune's automatic enrollment runs: the most common way real devices are in Intune. Check it in the Intune admin center. To make the migration realistic, give it a little Intune management: one configuration profile (for example a lock-screen message), BitLocker with the key escrowed to Entra, and a Windows Update ring. Record the device's state: Settings → Access work or school, the Intune device record, and the applied settings.
+- [ ] **Step 2: Install Fleet's agent.** Build the MSI with the workstations fleet's enroll secret (Fleet's UI, or `fleetctl package --type=msi`) and install it, or deploy it from Intune as a line-of-business app, which is how an organization would reach every device at once. Check the host shows in Fleet with Intune as its MDM.
+- [ ] **Step 3: Turn on migration through the GitOps repo.** A pull request setting `controls.windows_migration_enabled: true` in `default.yml`; the dry run checks Fleet accepts it. On merge, the GitOps run applies it.
+- [ ] **Step 4: Watch the migration.** Time it, and check: Fleet's activities (MDM unenrolled and enrolled), the host's MDM status in Fleet, Settings → Access work or school on the device, and the device's log (Event Viewer → Applications and Services → Microsoft → Windows → DeviceManagement-Enterprise-Diagnostics-Provider → Admin). If it fails, run Fleet's fix script as above and record the error.
+- [ ] **Step 5: Check what's left behind and what happens next.** Does Intune show the device as unmanaged or stale? Is the Entra join (and sign-in with the Entra account) still working? Are the Intune settings removed or kept? Is the Intune Management Extension still installed? Is the BitLocker key still in Entra, and does Fleet escrow its own? Watch the device for a day for a re-enrollment into Intune. If it happens, find what triggers it (Intune's MDM scope, or a scheduled enrollment task Entra created) and the fix, such as taking the device's user out of Intune's scope or retiring the device record in Intune. Never wipe it from Intune: a wipe resets the VM.
+- [ ] **Step 6: Optional: the other common starting points.** A device enrolled in Intune only, with no Entra join (Settings → Access work or school → Enroll only in device management), and a device that came through Autopilot. Note any difference from Step 4.
+- [ ] **Step 7: Document** the migration runbook: the order (Intune scope, agent, setting, watch, clean up in Intune), the errors seen and their fixes, and what Intune leaves behind. Never commit tenant-specific values.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -2823,3 +2854,4 @@ Added at my request: make a GitOps pull request show what it changes in Fleet, t
 - Two-repo layout: this repo (all tasks except 11, including the `okta/` root from Task 10) + `fleet-homelab-gitops` (Task 11). ✓
 - Fleet activities webhook -> Lambda -> DynamoDB -> Grafana (added at my request, to learn API Gateway/Lambda): Task 19.
 - Enrolling devices, Windows first: an Okta sign-in at enrollment (a second Okta app), Fleet's agent with local Windows accounts, manual MDM, automatic enrollment through Entra, Autopilot, and federating Entra with Okta: Task 20.
+- Migrating a Windows device from Intune to Fleet with Fleet's automatic Windows MDM migration (`windows_migration_enabled`): Task 27.
