@@ -171,7 +171,7 @@ Non-goals above.
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional), delivered through SNS, plus a read-only health scan runbook (plan Task 21) |
+| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan runbook (plan Task 21) and the nightly run's issues (a failed teardown, kept snapshots) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
@@ -278,8 +278,7 @@ Two separate log streams, not one:
 
 One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
-$100/mo target: well above the expected ~$25/mo (~$15 without the optional
-Grafana workspace), so in practice the alerts
+$100/mo target: well above the expected ~$15/mo, so in practice the alerts
 catch a stack left running (about $6.45 a day), as a backstop to the nightly
 2am teardown. Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
@@ -333,27 +332,16 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | Item | ~$/month |
 |---|---|
 | What the teardown leaves (above) | $1.40 |
-| Amazon Managed Grafana, one admin (optional) | $9.00 |
-| Grafana's CloudWatch queries (`GetMetricData`, $0.01 per 1,000 metrics, never in the free tier): ~5 alert rules every 5 minutes ≈ 43,000 metrics | ~$0.50 |
-| SNS email for Grafana alerts (the first 1,000 a month are free) | $0 |
 | Activities webhook: API Gateway, Lambda, DynamoDB (per request; Lambda and DynamoDB stay in the free tier at this volume) | ~$0 |
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
-| **Total** | **~$11 (about $0.37/day); ~$2 without Grafana** |
-
-Watch two Grafana costs: evaluating alert rules every minute instead of every
-five roughly quadruples the query cost (~$2/mo), and a dashboard left open
-and auto-refreshing every minute adds about $5–6/mo in queries. Each extra
-active Grafana user adds $9 (editor) or $5 (viewer) a month.
+| **Total** | **~$1.40 (about $0.05/day)** |
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
-- **With Grafana:** 50 × $0.27 + $11 ≈ **$25/mo**, the number that matters
-  for this deployment.
-- **Without the optional Grafana:** 50 × $0.27 + $1.40 ≈ **$15/mo**.
+- 50 × $0.27 + ~$1.40 ≈ **$15/mo**.
 
-The hourly cost while up stays about $0.27, since Grafana and the webhook are
-fixed monthly charges; left running for a whole month, everything comes to
-about $207.
+The hourly cost while up stays about $0.27; left running for a whole month,
+everything comes to about $207.
 
 Each extra hour up adds about $0.27; each full day left running adds about
 $6.45. A stack left running is capped at about a day: the nightly 2am
@@ -547,41 +535,32 @@ catches up.
 
 ## Dashboard (Grafana) — optional
 
-**Amazon Managed Grafana (AMG)**, in its own Terraform root (`grafana/`, own
-state key, applied locally like `okta/`). It is **optional**: the main stack,
-`up`/`down` and CI never reference it, so anyone reusing this repo can leave
-it out by not applying that root. The Okta side is optional the same way
-(created only when the workspace endpoint is given to `okta/`).
+**Self-hosted Grafana OSS on my Proxmox host**, not in AWS (since
+2026-10-17; it replaced an Amazon Managed Grafana design that cost about
+$9/month whether used or not). The repo's `grafana/` folder holds what's
+needed to run it anywhere Docker runs: a Compose file with the image pinned,
+provisioned data sources and alert rules, and the dashboards as code. It is
+**optional**: the main stack, `up`/`down` and CI never reference it.
 
-- **Always on.** AWS bills per active user per month with a one-editor minimum
-  per workspace, about **$9/month** for a single admin, whether or not the
-  Fleet stack is up. It is not torn down with the stack: the charge is per
-  active user per month, not per hour, so any month with a login costs $9
-  however long the workspace exists (AWS does not document charges for a
-  workspace that exists only part of a month). Tearing it down each session
-  would also give it a new workspace ID, which breaks the Okta app until
-  `okta/` is re-applied, and would lose the hand-built dashboards and alert
-  rules. Deleting it only saves money for whole months without use. While the stack is down, CloudWatch
-  history (15 months) stays visible and the Fleet panels show no data. API keys
-  and service accounts are billed like users, so the design uses none (panels
-  are built by hand, which suits the goal of learning Grafana).
-- **No stored AWS credentials.** The workspace reads CloudWatch through an IAM
-  role (`fleet-homelab-grafana`). This replaces the earlier design's static
-  CloudWatch access key, which was the plan's one long-lived AWS credential,
-  and its SES-SMTP IAM user.
-- **Sign-in through Okta**, with the same rule as Fleet: two groups (Grafana
-  Admins, Grafana Viewers) assigned to an Okta "Amazon Managed Grafana" app,
-  membership set by hand, a role attribute that maps to Admin or Viewer, and
-  Okta refusing anyone in neither group.
-- **Data sources:** CloudWatch (ALB, ECS, Aurora and Redis metrics) and Fleet's
-  REST API through the Infinity plugin (installed with AMG's plugin
-  management), using a read-only API-only Fleet user's token. That token is a
-  Fleet credential, read-only and revocable, not an AWS one.
-- **Alerting:** AMG's contact points are SNS, PagerDuty, Slack and VictorOps
-  (no email/SMTP), so alerts go to an SNS topic with an email subscription.
-  Rules treat no data as OK, because a torn-down stack is the normal state, and
-  a "stack left running" rule catches forgotten teardowns hours before the
-  budget alert would.
+- **Always on, at home.** It runs in a small LXC container on the LAN, with
+  no inbound access from the internet. While the stack is down, CloudWatch
+  history (15 months) stays visible and the Fleet panels show no data.
+- **No stored AWS credentials.** It reads CloudWatch with temporary
+  credentials from **IAM Roles Anywhere**: the host holds an X.509
+  certificate from a small private CA, which `aws_signing_helper` (a
+  `credential_process`) trades for a session on one read-only role. The
+  trust anchor, profile and role are the only AWS parts, free, and applied
+  locally. A read-only access key kept only on the host is the fallback if
+  Roles Anywhere proves not worth it.
+- **Sign-in:** Grafana's local admin, on the LAN. Okta sign-in through OIDC
+  is optional later (SAML is Grafana Enterprise only).
+- **Data sources:** CloudWatch (ALB, ECS, Aurora and Redis metrics) and
+  Fleet's REST API through the Infinity plugin, using a read-only,
+  API-only Fleet user's token, kept in the host's `.env`, never in the repo.
+- **Alerting:** Grafana's own contact points (a push service such as ntfy
+  or Pushover, or SMTP through my own mail provider), so alerts need no AWS
+  credentials. Rules treat no data as OK, because a torn-down stack is the
+  normal state.
 
 **Up/down status board first**: the dashboard's main job is showing at a
 glance whether each part of the Fleet stack is up — a Fleet `/healthz`
@@ -593,7 +572,8 @@ the time by design, a red board usually means "torn down on purpose".
 
 - **`fleet-homelab-infra`** (this repo) — Terraform config referencing the
   `fleet-terraform` root module and addons, the separate `okta/` root for the
-  Okta side and the optional `grafana/` root (both applied locally), the
+  Okta side (applied locally), the optional self-hosted Grafana's
+  configuration in `grafana/` (not applied to AWS), the
   `up`/`down` operational scripts, and one GitHub Actions workflow
   (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
   merges, `apply` for on-demand up/down and a nightly 2am check that
