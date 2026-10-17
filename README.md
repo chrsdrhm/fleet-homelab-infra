@@ -15,7 +15,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned, and merging it applies the change while the stack is up; the checks live in [`checks/`](checks/README.md). Optionally, an AI reviews each pull request too: Claude with a Claude subscription, or GitHub Copilot or another tool instead. With Claude, comment `@claude` on a pull request to review its latest commit again (see [GitHub setup](docs/github-setup.md#6-optional-claude-reviews-pull-requests)).
-- **Observability (optional):** an Amazon Managed Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It's a separate Terraform root, so you can leave it out (see [Cost](#cost)).
+- **Observability (optional):** a Grafana dashboard with alerts, showing infrastructure health and Fleet asset data. It runs self-hosted (mine is on a Proxmox host at home), not in AWS. The repo holds its Docker Compose file, data source and alert settings and the dashboard code, and it reads CloudWatch with short-lived credentials (IAM Roles Anywhere), so no AWS key is stored.
 
 ## Getting started
 
@@ -23,7 +23,7 @@ To build this in your own AWS account, follow the [setup guide](docs/setup.md): 
 
 ## Cost
 
-Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana dashboard isn't torn down with the stack: it stays up all the time and adds about **$10 a month**, so about **$25 a month** with it. Two things catch a stack I forget to tear down: a nightly check brings it down if it's still up at 2am, so forgetting costs at most about a day (around $7), and a $100 AWS Budget emails me at every $10 of spend. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
+Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. The optional Grafana runs on my own hardware, so it adds only its CloudWatch queries, well under $1 a month. Two things catch a stack I forget to tear down: a nightly check brings it down if it's still up at 2am, so forgetting costs at most about a day (around $7), and a $100 AWS Budget emails me at every $10 of spend. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
 ## Teardown and rebuild
 
@@ -51,7 +51,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 |---|---|
 | `*.tf` | The Terraform configuration: AWS, plus the optional Cloudflare delegation (`cloudflare.tf`) |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
-| `grafana/` | Optional. The Amazon Managed Grafana workspace, its IAM role and alert topic (its own Terraform root, applied locally) |
+| `grafana/` | Optional, not applied to AWS. The self-hosted Grafana: Docker Compose, provisioned data sources and alert rules, and the dashboard code |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
