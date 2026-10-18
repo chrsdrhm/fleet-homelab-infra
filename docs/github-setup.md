@@ -40,7 +40,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 
 | Variable | Repo | What it does |
 |---|---|---|
-| `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly 2am teardown skips until then (see **Nightly teardown** below). |
+| `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly teardown skips until then (see **Nightly teardown** below). |
 | `CLAUDE_REVIEW_MODEL` | either | Pins the Claude review's model; without it, your plan's default (step 6). |
 
 ## 2. Repository settings
@@ -81,14 +81,14 @@ gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
   --description "Accept a plan that destroys or replaces a resource that holds data"
 ```
 
-**Nightly teardown.** With CI set up, the Terraform workflow checks every night at 2am and runs `down` if the stack is still up. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the 2am check the next morning brings it down as usual. Delete the variable when you're done:
+**Nightly teardown.** With CI set up, the Terraform workflow checks every night (07:17 UTC: 2:17am Chicago time, 1:17am in winter) and runs `down` if the stack is still up, as long as GitHub starts it before 8am in Chicago. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the check the next night brings it down as usual. Delete the variable when you're done:
 
 ```bash
-gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homelab-infra   # up through Wednesday the 14th; down at 2am on the 15th
+gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homelab-infra   # up through Wednesday the 14th; down early on the 15th
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
-The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one listing kept snapshots older than 14 days, and one when a newer Fleet release is out (see the setup guide's [Day to day](setup.md#9-day-to-day)). Leave **Issues** turned on in the repo's settings for them.
+The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when the nightly check starts too late to tear down a stack that's up, one listing kept snapshots older than 14 days, and one when a newer Fleet release is out (see the setup guide's [Day to day](setup.md#9-day-to-day)). Leave **Issues** turned on in the repo's settings for them.
 
 GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 

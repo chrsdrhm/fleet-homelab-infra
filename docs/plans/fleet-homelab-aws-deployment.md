@@ -2915,6 +2915,12 @@ Added at my request. If the 2am check tears the stack down, the stack was left u
 - [x] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
 - [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. (Still open: the helper is tested and the docs are done, but the nightly path itself first runs for real the next time the stack is left up at 2am.)
 
+**Widened 2026-10-18, at my request:** GitHub started both scheduled checks of 2026-10-18 almost 5 hours late (7:03am and 7:36am Chicago), both outside the 2:00-5:59am window, so neither acted and the stack stayed up all night without a word. The two delays were within half an hour of each other, so a third schedule wouldn't have helped. Now:
+- **One schedule,** 07:17 UTC (2:17am Chicago in summer, 1:17am in winter), instead of two times with a daylight-saving check.
+- **The window is midnight to 7:59am** in Chicago: a check that starts in it tears a stack that's up down.
+- **Later than that, it reports:** the run still signs in to AWS, and if the stack is up it opens (or comments on) "The nightly teardown didn't run", with the run link. A successful `down`, or a scheduled check that finds the stack down, closes it. `AUTO_DOWN_SKIP_UNTIL` is checked first, so a skipped night stays quiet.
+- The kept-snapshot and release checks run on late nights too.
+
 ### Task 34: An expiry and rotation watch
 
 Added at my request. Several things here expire or age silently. A monthly scheduled workflow checks them and opens an issue 30 days ahead.

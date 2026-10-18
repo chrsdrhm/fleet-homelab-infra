@@ -152,7 +152,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 
 | To | Run |
 |---|---|
-| Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it at 2am if the stack is still up (see below to change or skip it). |
+| Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it overnight if the stack is still up (see below to change or skip it). |
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md), or run `/fleet-upgrade` in Claude Code |
@@ -160,7 +160,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 With [Claude Code](https://claude.com/claude-code), `/session-start` and `/session-end` (in `.claude/skills/`) do the routine around these: check sign-ins, open pull requests and runs in progress, run `up` or `down`, check the result, and handle the nightly teardown and leftover snapshots. They ask before setting the teardown variable or deleting anything, and `/session-end` asks before tearing down.
 
 **Changing the nightly teardown.** It's the `schedule` in `.github/workflows/terraform.yml`:
-- **Another time:** cron is in UTC, so the workflow lists two times (07:17 and 08:17 UTC) and its "Decide what to run" step acts only on the one that's 2am in `America/Chicago`. Change both times and the time zone there; for a zone without daylight saving, one time is enough.
+- **Another time:** cron is in UTC and ignores daylight saving, so 07:17 UTC is 2:17am in Chicago in summer and 1:17am in winter. GitHub often starts scheduled runs late, sometimes by hours, so the "Decide what to run" step tears down only if the run starts between midnight and 7:59am in `America/Chicago`; later than that, it leaves the stack up and opens an issue, "The nightly teardown didn't run", which closes once a teardown succeeds or a later check finds the stack down. Change the cron time, and the time zone and hours in that step.
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the `schedule` block.
 

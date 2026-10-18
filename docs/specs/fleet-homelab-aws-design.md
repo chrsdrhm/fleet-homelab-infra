@@ -280,7 +280,7 @@ One `aws_budgets_budget` (COST type, monthly), notifying
 the configured budget-alert email address (a gitignored variable, since this repo is public) at every $10 of actual spend from $10 to $100 (ten alerts) against a
 $100/mo target: well above the expected ~$15/mo, so in practice the alerts
 catch a stack left running (about $6.45 a day), as a backstop to the nightly
-2am teardown. Budget data refreshes only a
+teardown. Budget data refreshes only a
 few times a day, so this is a within-a-day alarm, not a real-time one. Budgets
 without actions are free.
 
@@ -344,7 +344,7 @@ The hourly cost while up stays about $0.27; left running for a whole month,
 everything comes to about $207.
 
 Each extra hour up adds about $0.27; each full day left running adds about
-$6.45. A stack left running is capped at about a day: the nightly 2am
+$6.45. A stack left running is capped at about a day: the nightly
 check (see Remote execution) tears it down if it's still up, so forgetting
 costs at most about $6.45, not $207.
 
@@ -576,9 +576,10 @@ the time by design, a red board usually means "torn down on purpose".
   configuration in `grafana/` (not applied to AWS), the
   `up`/`down` operational scripts, and one GitHub Actions workflow
   (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down and a nightly 2am check that
-  tears the stack down if it was left up and keeps an issue listing kept
-  snapshots older than 14 days; a failed `down` of either kind opens an issue
+  merges, `apply` for on-demand up/down and a nightly check (07:17 UTC; it
+  acts until 7:59am Chicago time, and only reports, in an issue, if GitHub
+  starts it later) that tears the stack down if it was left up and keeps an
+  issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that
   drives them remotely.
