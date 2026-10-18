@@ -1323,7 +1323,8 @@ Run: `terraform apply tfplan`
 Run: `aws budgets describe-budget --account-id $(aws sts get-caller-identity --query Account --output text) --budget-name fleet-homelab-monthly --query 'Budget.{limit:BudgetLimit,notifications:NotificationsWithSubscribers[].Notification.Threshold}'`
 Expected: `limit` shows `100 USD`; `notifications` lists `[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]` (all `ABSOLUTE_VALUE`). Also confirm the address is subscribed: `aws budgets describe-subscribers-for-notification --account-id <acct> --budget-name fleet-homelab-monthly --notification NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=10,ThresholdType=ABSOLUTE_VALUE`.
 
-- [ ] **Step 5: Check the inbox once.** Whether directly-listed Budgets email recipients need a confirmation click is unclear — an independent review said no, and AWS's own docs and search results conflict on it, so this isn't asserted either way. Look in `the budget alert address` (including spam) for an "AWS Notification - Subscription Confirmation" email and click confirm if one arrives; if none does, nothing further is needed. Budgets emails also don't depend on SES or on the Fleet stack being up.
+- [x] **Step 5: Check the inbox once.** Whether directly-listed Budgets email recipients need a confirmation click is unclear — an independent review said no, and AWS's own docs and search results conflict on it, so this isn't asserted either way. Look in `the budget alert address` (including spam) for an "AWS Notification - Subscription Confirmation" email and click confirm if one arrives; if none does, nothing further is needed. Budgets emails also don't depend on SES or on the Fleet stack being up.
+  - **Confirmed 2026-10-18:** budget alerts arrive at the address, so no confirmation was needed or it was already done.
 
 - [x] **Step 6: Commit**
 
