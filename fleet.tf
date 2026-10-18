@@ -69,7 +69,7 @@ module "fleet" {
   }
 
   fleet_config = {
-    # The version lives in fleet.Dockerfile, where Dependabot can update it.
+    # The version lives in fleet.Dockerfile (docs/upgrading-fleet.md).
     image = regex("(?m)^FROM\\s+(\\S+)", file("${path.module}/fleet.Dockerfile"))[0]
     cpu   = 512
     mem   = 4096
