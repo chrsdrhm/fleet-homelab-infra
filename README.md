@@ -49,6 +49,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | Path | What it is |
 |---|---|
 | `*.tf` | The Terraform configuration: AWS, plus the optional Cloudflare delegation (`cloudflare.tf`) |
+| `fleet.Dockerfile` | The Fleet server version, in one `FROM` line that Dependabot updates. It's never built; `fleet.tf` reads it |
 | `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |

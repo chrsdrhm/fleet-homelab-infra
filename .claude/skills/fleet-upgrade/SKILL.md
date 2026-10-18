@@ -15,7 +15,7 @@ Invoking the skill asks for a review and a plan. **Each step that changes someth
 
 ## 1. Versions
 
-- **Current:** the `image = "fleetdm/fleet:vX.Y.Z"` line in `fleet.tf`. Once the tag moves to `fleet.Dockerfile` (plan Task 25 Step 3), read its `FROM` line instead. If the stack is up, also check what's running: `aws ecs describe-task-definition --task-definition fleet --query 'taskDefinition.containerDefinitions[0].image' --output text`.
+- **Current:** the `FROM fleetdm/fleet:vX.Y.Z` line in `fleet.Dockerfile` (`fleet.tf` reads it). If the stack is up, also check what's running: `aws ecs describe-task-definition --task-definition fleet --query 'taskDefinition.containerDefinitions[0].image' --output text`.
 - **Target:** what the person names, or the newest release: `gh release list --repo fleetdm/fleet --limit 30`, keeping only `fleet-v*` tags (the repo also publishes agent releases). If Dependabot has opened the upgrade pull request, its target is the one.
 - **Every release in between, patch releases included:** both the target's line and any patches on the current line (for example 4.92.1 to 4.92.3 when going from 4.92.0 to 4.93.0).
 - **The image exists:** `fleetdm/fleet:v<target>` on Docker Hub (`https://hub.docker.com/v2/repositories/fleetdm/fleet/tags/v<target>`).
@@ -52,8 +52,8 @@ It takes about five minutes for a small database. Tell the person its name; `dow
 
 ## 5. The pull request
 
-- **Dependabot's, once Task 25 Step 3 exists:** review it with step 2's findings, add any required changes to it (with a yes), and post nothing that repeats the bot's text.
-- **Otherwise, open one (on a yes):** a branch from an up-to-date `origin/main`, the tag change in `fleet.tf` (or `fleet.Dockerfile`), the image line in the spec (`docs/specs/fleet-homelab-aws-design.md`), and anything step 2 requires. The body summarizes step 2: releases reviewed, nothing required or what's required, the expected plan, and the rollback. The repo's commit and pull request conventions are in `AGENTS.md`.
+- **Dependabot's, usually:** review it with step 2's findings, add any required changes to it (with a yes), and post nothing that repeats the bot's text.
+- **Otherwise, open one (on a yes):** a branch from an up-to-date `origin/main`, the tag change in `fleet.Dockerfile`, and anything step 2 requires. The body summarizes step 2: releases reviewed, nothing required or what's required, the expected plan, and the rollback. The repo's commit and pull request conventions are in `AGENTS.md`.
 - **Before the merge, the plan must be against the stack as it is now.** A pull request opened while the stack was down shows ⏸️ and a plan for a full build; one that's behind `main` can't merge (the ruleset requires branches to be up to date). Either way, update the branch with `main` (`gh pr update-branch <number>`, on a yes) once the stack is up and the snapshot is taken, and wait for the new plan.
 - **Expected plan:** the Fleet task definition and `module.migrations.null_resource.main` replaced, the ECS service updated, and nothing that holds data destroyed. Anything else needs explaining before the merge.
 
