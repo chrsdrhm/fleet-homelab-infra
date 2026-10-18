@@ -464,7 +464,8 @@ its last — an ordering an earlier draft of this design got backwards.
 **Merging applies, while the stack is up.** Every `.tf` change is reviewed
 before it takes effect: opening a PR runs `terraform plan` and posts the output
 as a comment (mirroring the dry run the GitOps repo has for Fleet config), so
-merging to `main` is an informed decision. On merge, the `apply-on-merge` job
+merging to `main` is an informed decision. The plan first waits for a running
+`up`/`down` to finish, so it never shows a half-built or half-torn-down stack. On merge, the `apply-on-merge` job
 plans `main` again and applies it if the stack is up (the state holds
 `module.fleet`). While the stack is down it applies nothing, since that would
 build the whole stack; the next `up` applies `main` instead. It waits for a
