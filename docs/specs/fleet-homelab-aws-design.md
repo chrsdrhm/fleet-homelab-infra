@@ -167,7 +167,7 @@ Non-goals above.
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
-| Image | `fleetdm/fleet:v4.93.0`, pinned (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
+| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`, which Dependabot updates (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
@@ -444,8 +444,8 @@ read-only by default, third-party actions are pinned to commit SHAs, and
 `main` is protected by a ruleset with no bypass, not even for the owner:
 every change, docs included, goes through a pull request whose
 `terraform-lint` and `terraform-plan` checks pass (the GitOps repo likewise
-requires its `fleet-gitops` check). Dependabot keeps actions and providers
-current, and its pull requests get a plan too. Nothing personal or secret is committed:
+requires its `fleet-gitops` check). Dependabot keeps actions, providers and the
+Fleet image current, and its pull requests get a plan too. Nothing personal or secret is committed:
 the commit author is the GitHub noreply address, and the budget-alert email,
 license key and Cloudflare token live only in gitignored `terraform.tfvars`
 and GitHub secrets. The AWS trust policy is the second lock: the apply role

@@ -1,5 +1,6 @@
 # Weekly update PRs for the pinned GitHub Actions (SHA pins, tag in a trailing comment)
-# and for the Terraform providers and Fleet modules in both roots.
+# for the Terraform providers and Fleet modules in both roots, and for the Fleet server
+# image in fleet.Dockerfile.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -18,5 +19,13 @@ updates:
       interval: weekly
     # Wait a week before proposing a new release, so a hijacked one is usually caught
     # and pulled before it reaches this repo.
+    cooldown:
+      default-days: 7
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    # The same week's wait. Fleet releases about every three weeks, so each one still
+    # arrives well before the next.
     cooldown:
       default-days: 7
