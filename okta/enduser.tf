@@ -18,6 +18,7 @@ locals {
 
 resource "okta_app_saml" "fleet_enduser" {
   label = "Fleet device enrollment"
+  logo  = local.app_logo
 
   sso_url     = "${local.fleet_url}/api/v1/fleet/mdm/sso/callback"
   recipient   = "${local.fleet_url}/api/v1/fleet/mdm/sso/callback"

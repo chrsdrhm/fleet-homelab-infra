@@ -34,3 +34,9 @@ variable "okta_scopes" {
   type        = list(string)
   default     = ["okta.apps.manage", "okta.groups.manage"]
 }
+
+variable "okta_app_logo_path" {
+  description = "Optional path to the PNG both Fleet apps show as their icon in Okta. Keep the file outside this repo."
+  type        = string
+  default     = null
+}
