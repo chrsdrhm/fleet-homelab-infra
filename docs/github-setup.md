@@ -33,6 +33,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `FLEET_API_TOKEN` | The GitOps API user's token ([setup guide step 7](setup.md#7-the-gitops-repo-fleets-configuration)) |
 | `FLEET_CI_HEADER` | Your `waf_ci_header_value` |
 | `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL` | Only with Okta: `terraform output -raw metadata_url` (in `okta/`) and `terraform output -raw idp_logo_url` |
+| `FLEET_END_USER_OKTA_METADATA_URL` | Only with Okta, for the sign-in at enrollment: `terraform output -raw enduser_metadata_url` (in `okta/`) |
 | `PRIVATE_HASHES` | Set by `sync-hashes.sh`, which also sets the Dependabot copy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) |
 
