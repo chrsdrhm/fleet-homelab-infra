@@ -14,6 +14,10 @@ resource "okta_group" "fleet_observers" {
 locals {
   fleet_url = "https://${var.fleet_subdomain}"
 
+  # The icon both apps show on the Okta dashboard, from a file kept outside the repo
+  # (Fleet's brand asset). Unset, the apps keep whatever icon they have.
+  app_logo = var.okta_app_logo_path == null ? null : pathexpand(var.okta_app_logo_path)
+
   # Admin wins if someone is in both groups, so the assertion carries exactly one value
   # (Fleet silently takes the LAST of several). Anyone in neither group gets the
   # deliberately INVALID value "unassigned": only the two groups are meant to be assigned
@@ -26,7 +30,8 @@ locals {
 }
 
 resource "okta_app_saml" "fleet" {
-  label = "Fleet"
+  label = "Fleet console"
+  logo  = local.app_logo
 
   sso_url     = "${local.fleet_url}/api/v1/fleet/sso/callback"
   recipient   = "${local.fleet_url}/api/v1/fleet/sso/callback"
