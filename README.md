@@ -40,7 +40,7 @@ Fleet's Terraform module is used as published (pinned to a release tag), with sm
 
 ## Identity: an Okta free tenant
 
-Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, and the role attribute) is Terraform in [`okta/`](okta/), applied from my terminal with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
+Single sign-on uses an **Okta Workforce Identity free trial**, which turns into Okta's **Free Plan** after 30 days (up to 10 users, SSO and MFA, no support, $0). Okta can close an org after 45 days of inactivity, so I sign in at least once a month. The Okta side (the Fleet SAML app, two groups that map to Fleet roles, the role attribute, and a second app that device owners sign in to while enrolling) is Terraform in [`okta/`](okta/), applied from my terminal with an Okta API service app that signs in with a private key. Who is in each group is set by hand in Okta, never by Terraform.
 
 **Okta is optional.** Fleet runs fine without single sign-on: users then sign in with a password, starting with the admin you create on first setup. I use Okta because it makes the lab more like a real deployment, where people sign in through the company's identity provider and get their Fleet role from it. To leave it out, don't apply `okta/`, and turn SSO off in the GitOps repo's `default.yml` (see [setup step 7](docs/setup.md#7-the-gitops-repo-fleets-configuration)). Fleet's SSO is standard SAML, so any other SAML identity provider works too; you'd configure that one by hand or in its own Terraform. The small public bucket for the login button's logo (`idp_logo.tf`) is only for SSO, and you can delete it.
 
@@ -50,7 +50,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 |---|---|
 | `*.tf` | The Terraform configuration: AWS, plus the optional Cloudflare delegation (`cloudflare.tf`) |
 | `fleet.Dockerfile` | The Fleet server version, in one `FROM` line. It's never built; `fleet.tf` reads it |
-| `okta/` | Optional. The Okta side: SAML app, groups and role attribute (its own Terraform root, applied locally) |
+| `okta/` | Optional. The Okta side: the admin and enrollment SAML apps, groups and role attribute (its own Terraform root, applied locally) |
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
 | `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |

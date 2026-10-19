@@ -83,10 +83,15 @@ AWS cost, since this is for personal homelab learning, not production scale.
   deliberate follow-up, not part of this pass, to avoid a chicken-and-egg
   with team creation.
 - **End user SSO (Task 20)**: separate from admin SSO. Device owners
-  authenticate with a second Okta app (the
-  `/mdm/sso/callback` URL, NameID mapped to email) during MDM enrollment, so
-  each host carries a verified IdP identity. Fleet requires two IdP apps if
-  both are used; roles and JIT apply only to the admin side.
+  authenticate with a second Okta app (`okta/enduser.tf`: the
+  `/mdm/sso/callback` URL, NameID mapped to email, the display name as `name`,
+  Entity ID `fleet-end-users` as in Fleet's own setup) during enrollment, so
+  each host carries a verified IdP identity. Only members of the
+  "Fleet Device Users" group (set by hand) can sign in to it. Fleet requires
+  two IdP apps if both are used; roles and JIT apply only to the admin side.
+  Fleet gets it through GitOps (`org_settings.mdm.end_user_authentication`),
+  and the Workstations fleet requires it
+  (`controls.setup_experience.enable_end_user_authentication`).
 - **Break-glass account**: one Fleet global admin created via
   `fleetctl setup` — Fleet's first-run bootstrap, immediately after the first
   deploy (a fresh Fleet has no users, and `fleetctl user create` needs an

@@ -104,7 +104,7 @@ Then click the link in the email AWS sends.
    cd okta && cp example.tfvars terraform.tfvars   # fill it in
    terraform init -backend-config=backend.hcl && terraform apply -var-file=terraform.tfvars
    ```
-4. Add yourself to the **Fleet Admins** group in the Okta console.
+4. Add yourself to the **Fleet Admins** group in the Okta console. To sign in while enrolling a device, also add yourself (or whoever owns the device) to **Fleet Device Users**.
 
 Fleet picks up the Okta settings from the GitOps repo (step 7).
 
@@ -118,7 +118,7 @@ Fleet picks up the Okta settings from the GitOps repo (step 7).
      fleetctl user create --name "GitOps CI" --global-role gitops --api-only
      ```
    - The second command prints the new user's token once; copy it for the next step.
-2. **Set its secrets and settings** (Fleet's URL, the token from step 1, the WAF header, and the Okta values if you use Okta): see [GitHub setup](github-setup.md). Without Okta, also set `enable_sso: false` in its `default.yml`.
+2. **Set its secrets and settings** (Fleet's URL, the token from step 1, the WAF header, and the Okta values if you use Okta): see [GitHub setup](github-setup.md). Without Okta, also set `enable_sso: false` in its `default.yml`, remove its `end_user_authentication` block, and remove `enable_end_user_authentication` from `fleets/workstations.yml`.
 3. **Run it:**
    ```bash
    gh workflow run workflow.yml --repo <you>/fleet-homelab-gitops
