@@ -13,7 +13,7 @@
 **Status as of 2026-10-18:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks), 21 (health scan runbook), 25 (Fleet 4.93.0, the runbook, `/fleet-upgrade`, release and module alerts; Steps 5 and 8 open), 33 (the teardown notices; Step 3 waits for a real nightly run) and 35 (kept-snapshot reminder).
 - **Open, needing a device:** 20 (enroll devices, Windows first: Okta sign-in at enrollment, all four Windows paths, local accounts, Entra federated with Okta; Part A, the Okta end-user app, comes first), then 27 (Intune to Fleet migration), 28 (a PSADT app), 29 (Fleet's MCP server), 31 and 32 (packaging and Intune policy skills).
-- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 30 (health-scan skill), 34 (expiry and rotation watch), 36 (CI for `okta/`).
+- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 30 (health-scan skill), 34 (expiry and rotation watch), 36 (CI for `okta/`), 37 (start the nightly check from an AWS timer).
 - **Optional, not planned:** Task 8 Part B (Apple push certificate), needed only to enroll a Mac.
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
@@ -2930,7 +2930,7 @@ Added at my request. If the 2am check tears the stack down, the stack was left u
 
 - [x] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
 - [x] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
-- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. (Still open: the helper is tested and the docs are done, but the nightly path itself first runs for real the next time the stack is left up at 2am.)
+- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. (Still open: the helper is tested and the docs are done, but the nightly path itself first runs for real the next time the stack is left up at 2am.) *2026-10-19:* the stack was left up for it, but GitHub hadn't started the 07:17 UTC run by 13:55 UTC. Task 37 starts the check from an AWS timer instead.
 
 **Widened 2026-10-18, at my request:** GitHub started both scheduled checks of 2026-10-18 almost 5 hours late (7:03am and 7:36am Chicago), both outside the 2:00-5:59am window, so neither acted and the stack stayed up all night without a word. The two delays were within half an hour of each other, so a third schedule wouldn't have helped. Now:
 - **One schedule,** 07:17 UTC (2:17am Chicago in summer, 1:17am in winter), instead of two times with a daylight-saving check.
@@ -2981,6 +2981,23 @@ Added at my request. `okta/` is the only Terraform applied from a laptop with no
 
 ---
 
+### Task 37: Start the nightly check from an AWS timer
+
+Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run starts. Here they have started 4 to 5 hours late, and on 2026-10-19 the 07:17 UTC run hadn't started by 13:55 UTC, so the stack stayed up all night. The 00:00-07:59 window (Task 33) is right, but a GitHub schedule can't be relied on to land inside it. EventBridge Scheduler fires on time, so it starts the check instead. The GitHub schedule stays as a backup: a late run finds the stack already down, or opens "The nightly teardown didn't run".
+
+- [ ] **Step 1: A `nightly` mode for a dispatched run.** Add `nightly` to the `action` input of `terraform.yml`, running the same "Decide what to run" logic as the schedule: the skip variable, the 8am cutoff, then down if up, and the snapshot and release checks. A run started by the timer's app is always treated as `nightly`, whatever input it sends: the app can dispatch any workflow input, so the workflow, not the app, limits what it can do.
+- [ ] **Step 2: A GitHub App for the timer,** like the GitOps dispatch app (Task 15): Actions read and write only, installed on this repo only, nothing that expires. Its private key goes in an SSM Parameter Store `SecureString` (standard tier, free), never in Terraform state or the repo. Set by hand from the downloaded `.pem`, which is then deleted.
+- [ ] **Step 3: The timer:**
+  - An EventBridge Scheduler schedule `cron(17 2 * * ? *)` in the `America/Chicago` time zone. Scheduler handles daylight saving itself, so it's 2:17am all year, unlike GitHub's UTC-only cron.
+  - A small Lambda function (Node.js: it signs the app's JWT with the built-in `crypto`, so there are no dependencies to package) that reads the key, gets an installation token, and dispatches `terraform.yml` with `action=nightly` on `main`.
+  - Its role may read only that one parameter and write its own logs. The scheduler's role may only invoke that function.
+  - **Kept through teardowns** (outside `down.sh`'s targets): it has to fire while the stack is up, and a check against a stack that's down costs one short run. Decide whether it belongs in the main root or its own small root, and add the new services (Scheduler, Lambda, SSM) to the apply role's scope in `oidc.tf`.
+- [ ] **Step 4: Failure notice.** If the function fails (a bad key, GitHub down), it must be seen: a failed invocation goes to a dead-letter queue or a CloudWatch alarm, or the function opens the "The nightly teardown didn't run" issue itself. The GitHub schedule's backup run also catches it in the morning.
+- [ ] **Step 5: Test it.** A one-off schedule a few minutes ahead (or a test invoke) starts a `nightly` run, which tears down a running stack; with the stack down it only reports. Check the run's actor is the app, and that the backup scheduled run later does nothing.
+- [ ] **Step 6: Document it:** the spec (CI and Cost: expected to stay within the free tiers), the README's nightly bullet, `docs/github-setup.md` (the app and the parameter), the setup guide, and `/session-start` (the check now runs at 2:17am Chicago time all year).
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -3016,3 +3033,4 @@ Added at my request. `okta/` is the only Terraform applied from a laptop with no
 - An expiry and rotation watch (license, certificates, tokens): Task 34.
 - A reminder for kept snapshots: Task 35 (nightly, in the `apply` job). ✓
 - CI for the Okta Terraform (plan only): Task 36.
+- Starting the nightly check from an AWS timer, since GitHub's schedule starts hours late: Task 37.
