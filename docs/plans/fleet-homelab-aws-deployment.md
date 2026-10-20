@@ -13,7 +13,7 @@
 **Status as of 2026-10-18:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks), 21 (health scan runbook), 25 (Fleet 4.93.0, the runbook, `/fleet-upgrade`, release and module alerts; Steps 5 and 8 open), 33 (the teardown notices; Step 3 waits for a real nightly run) and 35 (kept-snapshot reminder).
 - **Open, needing a device:** 20 (enroll devices, Windows first: Okta sign-in at enrollment, all four Windows paths, local accounts, Entra federated with Okta; Part A, the Okta end-user app, comes first), then 27 (Intune to Fleet migration), 28 (a PSADT app), 29 (Fleet's MCP server), 31 and 32 (packaging and Intune policy skills).
-- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 30 (health-scan skill), 34 (expiry and rotation watch), 36 (CI for `okta/`), 37 (start the nightly check from an AWS timer).
+- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 30 (health-scan skill, and running it after each `up`), 34 (expiry and rotation watch), 36 (CI for `okta/`), 37 (start the nightly check from an AWS timer), 38 (a Claude review of each new Fleet release).
 - **Optional, not planned:** Task 8 Part B (Apple push certificate), needed only to enroll a Mac.
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
@@ -2905,6 +2905,7 @@ Added at my request. Turns Task 21's twelve read-only checks into a Claude Code 
 - [ ] **Step 1: Write the skill** from Task 21's checks, with read-only `allowed-tools` (AWS describe and get commands, CloudWatch Logs Insights queries, `curl` to the health endpoints), and the baseline as its reference.
 - [ ] **Step 2: Run it** on the running stack and compare with a manual run of Task 21.
 - [ ] **Step 3: Link it** from `docs/upgrading-fleet.md` and from `/session-end`.
+- [ ] **Step 4: Run it automatically after every `up`** (added 2026-10-20, at my request). Once `up` reports healthy, a CI step runs the scan headless on the Claude API key from Task 38 Step 1 (not the review's subscription token), and writes the result to the run's summary. If something is outside the baseline, it opens an issue through `scripts/notify-issue.sh`. CI gets read-only access for it: a separate role, or a narrow addition to the apply role, allowing `logs:StartQuery`, `logs:GetQueryResults` and the describe calls the scan uses, and nothing that writes. The run log is public, so the scan's output must hold no identifying values (the same masking as the plan comment), and the job must never fail `up` itself: a scan that errors only warns. Expected cost: well under $1 a run, once a session.
 
 ### Task 31: A Windows packaging skill
 
@@ -2998,6 +2999,18 @@ Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run st
 
 ---
 
+### Task 38: A Claude review of each new Fleet release
+
+Added 2026-10-20, at my request. My Claude subscription includes $100 of API credit a month, which suits unattended jobs (the pull request reviews stay on the subscription token). When the nightly check opens or updates "A newer Fleet release is available" (Task 25), Claude reviews the releases in between against this setup, as `/fleet-upgrade` does in its step 2, and adds the verdict to the issue, so I know whether an upgrade is routine before a session.
+
+- [ ] **Step 1: The API key.** A separate Claude Console workspace for this repo, with a monthly spend limit (about $10), and a key from it as the `ANTHROPIC_API_KEY` secret. Never in a file. Task 30 Step 4 uses the same key.
+- [ ] **Step 2: The review job.** Runs only when the release check finds a release it hasn't reviewed yet (the issue body records the reviewed version, so it reviews once per release, not nightly). Claude gets the release notes for every version from the current one to the target (patch releases included), `fleet.tf`'s `FLEET_*` settings, the module pins and the GitOps repo's YAML, with read-only tools only. It reports what changed that matters here, what must change, and a ✅ / ⚠️ / ❌ verdict, the same output as `/fleet-upgrade` step 2. Pin the model through a repository variable, like `CLAUDE_REVIEW_MODEL`.
+- [ ] **Step 3: Safety.** Release notes are untrusted input: the job has no write tools, no secrets beyond the API key, and its output is posted only as issue text through `notify-issue.sh`. A failed or empty review leaves the issue as Task 25 wrote it, with a warning, and never fails the nightly check.
+- [ ] **Step 4: Test it** by pointing it at an older version (for example 4.92.0 to 4.93.0, which `/fleet-upgrade` already reviewed by hand) and comparing the verdicts.
+- [ ] **Step 5: Document it:** `docs/upgrading-fleet.md` (the issue now carries a first review; `/fleet-upgrade` still does the full one), `docs/github-setup.md` (the secret and the spend limit), and the spec's CI and Cost sections (expected a few dollars a month at most).
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
@@ -3034,3 +3047,4 @@ Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run st
 - A reminder for kept snapshots: Task 35 (nightly, in the `apply` job). ✓
 - CI for the Okta Terraform (plan only): Task 36.
 - Starting the nightly check from an AWS timer, since GitHub's schedule starts hours late: Task 37.
+- A Claude review of each new Fleet release, on the Claude API credit: Task 38. The health scan also runs automatically after each `up`: Task 30 Step 4.
