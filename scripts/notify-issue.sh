@@ -7,6 +7,7 @@
 #   notify-issue.sh update  "<title>" <body-file>   new issue, or quietly replace the open
 #                                                   one's body if it changed
 #   notify-issue.sh resolve "<title>" "<comment>"   close the open one, if any
+#   notify-issue.sh show    "<title>"               print the open one's body, if any
 #
 # Needs GH_TOKEN with issues: write and GITHUB_REPOSITORY. Never put identifying values in
 # a body: issues are public. Only issues opened by NOTIFY_AUTHOR (the workflow's own
@@ -14,7 +15,10 @@
 # with the same title, and this must never comment on, rewrite or close theirs.
 set -euo pipefail
 
-mode="${1:?mode}" title="${2:?title}" arg="${3:?body file or comment}"
+mode="${1:?mode}" title="${2:?title}"
+if [ "$mode" != show ]; then
+  arg="${3:?body file or comment}"
+fi
 repo="${GITHUB_REPOSITORY:?}"
 author="${NOTIFY_AUTHOR:-app/github-actions}"
 
@@ -48,6 +52,11 @@ case "$mode" in
     if [ -n "$number" ]; then
       gh issue close "$number" --repo "$repo" --comment "$arg" > /dev/null
       echo "Closed issue #$number."
+    fi
+    ;;
+  show)
+    if [ -n "$number" ]; then
+      gh issue view "$number" --repo "$repo" --json body --jq .body
     fi
     ;;
   *)

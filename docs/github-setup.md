@@ -24,6 +24,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `GITOPS_APP_CLIENT_ID`, `GITOPS_APP_PRIVATE_KEY` | Optional, from the GitHub App in step 5 | |
 | `PRIVATE_HASHES` | Set by `checks/private-values/sync-hashes.sh` (see [`checks/README.md`](../checks/README.md#private-values)) | yes (the script sets both) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
+| `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7); IDs, not credentials | |
 
 **`fleet-homelab-gitops`:**
 
@@ -42,7 +43,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | Variable | Repo | What it does |
 |---|---|---|
 | `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly teardown skips until then (see **Nightly teardown** below). |
-| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude review's model; without it, your plan's default (step 6). |
+| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and `claude-opus-5-5` for new releases (step 7). |
 
 ## 2. Repository settings
 
@@ -187,3 +188,27 @@ Claude reviews each pull request when it's opened (`.github/workflows/claude-rev
 - **GitHub Copilot:** needs Copilot Pro or higher (Copilot Free can't review pull requests), and each review uses Copilot AI credits. Turn on **Automatically request Copilot code review** in Settings → Rules → Rulesets → `protect-main`. Nothing else changes.
 - **Another tool:** for a GitHub App, follow its instructions and give it only the repos and permissions it asks for. For a GitHub Action, pin it to a full commit SHA, add it and any action it uses to the allow-list, store its credential as a secret, and limit it to reading the repo and commenting on pull requests.
 
+## 7. Optional: Claude reviews new Fleet releases
+
+When the nightly run opens or updates "A newer Fleet release is available", a second job (`fleet-release-review` in `terraform.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not nightly. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the nightly run and the issue are unaffected.
+
+**Set it up** in the [Claude Console](https://platform.claude.com) (you need the admin or owner role):
+1. **A workspace for this repo,** with a monthly spend limit (about $10 is plenty).
+2. **Settings → Workload identity → Connect workload → GitHub Actions.** The wizard registers GitHub's issuer and creates a federation rule and a service account. In the rule:
+   - **GitHub organization:** your account, plus its numeric ID (`gh api users/$OWNER -q .id`), so the rule survives a rename of the name.
+   - **Repository:** `fleet-homelab-infra`. **Branch:** `refs/heads/main`.
+   - **Allowed events:** scheduled and manual runs (`schedule` and `workflow_dispatch`). Never pull requests.
+   - **Workspaces:** only the new one. Token lifetime: 10 minutes.
+3. **Store the three IDs** (`gh secret set` prompts for each value): your organization ID (Settings → Organization), and the rule's (`fdrl_…`) and service account's (`svac_…`):
+   ```bash
+   gh secret set ANTHROPIC_ORGANIZATION_ID --repo $OWNER/fleet-homelab-infra
+   gh secret set ANTHROPIC_FEDERATION_RULE_ID --repo $OWNER/fleet-homelab-infra
+   gh secret set ANTHROPIC_SERVICE_ACCOUNT_ID --repo $OWNER/fleet-homelab-infra
+   ```
+   If the rule covers more than one workspace, also set `ANTHROPIC_WORKSPACE_ID`.
+4. **Test it** from the Actions tab: run the `Terraform` workflow on `main` with `action` set to `review`, and `review_from` and `review_to` set to two past versions (for example 4.93.0 and 4.93.2). The review appears on the run's summary page, not in an issue. A failed sign-in shows in the Console under Workload identity → history.
+
+**Security:**
+- **Only `main` can sign in.** A pull request's run has a different identity, so the rule rejects it, and forks get no identity token at all. Changing what runs on `main` takes a merged pull request.
+- **Claude gets no tools.** The release notes are untrusted input, so the job sends everything in one request and posts only Claude's text, with any `@mentions` broken so it can't notify anyone. The job has no AWS access and none of the Terraform secrets.
+- **The spend limit caps the cost.** A review sends about 10,000–50,000 tokens: cents to tens of cents, once per release.
