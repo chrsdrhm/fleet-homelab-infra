@@ -531,8 +531,9 @@ Claude subscription. It skips without that token, is never a required check, can
 only read the repo and comment, and can be swapped for another reviewer or
 removed (see `docs/github-setup.md`).
 
-**Claude's review of a new Fleet release.** When the nightly release check opens
-or updates its issue, a separate job (`fleet-release-review`) sends Claude the
+**Claude's review of a new Fleet release.** The nightly release check runs in its
+own job (`fleet-release`), apart from the teardown, so a teardown neither delays
+nor skips it. When it opens or updates its issue, the same job sends Claude the
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
