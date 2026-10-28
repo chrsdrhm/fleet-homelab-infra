@@ -202,7 +202,9 @@ if [ "$(jq -r .stop_reason <<< "$response")" = max_tokens ]; then
   review+=$'\n\n_The review hit its length limit and may be cut short._'
 fi
 
-# The review goes into a public issue: break @mentions so it can't notify anyone.
-sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g' <<< "$review"
+# The review goes into a public issue: break @mentions so it can't notify anyone, and
+# escape HTML comments so it can't fake the job's "release-review" marker (which would
+# skip a later review).
+sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/<!--/\&lt;!--/g' <<< "$review"
 echo
 echo "_Reviewed by \`$model\` from the release notes, Fleet's GitOps template and this setup's files, with no tools. Check anything marked before upgrading; \`/fleet-upgrade\` does the full review._"
