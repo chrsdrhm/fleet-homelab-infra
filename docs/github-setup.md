@@ -191,15 +191,17 @@ Claude reviews each pull request when it's opened (`.github/workflows/claude-rev
 
 ## 7. Optional: Claude reviews new Fleet releases
 
-When the nightly run opens or updates "A newer Fleet release is available", a second job (`fleet-release-review` in `terraform.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not nightly. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the nightly run and the issue are unaffected.
+When the nightly run opens or updates "A newer Fleet release is available", the same nightly job (`fleet-release` in `terraform.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not nightly. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the nightly run and the issue are unaffected.
 
 **Set it up** in the [Claude Console](https://platform.claude.com) (you need the admin or owner role):
 1. **A workspace for this repo,** with a monthly spend limit (about $10 is plenty).
 2. **Settings → Workload identity → Connect workload → GitHub Actions.** The wizard registers GitHub's issuer and creates a federation rule and a service account. In the rule:
    - **GitHub organization:** your account, plus its numeric ID (`gh api users/$OWNER -q .id`), so the rule survives a rename of the name.
    - **Repository:** `fleet-homelab-infra`. **Branch:** `refs/heads/main`.
+   - **Subject:** GitHub may issue this repo's tokens in its immutable format, with numeric IDs (`repo:<owner>@<owner-id>/fleet-homelab-infra@<repo-id>:ref:refs/heads/main`), which the wizard's prefix doesn't match. If a test fails with `match_subject_prefix` in the history, set the rule's subject prefix to the `sub` that entry shows.
    - **Allowed events:** scheduled and manual runs (`schedule` and `workflow_dispatch`). Never pull requests.
    - **Workspaces:** only the new one. Token lifetime: 10 minutes.
+   - **Afterwards, add the service account to that workspace** (Settings → Workspaces → the workspace → Members, Developer role). Without it, sign-in fails with `no_workspace`.
 3. **Store the three IDs** (`gh secret set` prompts for each value): your organization ID (Settings → Organization), and the rule's (`fdrl_…`) and service account's (`svac_…`):
    ```bash
    gh secret set ANTHROPIC_ORGANIZATION_ID --repo $OWNER/fleet-homelab-infra
