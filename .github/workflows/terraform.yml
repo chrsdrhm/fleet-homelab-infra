@@ -873,6 +873,8 @@ jobs:
         with:
           persist-credentials: false
 
+      # Public, so this job's own token can read it (up's GitHub App token is for
+      # starting its workflow, which this token can't do).
       - name: Check out the GitOps repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

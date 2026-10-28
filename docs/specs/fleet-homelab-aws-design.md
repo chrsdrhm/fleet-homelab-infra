@@ -341,6 +341,10 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
 | **Total** | **~$1.40 (about $0.05/day)** |
 
+**Claude API:** the release review (see Remote execution) bills the Claude API
+separately, in a workspace capped at $10 a month; expected well under $1 a
+month, since it runs once per Fleet release.
+
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
 - 50 × $0.27 + ~$1.40 ≈ **$15/mo**.

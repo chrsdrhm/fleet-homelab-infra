@@ -25,6 +25,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `PRIVATE_HASHES` | Set by `checks/private-values/sync-hashes.sh` (see [`checks/README.md`](../checks/README.md#private-values)) | yes (the script sets both) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
 | `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7); IDs, not credentials | |
+| `ANTHROPIC_WORKSPACE_ID` | Optional, only if the federation rule in step 7 covers more than one workspace | |
 
 **`fleet-homelab-gitops`:**
 
