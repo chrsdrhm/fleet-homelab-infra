@@ -341,6 +341,10 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
 | **Total** | **~$1.40 (about $0.05/day)** |
 
+**Claude API:** the release review (see Remote execution) bills the Claude API
+separately, in a workspace capped at $10 a month; expected well under $1 a
+month, since it runs once per Fleet release.
+
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
 - 50 × $0.27 + ~$1.40 ≈ **$15/mo**.
@@ -526,6 +530,21 @@ optional workflow asks Claude to review each pull request using the owner's
 Claude subscription. It skips without that token, is never a required check, can
 only read the repo and comment, and can be swapped for another reviewer or
 removed (see `docs/github-setup.md`).
+
+**Claude's review of a new Fleet release.** When the nightly release check opens
+or updates its issue, a separate job (`fleet-release-review`) sends Claude the
+release notes for every version in between, the diff of Fleet's `fleetctl new`
+GitOps template between the tags, and both repos' configuration files, in one
+request with no tools. Claude sorts what it finds into Breaking, Must change,
+Deprecated (still works) and New and relevant, with a ✅ / ⚠️ / ❌ verdict, and
+the job adds it to the issue, once per upgrade (a marker in the issue records
+which versions were reviewed). It runs on the Claude API, signing in through
+workload identity federation: the job's GitHub identity token, issued only to
+runs on `main` by the Console's federation rule, is exchanged for a token that
+lasts 10 minutes, in a workspace with a $10 monthly spend limit. The job has no
+AWS role and no Terraform secrets, posts only Claude's text (with `@mentions`
+broken), and a failed review only warns. Expected cost: about 10,000–50,000
+input tokens a review, $0.05–0.50 at Opus prices, a few reviews a month.
 
 **Starting the GitOps run after `up`.** A workflow's own token is limited to
 its repo, so the infra workflow cannot start the GitOps repo's workflow with

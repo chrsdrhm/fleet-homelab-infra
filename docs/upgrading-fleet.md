@@ -12,6 +12,10 @@ From the version in `fleet.Dockerfile` (`FROM fleetdm/fleet:vX.Y.Z`) to the targ
 - **Breaking changes** and renamed or removed settings, especially in the [GitOps YAML](https://fleetdm.com/docs/configuration/yaml-files), which the GitOps repo uses.
 - **New minimum versions** of MySQL or Redis.
 - **Server configuration changes** for the environment variables in `fleet.tf`.
+- **Deprecations:** things the GitOps repo or `fleet.tf` does that still work but that Fleet now does a new way, such as a renamed key that still accepts the old name. Not urgent, but easier to adopt with the upgrade than after the old way is removed.
+- **Changes to Fleet's GitOps template** (what `fleetctl new` writes), which the GitOps repo's layout and `.github/fleet-gitops/` come from.
+
+With CI, the nightly release issue also carries a first review by Claude ([GitHub setup step 7](github-setup.md#7-optional-claude-reviews-new-fleet-releases)): the releases in between checked against this setup, sorted into **Breaking**, **Must change**, **Deprecated, still works** and **New and relevant**, with a ✅ / ⚠️ / ❌ verdict. It's a head start, not a substitute: it sees only the release notes, the template and the two repos' files, so read anything it marks before upgrading. `/fleet-upgrade` does the full review, in the same four groups.
 
 Skipping releases is fine; migrations run in order. Also check [`fleet-terraform`](https://github.com/fleetdm/fleet-terraform/tags) for newer `tf-mod-root-*` and add-on tags: their changelogs say which Fleet version they target and what changed. Bump those in the same pull request only if the release needs it; otherwise they're a separate change.
 

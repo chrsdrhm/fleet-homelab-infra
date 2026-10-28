@@ -31,7 +31,15 @@ Read each release's notes (`gh release view fleet-vX.Y.Z --repo fleetdm/fleet`) 
 - **CI:** the GitOps workflow installs the `fleetctl` that matches the server, so a new server version means a new `fleetctl` on the next run.
 - **Fleet's `fleetctl new` template**, which the GitOps repo's layout and `.github/fleet-gitops/` come from. Compare from the template version the GitOps repo records it matches (a `fleet-template: vX.Y.Z` line, per plan Task 25 Step 6), or, until it records one, from the current server version. List the template files' blob hashes at that tag and the target (`gh api "repos/fleetdm/fleet/git/trees/fleet-vX.Y.Z?recursive=1"`, filtering paths under `cmd/fleetctl/fleetctl/templates/new/`), and diff any file whose hash changed. If the GitOps repo adopts the changes, update its recorded version in the same pull request (`gh api "repos/fleetdm/fleet/contents/<path>?ref=<tag>"`). Say what changed and whether the GitOps repo should adopt it; it deliberately differs in places (it installs `fleetctl` from the GitHub release with a checksum check, not through `curl | bash`).
 
-Then report, briefly: what changed that matters here, **what we must change** (separately from what's merely worth adopting), and a verdict: ✅ upgrade as is, ⚠️ upgrade with these changes, or ❌ wait (say why, for example a regression reported in Fleet's issues). If a release note is unclear, say so and link it; don't guess.
+If the nightly "A newer Fleet release is available" issue carries Claude's review (plan Task 38), start from it, but check it: it saw only the release notes, the template and the two repos' files.
+
+Then report, briefly, sorted the same way as that review, leaving out a group with nothing in it:
+1. **Breaking:** what stops working or behaves differently here: removed or renamed settings, variables, YAML keys or flags these repos use, changed defaults, new minimum versions, migrations that need care.
+2. **Must change:** edits either repo needs before or with the upgrade, with the file and the change.
+3. **Deprecated, still works:** what these repos do that still works but that Fleet now does a new way (a renamed key that still accepts the old name, a moved setting, a new template field), with the suggested change. Worth doing in the upgrade pull request or soon after.
+4. **New and relevant:** new features touching what we use (Windows MDM, Okta and end-user authentication, GitOps, the AWS modules) that might be worth adopting.
+
+And a verdict: ✅ upgrade as is, ⚠️ upgrade with these changes, or ❌ wait (say why, for example a regression reported in Fleet's issues). If a release note is unclear, say so and link it; don't guess.
 
 ## 3. Choose the order
 
