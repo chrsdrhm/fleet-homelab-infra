@@ -10,7 +10,8 @@
 # adds Fleet's status endpoints; without it they're skipped.
 #
 # The report is safe to post publicly: the Fleet hostname and domain, account IDs, ARNs
-# and email addresses are masked, and only counts and figures are printed.
+# email and IP addresses, UUIDs, token-shaped strings and any other hostname are masked,
+# log message lines are cut short, and otherwise only counts and figures are printed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export AWS_REGION="${AWS_REGION:-us-east-1}" AWS_PAGER=""
@@ -31,10 +32,16 @@ host="${url#https://}" host="${host%%/*}"
 domain="${host#*.}"
 account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)
 
-# Everything printed goes through mask.
+# Everything printed goes through mask, before any cut (a cut could split a value the
+# mask would have caught).
 mask() {
   local s
-  s=$(sed -E 's#arn:aws[a-zA-Z-]*:[^ ,")]*#<arn>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g')
+  s=$(sed -E 's#arn:aws[a-zA-Z-]*:[^ ,")]*#<arn>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g
+    s/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g
+    s/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g
+    s/([0-9a-fA-F]{1,4}:){4,7}[0-9a-fA-F]{1,4}|[0-9a-fA-F]{0,4}::[0-9a-fA-F:]*[0-9a-fA-F]/<ip>/g
+    s/[A-Za-z0-9_+\/=-]{32,}/<token>/g
+    s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/<host>/g')
   [ -n "$host" ] && s=${s//"$host"/<fleet-host>}
   [ -n "$domain" ] && [ "$domain" != "$host" ] && s=${s//"$domain"/<domain>}
   [ -n "$account" ] && s=${s//"$account"/<account>}
@@ -112,7 +119,7 @@ else
   fi
   echo "- Top errors and warnings (level | message | count; none if empty):"
   if r=$(insights 'filter level in ["error","warn"] | stats count(*) as n by level, msg | sort n desc | limit 15'); then
-    [ -n "$r" ] && bullets <<< "$r" | mask
+    [ -n "$r" ] && bullets <<< "$r" | mask | cut -c1-140
   else
     fail "Logs Insights"
   fi
@@ -153,7 +160,7 @@ for type in db-instance db-cluster; do
   id=fleet-homelab; [ "$type" = db-instance ] && id=fleet-homelab-one
   if r=$(aws rds describe-events --source-type "$type" --source-identifier "$id" --start-time "$start_iso" \
     --query 'Events[].[Date, Message]' --output text 2>/dev/null); then
-    [ -n "$r" ] && cut -c1-200 <<< "$r" | sed 's/^/  - /' | mask
+    [ -n "$r" ] && bullets <<< "$r" | mask | cut -c1-200
   else
     fail "$type events"
   fi
@@ -176,7 +183,7 @@ redis="Name=CacheClusterId,Value=fleet-homelab-001"
 echo "- Events:"
 if r=$(aws elasticache describe-events --source-type cache-cluster --source-identifier fleet-homelab-001 --start-time "$start_iso" \
   --query 'Events[].[Date, Message]' --output text 2>/dev/null); then
-  [ -n "$r" ] && cut -c1-200 <<< "$r" | sed 's/^/  - /' | mask
+  [ -n "$r" ] && bullets <<< "$r" | mask | cut -c1-200
 else
   fail "Redis events"
 fi
@@ -242,7 +249,7 @@ if [ -n "$url" ]; then
   if [ -n "${FLEET_API_TOKEN:-}" ]; then
     for path in result_store live_query; do
       body=$(curl -s -m 20 ${hdr[@]+"${hdr[@]}"} -H "Authorization: Bearer $FLEET_API_TOKEN" -w '\n%{http_code}' "$url/api/v1/fleet/status/$path")
-      echo "- /status/$path: HTTP $(tail -n 1 <<< "$body"), body $(sed '$d' <<< "$body" | tr -d '\n' | cut -c1-120)" | mask
+      echo "- /status/$path: HTTP $(tail -n 1 <<< "$body"), body $(sed '$d' <<< "$body" | tr -d '\n' | mask | cut -c1-120)"
     done
   else
     echo "- Status endpoints: skipped (no FLEET_API_TOKEN)"

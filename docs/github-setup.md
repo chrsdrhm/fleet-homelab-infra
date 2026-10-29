@@ -18,13 +18,14 @@ Do the steps in this order. The branch rules require checks that must have run a
 |---|---|---|
 | `AWS_ROLE_ARN` | `terraform output -raw github_actions_apply_role_arn` | |
 | `AWS_PLAN_ROLE_ARN` | `terraform output -raw github_actions_plan_role_arn` | yes |
+| `AWS_SCAN_ROLE_ARN` | Optional, for the health scan after `up` (step 8): `terraform output -raw github_actions_scan_role_arn` | |
 | `TF_STATE_BUCKET` | Your state bucket's name | yes |
 | `FLEET_SUBDOMAIN`, `FLEET_LICENSE_KEY`, `BUDGET_ALERT_EMAIL`, `WAF_CI_HEADER_VALUE` | The same values as in `terraform.tfvars` | yes |
 | `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN` | The same as in `terraform.tfvars`; skip both if your DNS isn't on Cloudflare | yes |
 | `GITOPS_APP_CLIENT_ID`, `GITOPS_APP_PRIVATE_KEY` | Optional, from the GitHub App in step 5 | |
 | `PRIVATE_HASHES` | Set by `checks/private-values/sync-hashes.sh` (see [`checks/README.md`](../checks/README.md#private-values)) | yes (the script sets both) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
-| `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7); IDs, not credentials | |
+| `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7) and of the health scan (step 8); IDs, not credentials | |
 | `ANTHROPIC_WORKSPACE_ID` | Optional, only if the federation rule in step 7 covers more than one workspace | |
 
 **`fleet-homelab-gitops`:**
@@ -44,7 +45,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | Variable | Repo | What it does |
 |---|---|---|
 | `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly teardown skips until then (see **Nightly teardown** below). |
-| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and `claude-opus-5-5` for new releases (step 7). |
+| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and `claude-opus-5-5` for new releases and the health scan (steps 7 and 8). |
 
 ## 2. Repository settings
 
@@ -215,3 +216,21 @@ When the nightly run opens or updates "A newer Fleet release is available", the 
 - **Only `main` can sign in.** A pull request's run has a different identity, so the rule rejects it, and forks get no identity token at all. Changing what runs on `main` takes a merged pull request.
 - **Claude gets no tools.** The release notes are untrusted input, so the job sends everything in one request and posts only Claude's text, with any `@mentions` broken so it can't notify anyone. The job has no AWS access and none of the Terraform secrets.
 - **The spend limit caps the cost.** A review sends about 10,000–50,000 tokens: cents to tens of cents, once per release.
+
+## 8. Optional: a health scan after every `up`
+
+After a successful `up`, the `health-scan` job in `terraform.yml` runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never fails the run: a scan or comparison that fails only warns. It needs step 7's Claude setup.
+
+**Set it up:**
+1. **Create the scan role** locally (CI can't change its own roles): `terraform apply -var-file=terraform.tfvars -target=aws_iam_role_policy_attachment.github_actions_scan`.
+2. **Store its ARN** (this prints nothing):
+   ```bash
+   gh secret set AWS_SCAN_ROLE_ARN --repo $OWNER/fleet-homelab-infra --body "$(aws iam get-role --role-name fleet-homelab-github-actions-scan --query Role.Arn --output text)"
+   ```
+3. **Test it** from the Actions tab: run the `Terraform` workflow on `main` with `action` set to `scan` while the stack is up. By hand, it scans the last day.
+
+**Security:**
+- **The scan role only reads.** It allows exactly the calls the scan makes, and Logs Insights queries only on Fleet's log group. It trusts only runs on `main`, like the apply role, and the job never gets the apply role.
+- **The report is public,** in the run's summary, so the scan masks hostnames, the account ID, ARNs, email and IP addresses, UUIDs and token-shaped strings, cuts log message lines short, and otherwise prints only figures and counts.
+- **Claude gets no tools.** The report holds log messages, which anyone reaching Fleet can influence, so it's one request, and only Claude's text is posted, with `@mentions`, links, images, URLs and HTML broken. Only the first line counts as the verdict, so a verdict-shaped log line can't close the issue.
+- **Cost:** about 10,000 tokens a scan, a few cents, once per `up`.

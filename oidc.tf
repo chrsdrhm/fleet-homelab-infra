@@ -1,9 +1,10 @@
-# Lets GitHub Actions in this repo reach AWS without stored keys (Task 15). Two roles:
+# Lets GitHub Actions in this repo reach AWS without stored keys (Task 15). Three roles:
 #  - apply: up/down and the apply after a merge, only from runs on main (a merge or a
 #           manually started run; the ruleset allows no other way onto main);
-#  - plan:  read-only, only from pull_request runs (Task 16).
+#  - plan:  read-only, only from pull_request runs (Task 16);
+#  - scan:  the health scan's reads after an up, from runs on main (Task 30).
 # Applied locally by an admin, never by CI: the apply role is denied from changing
-# either role or policy, so a pending diff here makes a CI run fail with AccessDenied.
+# any of the roles or policies, so a pending diff here makes a CI run fail with AccessDenied.
 # GitHub issues the immutable subject format (repo:OWNER@ID/REPO@ID:...) for repos
 # created after 2026-07-15, which this repo is.
 data "tls_certificate" "github_actions" {
@@ -322,10 +323,74 @@ resource "aws_iam_role_policy_attachment" "github_actions_plan" {
   policy_arn = aws_iam_policy.github_actions_plan.arn
 }
 
+# ---------- Scan role: read-only health scan after an up (Task 30 Step 4) ----------
+
+# The same trust as the apply role (runs on main), with only the reads
+# scripts/health-scan.sh makes. Its own role, so the job that sends the scan to Claude
+# never holds the apply role's write access.
+resource "aws_iam_role" "github_actions_scan" {
+  name = "fleet-homelab-github-actions-scan"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github_actions.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "${local.github_sub_prefix}:ref:refs/heads/main"
+        }
+      }
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "github_actions_scan" {
+  # Exactly the calls the scan makes. Adding a check to the script that calls something
+  # else reads "couldn't read" in CI until it's added here (locally).
+  statement {
+    sid    = "ReadStackHealth"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:GetMetricStatistics", "ecs:DescribeServices", "ecs:ListTasks", "ecs:DescribeTasks",
+      "logs:DescribeLogGroups", "logs:GetQueryResults", "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth",
+      "rds:DescribeDBClusters", "rds:DescribeEvents", "rds:DescribePendingMaintenanceActions",
+      "elasticache:DescribeEvents", "ses:GetAccount", "ses:GetSendStatistics", "acm:ListCertificates",
+      "acm:DescribeCertificate", "budgets:ViewBudget",
+    ]
+    resources = ["*"]
+  }
+
+  # Logs Insights queries, on Fleet's log group only (the ECS module names it terraform-*).
+  statement {
+    sid       = "QueryFleetLogs"
+    effect    = "Allow"
+    actions   = ["logs:StartQuery"]
+    resources = ["arn:aws:logs:*:${local.account_id}:log-group:terraform-*"]
+  }
+}
+
+resource "aws_iam_policy" "github_actions_scan" {
+  name   = "fleet-homelab-github-actions-scan"
+  policy = data.aws_iam_policy_document.github_actions_scan.json
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_scan" {
+  role       = aws_iam_role.github_actions_scan.name
+  policy_arn = aws_iam_policy.github_actions_scan.arn
+}
+
 output "github_actions_apply_role_arn" {
   value = aws_iam_role.github_actions_apply.arn
 }
 
 output "github_actions_plan_role_arn" {
   value = aws_iam_role.github_actions_plan.arn
+}
+
+output "github_actions_scan_role_arn" {
+  value = aws_iam_role.github_actions_scan.arn
 }

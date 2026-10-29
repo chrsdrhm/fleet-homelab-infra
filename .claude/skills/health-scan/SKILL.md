@@ -6,9 +6,9 @@ allowed-tools: Bash(scripts/health-scan.sh), Bash(scripts/health-scan.sh *), Bas
 
 # Health scan
 
-Plan Task 21's twelve checks, as one read-only script, compared with [`baseline.md`](baseline.md). Nothing here changes the stack.
+Plan Task 21's twelve checks, as one read-only script, compared with [`baseline.md`](baseline.md). Nothing here changes the stack. CI also runs the script after every `up` and has Claude compare it with the baseline (the `health-scan` job); if that run's summary or its issue flagged something, start there.
 
-**Keep identifying values out of the conversation.** The script masks the Fleet hostname, the domain, the account ID, ARNs and email addresses. In any follow-up query, limit output with `--query` or Logs Insights `fields`, and never print the Fleet URL, account IDs, ARNs or emails.
+**Keep identifying values out of the conversation.** The script masks the Fleet hostname, the domain, the account ID, ARNs, email and IP addresses. In any follow-up query, limit output with `--query` or Logs Insights `fields`, and never print the Fleet URL, account IDs, ARNs or emails.
 
 ## 1. Is the stack up?
 

@@ -1,4 +1,4 @@
-# Terraform for this stack, in five jobs (plus lint-comment, which comments on the PR
+# Terraform for this stack, in six jobs (plus lint-comment, which comments on the PR
 # when lint fails):
 #  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
 #           terraform test, shellcheck, actionlint, zizmor, tflint; see checks/README.md).
@@ -17,6 +17,11 @@
 #           setup (scripts/release-review.sh), adding the verdict to the issue; by hand
 #           (action=review), only the review. Signs in to the Claude API with workload
 #           identity federation, no API key.
+#  - health-scan: after every successful up, and by hand (action=scan): runs the read-only
+#           health scan with the scan role (scripts/health-scan.sh), has Claude compare
+#           it with the baseline (scripts/health-review.sh), writes both to the run's
+#           summary, and opens an issue if something is outside the baseline. Only warns
+#           when it fails, so it never fails an up.
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
@@ -52,6 +57,7 @@ on:
           - up
           - down
           - review
+          - scan
       confirm:
         description: "For down only: type destroy"
         required: false
@@ -434,7 +440,7 @@ jobs:
 
   apply:
     name: terraform-apply
-    if: (github.event_name == 'workflow_dispatch' && inputs.action != 'review') || github.event_name == 'schedule'
+    if: (github.event_name == 'workflow_dispatch' && (inputs.action == 'up' || inputs.action == 'down')) || github.event_name == 'schedule'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
     permissions:
@@ -930,3 +936,117 @@ jobs:
             printf '\n<!-- release-review: %s..%s -->\n' "$FROM" "$TO"
           } > "$RUNNER_TEMP/release.md"
           ./scripts/notify-issue.sh update "$title" "$RUNNER_TEMP/release.md"
+
+  health-scan:
+    name: health-scan
+    needs: apply
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'scan' || (inputs.action == 'up' && needs.apply.result == 'success'))
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # the scan role (AWS) and a short-lived Claude API token, both main only
+      issues: write # "The health scan found something to look at"
+    env:
+      TITLE: The health scan found something to look at
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Read-only, and only the calls the scan makes (the scan role in oidc.tf), so this
+      # job never holds the apply role. Every step from here only warns on failure.
+      - name: Get AWS credentials (OIDC, scan role)
+        id: aws
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_SCAN_ROLE_ARN }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+
+      # The scan masks identifying values itself; this covers anything it misses in the
+      # log. Its window covers the up (about half an hour); by hand, the last day.
+      - name: Scan
+        id: scan
+        if: steps.aws.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLEET_URL: https://${{ secrets.FLEET_SUBDOMAIN }}
+          FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$ACTION" = up ]; then
+            hours=2 when="just after an up"
+          else
+            hours=24 when="by hand, not after an up"
+          fi
+          { echo "Run: $when."; echo; ./scripts/health-scan.sh "$hours"; } > "$RUNNER_TEMP/scan.md"
+          {
+            echo "## Health scan"
+            echo
+            echo "<details><summary>The scan's figures</summary>"
+            echo
+            cat "$RUNNER_TEMP/scan.md"
+            echo
+            echo "</details>"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare with the baseline
+        id: review
+        if: steps.scan.outcome == 'success'
+        continue-on-error: true
+        env:
+          CLAUDE_REVIEW_MODEL: ${{ vars.CLAUDE_REVIEW_MODEL }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ secrets.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ secrets.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ secrets.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+          ANTHROPIC_IDENTITY_TOKEN_FILE: ${{ runner.temp }}/github-id-token
+        run: |
+          curl -sS --fail -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" \
+            | jq -r .value > "$ANTHROPIC_IDENTITY_TOKEN_FILE"
+          ./scripts/health-review.sh "$RUNNER_TEMP/scan.md" > "$RUNNER_TEMP/review.md"
+          rm -f "$ANTHROPIC_IDENTITY_TOKEN_FILE"
+
+      # An issue only when the verdict isn't ✅; a clean scan closes an open one.
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AWS_OUTCOME: ${{ steps.aws.outcome }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          if [ "$AWS_OUTCOME" != success ]; then
+            echo "::warning title=Health scan skipped::Couldn't get the scan role (is the AWS_SCAN_ROLE_ARN secret set, and oidc.tf applied?)."
+            exit 0
+          elif [ "$SCAN_OUTCOME" != success ]; then
+            echo "::warning title=Health scan failed::The scan didn't complete; run /health-scan by hand."
+            exit 0
+          elif [ "$REVIEW_OUTCOME" != success ] || [ ! -s "$RUNNER_TEMP/review.md" ]; then
+            echo "::warning title=Health review failed::Claude's comparison with the baseline didn't complete; the figures are in this run's summary."
+            exit 0
+          fi
+          { echo "## Claude's comparison with the baseline"; echo; cat "$RUNNER_TEMP/review.md"; } >> "$GITHUB_STEP_SUMMARY"
+          # Only the first line: health-review.sh makes sure it's the verdict.
+          if head -n 1 "$RUNNER_TEMP/review.md" | grep -q '^\*\*Verdict:\*\* ✅'; then
+            ./scripts/notify-issue.sh resolve "$TITLE" "A later scan was within the baseline: $RUN_URL"
+          else
+            # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
+            {
+              printf '@%s The health scan in %s found something outside the baseline. The figures are in the run summary; `/health-scan` looks closer. This issue closes itself after a clean scan.\n\n' "$OWNER" "$RUN_URL"
+              cat "$RUNNER_TEMP/review.md"
+            } > "$RUNNER_TEMP/notice.md"
+            ./scripts/notify-issue.sh report "$TITLE" "$RUNNER_TEMP/notice.md"
+            echo "::warning title=Health scan::Something is outside the baseline; see the issue."
+          fi
