@@ -10,7 +10,8 @@
 # adds Fleet's status endpoints; without it they're skipped.
 #
 # The report is safe to post publicly: the Fleet hostname and domain, account IDs, ARNs
-# email addresses and IP addresses are masked, and only counts and figures are printed.
+# email and IP addresses, UUIDs, token-shaped strings and any other hostname are masked,
+# log message lines are cut short, and otherwise only counts and figures are printed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export AWS_REGION="${AWS_REGION:-us-east-1}" AWS_PAGER=""
@@ -35,7 +36,11 @@ account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null 
 mask() {
   local s
   s=$(sed -E 's#arn:aws[a-zA-Z-]*:[^ ,")]*#<arn>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g
-    s/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g')
+    s/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g
+    s/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g
+    s/([0-9a-fA-F]{1,4}:){4,7}[0-9a-fA-F]{1,4}|[0-9a-fA-F]{0,4}::[0-9a-fA-F:]*[0-9a-fA-F]/<ip>/g
+    s/[A-Za-z0-9_+\/=-]{32,}/<token>/g
+    s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/<host>/g')
   [ -n "$host" ] && s=${s//"$host"/<fleet-host>}
   [ -n "$domain" ] && [ "$domain" != "$host" ] && s=${s//"$domain"/<domain>}
   [ -n "$account" ] && s=${s//"$account"/<account>}
@@ -113,7 +118,7 @@ else
   fi
   echo "- Top errors and warnings (level | message | count; none if empty):"
   if r=$(insights 'filter level in ["error","warn"] | stats count(*) as n by level, msg | sort n desc | limit 15'); then
-    [ -n "$r" ] && bullets <<< "$r" | mask
+    [ -n "$r" ] && cut -c1-140 <<< "$r" | bullets | mask
   else
     fail "Logs Insights"
   fi

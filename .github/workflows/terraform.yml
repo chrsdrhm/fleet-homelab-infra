@@ -1038,7 +1038,8 @@ jobs:
             exit 0
           fi
           { echo "## Claude's comparison with the baseline"; echo; cat "$RUNNER_TEMP/review.md"; } >> "$GITHUB_STEP_SUMMARY"
-          if grep -q '^\*\*Verdict:\*\* ✅' "$RUNNER_TEMP/review.md"; then
+          # Only the first line: health-review.sh makes sure it's the verdict.
+          if head -n 1 "$RUNNER_TEMP/review.md" | grep -q '^\*\*Verdict:\*\* ✅'; then
             ./scripts/notify-issue.sh resolve "$TITLE" "A later scan was within the baseline: $RUN_URL"
           else
             # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body

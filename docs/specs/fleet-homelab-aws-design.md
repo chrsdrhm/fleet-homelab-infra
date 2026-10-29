@@ -557,8 +557,10 @@ scan role and sends its report with the baseline
 (`.claude/skills/health-scan/baseline.md`) to Claude, through the same
 federation and the same helper (`scripts/claude-message.sh`), in one request
 with no tools. Both go to the run's summary; a verdict other than ✅ opens an
-issue, which a clean scan closes. The report is public, so the scan masks the
-hostname, domain, account ID, ARNs, email and IP addresses. Every step only
+issue, which a clean scan closes. The report is public, so the scan masks
+hostnames, the account ID, ARNs, email and IP addresses, UUIDs and
+token-shaped strings; Claude's text has mentions, links, URLs and HTML broken,
+and only its first line counts as the verdict. Every step only
 warns on failure, so the scan never fails an `up`.
 
 **Starting the GitOps run after `up`.** A workflow's own token is limited to

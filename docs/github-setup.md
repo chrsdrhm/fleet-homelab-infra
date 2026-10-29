@@ -231,6 +231,6 @@ After a successful `up`, the `health-scan` job in `terraform.yml` runs `scripts/
 
 **Security:**
 - **The scan role only reads.** It allows exactly the calls the scan makes, and Logs Insights queries only on Fleet's log group. It trusts only runs on `main`, like the apply role, and the job never gets the apply role.
-- **The report is public,** in the run's summary and in any issue, so the scan masks the Fleet hostname and domain, the account ID, ARNs, email and IP addresses, and prints only figures and log message counts.
-- **Claude gets no tools.** The report holds log messages, which anyone reaching Fleet can influence, so it's one request, and only Claude's text is posted, with `@mentions` broken.
+- **The report is public,** in the run's summary, so the scan masks hostnames, the account ID, ARNs, email and IP addresses, UUIDs and token-shaped strings, cuts log message lines short, and otherwise prints only figures and counts.
+- **Claude gets no tools.** The report holds log messages, which anyone reaching Fleet can influence, so it's one request, and only Claude's text is posted, with `@mentions`, links, images, URLs and HTML broken. Only the first line counts as the verdict, so a verdict-shaped log line can't close the issue.
 - **Cost:** about 10,000 tokens a scan, a few cents, once per `up`.

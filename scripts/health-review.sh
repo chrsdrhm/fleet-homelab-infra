@@ -60,14 +60,17 @@ Start with exactly one verdict line:
 EOF
 
 response=$(./scripts/claude-message.sh "$work/system.md" "$work/context.md" 4000)
-review=$(jq -r '[.content[] | select(.type == "text") | .text] | join("\n")' <<< "$response")
-if [ -z "$review" ] || ! grep -q '^\*\*Verdict:\*\*' <<< "$review"; then
-  echo "The review came back empty or without a verdict (stop reason: $(jq -r .stop_reason <<< "$response"))." >&2
+# Leading blank lines dropped, so the verdict is the first line: the workflow reads only
+# that line, so a verdict-shaped line further down (from the report) can't change it.
+review=$(jq -r '[.content[] | select(.type == "text") | .text] | join("\n")' <<< "$response" | sed '/./,$!d')
+if ! head -n 1 <<< "$review" | grep -qE '^\*\*Verdict:\*\* (✅|⚠️|❌)'; then
+  echo "The review didn't start with a verdict (stop reason: $(jq -r .stop_reason <<< "$response"))." >&2
   exit 1
 fi
 
-# The findings may go into a public issue: break @mentions so they can't notify anyone,
-# and escape HTML comments so they can't hide text or fake a marker.
-sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/<!--/\&lt;!--/g' <<< "$review"
+# The findings go into a public issue and summary, and the report they come from holds
+# log messages: break @mentions so they can't notify anyone, escape all HTML, and break
+# links, images and bare URLs, so none of it can hide text, load or point anywhere.
+sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/</\&lt;/g; s/>/\&gt;/g; s/\]\(/]\\(/g; s#://#:/\xe2\x80\x8b/#g; s/www\./www\xe2\x80\x8b./g' <<< "$review"
 echo
 echo "_Compared with \`.claude/skills/health-scan/baseline.md\` by \`$model\`, with no tools. \`/health-scan\` looks closer._"
