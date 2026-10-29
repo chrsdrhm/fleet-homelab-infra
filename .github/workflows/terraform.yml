@@ -17,11 +17,11 @@
 #           setup (scripts/release-review.sh), adding the verdict to the issue; by hand
 #           (action=review), only the review. Signs in to the Claude API with workload
 #           identity federation, no API key.
-#  - health-scan: after every successful up, and by hand (action=scan): runs the read-only
-#           health scan with the scan role (scripts/health-scan.sh), has Claude compare
-#           it with the baseline (scripts/health-review.sh), writes both to the run's
-#           summary, and opens an issue if something is outside the baseline. Only warns
-#           when it fails, so it never fails an up.
+#  - health-scan: its own run (action=scan), started by every successful up and by
+#           hand: runs the read-only health scan with the scan role
+#           (scripts/health-scan.sh), has Claude compare it with the baseline
+#           (scripts/health-review.sh), writes both to the run's summary, and opens an
+#           issue if something is outside the baseline. Only warns when it fails.
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
@@ -70,6 +70,11 @@ on:
         description: "For review only: the version upgraded to, like 4.93.2"
         required: false
         type: string
+      after_up:
+        description: "For scan only: set by a successful up, to scan just its 2 hours"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -447,6 +452,7 @@ jobs:
       id-token: write
       contents: read
       issues: write # the nightly run's notices (scripts/notify-issue.sh)
+      actions: write # a successful up starts the health scan as its own run
     concurrency:
       group: terraform
       cancel-in-progress: false
@@ -576,6 +582,15 @@ jobs:
           GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
         run: ./scripts/up.sh
+
+      # The health scan runs as its own run (action=scan), so it never holds up or fails
+      # this one. Best effort: if it doesn't start, run action=scan by hand.
+      - name: Start the health scan
+        if: steps.mode.outputs.action == 'up'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run terraform.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after_up=true
 
       - name: Down
         id: down
@@ -939,10 +954,7 @@ jobs:
 
   health-scan:
     name: health-scan
-    needs: apply
-    if: >-
-      always() && github.event_name == 'workflow_dispatch' &&
-      (inputs.action == 'scan' || (inputs.action == 'up' && needs.apply.result == 'success'))
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'scan'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 20
     permissions:
@@ -978,10 +990,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FLEET_URL: https://${{ secrets.FLEET_SUBDOMAIN }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
-          ACTION: ${{ inputs.action }}
+          AFTER_UP: ${{ inputs.after_up }}
         run: |
           echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
-          if [ "$ACTION" = up ]; then
+          if [ "$AFTER_UP" = true ]; then
             hours=2 when="just after an up"
           else
             hours=24 when="by hand, not after an up"

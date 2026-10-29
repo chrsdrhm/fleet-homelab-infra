@@ -551,8 +551,8 @@ AWS role and no Terraform secrets, posts only Claude's text (with `@mentions`
 broken), and a failed review only warns. Expected cost: about 10,000–50,000
 input tokens a review, $0.05–0.50 at Opus prices, a few reviews a month.
 
-**Health scan after `up`.** After a successful `up`, and by hand
-(`action=scan`), the `health-scan` job runs `scripts/health-scan.sh` with the
+**Health scan after `up`.** A successful `up` starts the scan as its own run
+(`action=scan`, which can also be run by hand), whose `health-scan` job runs `scripts/health-scan.sh` with the
 scan role and sends its report with the baseline
 (`.claude/skills/health-scan/baseline.md`) to Claude, through the same
 federation and the same helper (`scripts/claude-message.sh`), in one request
@@ -560,8 +560,8 @@ with no tools. Both go to the run's summary; a verdict other than ✅ opens an
 issue, which a clean scan closes. The report is public, so the scan masks
 hostnames, the account ID, ARNs, email and IP addresses, UUIDs and
 token-shaped strings; Claude's text has mentions, links, URLs and HTML broken,
-and only its first line counts as the verdict. Every step only
-warns on failure, so the scan never fails an `up`.
+and only its first line counts as the verdict. It's a separate
+run, and every step only warns on failure, so the scan never fails an `up`.
 
 **Starting the GitOps run after `up`.** A workflow's own token is limited to
 its repo, so the infra workflow cannot start the GitOps repo's workflow with
