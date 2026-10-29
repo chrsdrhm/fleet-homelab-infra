@@ -55,7 +55,7 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry); `health-scan.sh` (read-only health scan) and `health-review.sh` (Claude compares it with the baseline); `release-review.sh` (Claude reviews new Fleet releases); `claude-message.sh` (the Claude API call both use) and `notify-issue.sh` (the issues CI opens) |
 | `.claude/skills/` | Claude Code skills: `/session-start`, `/session-end`, `/fleet-upgrade` and `/health-scan` (with the scan's baseline) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
-| `.github/` | The CI workflows (lint, plan, apply, release check, health scan, and the optional Claude review), the shared setup action, Dependabot and CODEOWNERS |
+| `.github/` | The CI workflows: `terraform.yml` (lint, plan, apply, up and down, the nightly teardown), `fleet-checks.yml` (the release check and the health scan) and `claude-review.yml` (the optional Claude review); the shared setup action, Dependabot and CODEOWNERS |
 | `AGENTS.md`, `CLAUDE.md` | Rules for AI assistants working in or reviewing this repo. `AGENTS.md` holds them and is read by Claude Code, GitHub Copilot and other tools; `CLAUDE.md` only imports it, for Claude Code setups that read nothing else. |
 | `docs/` | The [setup guide](docs/setup.md), [GitHub setup](docs/github-setup.md) and [Upgrading Fleet](docs/upgrading-fleet.md) |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |

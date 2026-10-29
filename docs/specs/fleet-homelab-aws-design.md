@@ -172,11 +172,11 @@ Non-goals above.
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
-| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the nightly run opens an issue when a newer release is a week old (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
+| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens an issue when a newer release is a week old (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan (`scripts/health-scan.sh`, which CI runs after every `up`; plan Tasks 21 and 30) and the nightly run's issues (a failed teardown, kept snapshots, a newer Fleet release) |
+| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan (`scripts/health-scan.sh`, which CI runs after every `up`; plan Tasks 21 and 30) and the issues CI opens (a failed teardown, kept snapshots, a newer Fleet release, a health scan outside the baseline) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
@@ -535,9 +535,9 @@ Claude subscription. It skips without that token, is never a required check, can
 only read the repo and comment, and can be swapped for another reviewer or
 removed (see `docs/github-setup.md`).
 
-**Claude's review of a new Fleet release.** The nightly release check runs in its
-own job (`fleet-release`), apart from the teardown, so a teardown neither delays
-nor skips it. When it opens or updates its issue, the same job sends Claude the
+**Claude's review of a new Fleet release.** The daily release check runs in its
+own workflow (`fleet-checks.yml`, job `fleet-release`, 13:47 UTC), apart from the
+teardown, so a teardown neither delays nor skips it. When it opens or updates its issue, the same job sends Claude the
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
@@ -551,7 +551,8 @@ AWS role and no Terraform secrets, posts only Claude's text (with `@mentions`
 broken), and a failed review only warns. Expected cost: about 10,000–50,000
 input tokens a review, $0.05–0.50 at Opus prices, a few reviews a month.
 
-**Health scan after `up`.** A successful `up` starts the scan as its own run
+**Health scan after `up`.** A successful `up`, and an apply on merge that changed
+something (once ECS has rolled it out), start the scan in `fleet-checks.yml`
 (`action=scan`, which can also be run by hand), whose `health-scan` job runs `scripts/health-scan.sh` with the
 scan role and sends its report with the baseline
 (`.claude/skills/health-scan/baseline.md`) to Claude, through the same
@@ -616,8 +617,9 @@ the time by design, a red board usually means "torn down on purpose".
   `fleet-terraform` root module and addons, the separate `okta/` root for the
   Okta side (applied locally), the optional self-hosted Grafana's
   configuration in `grafana/` (not applied to AWS), the
-  `up`/`down` operational scripts, and one GitHub Actions workflow
-  (`terraform.yml`: `lint` and `plan` on pull requests, `apply-on-merge` on
+  `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
+  (the daily Fleet release check with Claude's review, and the health scan) and
+  `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
   merges, `apply` for on-demand up/down and a nightly check (07:17 UTC; it
   acts until 7:59am Chicago time, and only reports, in an issue, if GitHub
   starts it later) that tears the stack down if it was left up and keeps an

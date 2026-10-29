@@ -67,15 +67,17 @@ if [ -n "$SNAPSHOT_ID" ]; then
   done
 fi
 
-# Verify nothing billable from the stack is left.
+# Verify nothing billable from the stack is left: this stack's resources only, by its
+# Project tag (provider default_tags) where the call returns tags, else by its names, so
+# other resources in the account or region don't count.
 LEFT=0
 check() { if [ "$2" != "0" ]; then echo "STILL PRESENT: $1 ($2)"; LEFT=1; fi; }
 check "ECS cluster"   "$(aws ecs describe-clusters --clusters fleet-homelab --query "length(clusters[?status=='ACTIVE'])" --output text)"
-check "Aurora"        "$(aws rds describe-db-clusters --query 'length(DBClusters)' --output text)"
-check "Redis"         "$(aws elasticache describe-replication-groups --query 'length(ReplicationGroups)' --output text)"
-check "load balancer" "$(aws elbv2 describe-load-balancers --query 'length(LoadBalancers)' --output text)"
-check "NAT gateway"   "$(aws ec2 describe-nat-gateways --filter Name=state,Values=pending,available --query 'length(NatGateways)' --output text)"
+check "Aurora"        "$(aws rds describe-db-clusters --query "length(DBClusters[?TagList[?Key=='Project' && Value=='fleet-lab']])" --output text)"
+check "Redis"         "$(aws elasticache describe-replication-groups --query "length(ReplicationGroups[?ReplicationGroupId=='fleet-homelab'])" --output text)"
+check "load balancer" "$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?LoadBalancerName=='fleet-homelab'])" --output text)"
+check "NAT gateway"   "$(aws ec2 describe-nat-gateways --filter Name=state,Values=pending,available Name=tag:Project,Values=fleet-lab --query 'length(NatGateways)' --output text)"
 check "VPC"           "$(aws ec2 describe-vpcs --filters Name=tag:Project,Values=fleet-lab --query 'length(Vpcs)' --output text)"
-check "WAF web ACL"   "$(aws wafv2 list-web-acls --scope REGIONAL --query 'length(WebACLs)' --output text)"
+check "WAF web ACL"   "$(aws wafv2 list-web-acls --scope REGIONAL --query "length(WebACLs[?Name=='fleet-homelab'])" --output text)"
 if [ "$LEFT" -ne 0 ]; then echo "Down, but something is still present (see above)." >&2; exit 2; fi
 echo "Down and verified: nothing billable from the stack remains.${SNAPSHOT_ID:+ Restore point: $SNAPSHOT_ID}"
