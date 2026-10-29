@@ -1,7 +1,7 @@
 ---
 name: health-scan
 description: Read-only health scan of the running stack - ECS, Fleet's logs, the load balancer, Aurora, Redis, WAF, SES, the certificate, DNS, the budget and GitHub - compared with the baseline, reporting only what's new. Run it when the person asks, after an upgrade, or before a teardown.
-allowed-tools: Bash(scripts/health-scan.sh), Bash(scripts/health-scan.sh *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(aws ecs describe-services --cluster fleet-homelab --services fleet --query *), Bash(aws logs describe-log-groups --log-group-name-prefix terraform- --query *), Bash(aws logs start-query *), Bash(aws logs get-query-results *), Bash(TZ=America/Chicago date)
+allowed-tools: Bash(scripts/health-scan.sh), Bash(scripts/health-scan.sh *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(aws ecs describe-services --cluster fleet-homelab --services fleet --query *), Bash(aws logs describe-log-groups --log-group-name-prefix terraform- --query *), Bash(aws logs start-query *), Bash(aws logs get-query-results *)
 ---
 
 # Health scan

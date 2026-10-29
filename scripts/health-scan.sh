@@ -12,7 +12,7 @@
 # The report is safe to post publicly: the Fleet hostname and domain, account IDs, ARNs
 # and email addresses are masked, and only counts and figures are printed.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 export AWS_REGION="${AWS_REGION:-us-east-1}" AWS_PAGER=""
 
 hours="${1:-72}"
@@ -42,6 +42,7 @@ mask() {
 }
 section() { printf '\n## %s\n\n' "$1"; }
 fail() { echo "- (couldn't read: $1)"; }
+bullets() { sed 's/^/  - /'; }
 
 # One CloudWatch statistic over the whole window: metric <namespace> <name> <stat>
 # <dimensions...>. Sum adds the datapoints, Maximum and Minimum take the extreme,
@@ -101,15 +102,27 @@ insights() {
 if [ -z "$group" ] || [ "$group" = None ]; then
   fail "no Fleet log group (is the stack up?)"
 else
+  # Each query's result is captured first, so a failed query reads "couldn't read",
+  # never as no errors.
   echo "- Records by level (level | count; a blank level is a line that isn't Fleet's JSON):"
-  insights 'stats count(*) as n by level | sort n desc' | sed 's/^/  - /' | mask || fail "Logs Insights"
-  echo "- Top errors and warnings (level | message | count):"
-  insights 'filter level in ["error","warn"] | stats count(*) as n by level, msg | sort n desc | limit 15' \
-    | sed 's/^/  - /' | mask || fail "Logs Insights"
+  if r=$(insights 'stats count(*) as n by level | sort n desc'); then
+    bullets <<< "$r" | mask
+  else
+    fail "Logs Insights"
+  fi
+  echo "- Top errors and warnings (level | message | count; none if empty):"
+  if r=$(insights 'filter level in ["error","warn"] | stats count(*) as n by level, msg | sort n desc | limit 15'); then
+    [ -n "$r" ] && bullets <<< "$r" | mask
+  else
+    fail "Logs Insights"
+  fi
   echo "- Keyword hits (count):"
   for word in panic fatal "out of memory" "connection refused" deadlock "too many connections" "context deadline" timeout; do
-    n=$(insights "filter @message like /(?i)$word/ | stats count(*)" | head -n 1)
-    echo "  - $word: ${n:-0}"
+    if r=$(insights "filter @message like /(?i)$word/ | stats count(*)"); then
+      echo "  - $word: $(head -n 1 <<< "$r" | grep . || echo 0)"
+    else
+      echo "  - $word: (couldn't read)"
+    fi
   done
 fi
 
@@ -130,13 +143,20 @@ fi
 # 4. Aurora
 section "4. Aurora"
 db="Name=DBInstanceIdentifier,Value=fleet-homelab-one"
-aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --output json 2>/dev/null \
-  | jq -r '.DBClusters[0] | "- Status: \(.Status); engine \(.EngineVersion)"' || fail "the cluster"
+if j=$(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --output json 2>/dev/null); then
+  jq -r '.DBClusters[0] | "- Status: \(.Status); engine \(.EngineVersion)"' <<< "$j"
+else
+  fail "the cluster"
+fi
 echo "- Events (instance and cluster):"
 for type in db-instance db-cluster; do
   id=fleet-homelab; [ "$type" = db-instance ] && id=fleet-homelab-one
-  aws rds describe-events --source-type "$type" --source-identifier "$id" --start-time "$start_iso" \
-    --query 'Events[].[Date, Message]' --output text 2>/dev/null | cut -c1-200 | sed 's/^/  - /' | mask
+  if r=$(aws rds describe-events --source-type "$type" --source-identifier "$id" --start-time "$start_iso" \
+    --query 'Events[].[Date, Message]' --output text 2>/dev/null); then
+    [ -n "$r" ] && cut -c1-200 <<< "$r" | sed 's/^/  - /' | mask
+  else
+    fail "$type events"
+  fi
 done
 echo "- Pending maintenance actions: $(aws rds describe-pending-maintenance-actions --query 'length(PendingMaintenanceActions)' --output text 2>/dev/null || echo error)"
 echo "- CPU %: average $(metric AWS/RDS CPUUtilization Average "$db"), maximum $(metric AWS/RDS CPUUtilization Maximum "$db")"
@@ -146,7 +166,7 @@ echo "- DatabaseConnections, maximum: $(metric AWS/RDS DatabaseConnections Maxim
 
 # 5. Fargate
 section "5. Fargate task"
-ecsdims=(Name=ClusterName,Value=fleet-homelab Name=ServiceName,Value=fleet)
+ecsdims=("Name=ClusterName,Value=fleet-homelab" "Name=ServiceName,Value=fleet")
 echo "- CPU %: average $(metric AWS/ECS CPUUtilization Average "${ecsdims[@]}"), maximum $(metric AWS/ECS CPUUtilization Maximum "${ecsdims[@]}")"
 echo "- Memory %: average $(metric AWS/ECS MemoryUtilization Average "${ecsdims[@]}"), maximum $(metric AWS/ECS MemoryUtilization Maximum "${ecsdims[@]}")"
 
@@ -154,32 +174,44 @@ echo "- Memory %: average $(metric AWS/ECS MemoryUtilization Average "${ecsdims[
 section "6. Redis"
 redis="Name=CacheClusterId,Value=fleet-homelab-001"
 echo "- Events:"
-aws elasticache describe-events --source-type cache-cluster --source-identifier fleet-homelab-001 --start-time "$start_iso" \
-  --query 'Events[].[Date, Message]' --output text 2>/dev/null | cut -c1-200 | sed 's/^/  - /' | mask
+if r=$(aws elasticache describe-events --source-type cache-cluster --source-identifier fleet-homelab-001 --start-time "$start_iso" \
+  --query 'Events[].[Date, Message]' --output text 2>/dev/null); then
+  [ -n "$r" ] && cut -c1-200 <<< "$r" | sed 's/^/  - /' | mask
+else
+  fail "Redis events"
+fi
 echo "- EngineCPUUtilization %: average $(metric AWS/ElastiCache EngineCPUUtilization Average "$redis"), maximum $(metric AWS/ElastiCache EngineCPUUtilization Maximum "$redis")"
 echo "- Evictions (sum): $(metric AWS/ElastiCache Evictions Sum "$redis")"
 
 # 7. WAF
 section "7. WAF"
-waf=(Name=WebACL,Value=fleet-homelab Name=Region,Value="$AWS_REGION" Name=Rule,Value=ALL)
+waf=("Name=WebACL,Value=fleet-homelab" "Name=Region,Value=$AWS_REGION" "Name=Rule,Value=ALL")
 echo "- AllowedRequests (sum): $(metric AWS/WAFV2 AllowedRequests Sum "${waf[@]}")"
 echo "- BlockedRequests (sum): $(metric AWS/WAFV2 BlockedRequests Sum "${waf[@]}")"
 
 # 8. SES
 section "8. SES"
-aws sesv2 get-account --output json 2>/dev/null \
-  | jq -r '"- Sending enabled: \(.SendingEnabled); enforcement \(.EnforcementStatus); production access (out of the sandbox): \(.ProductionAccessEnabled)"' || fail "SES"
-aws ses get-send-statistics --output json 2>/dev/null \
-  | jq -r --arg start "$start_iso" '[.SendDataPoints[] | select(.Timestamp >= $start)]
-      | "- In the window: \(map(.DeliveryAttempts) | add // 0) sent, \(map(.Bounces) | add // 0) bounces, \(map(.Complaints) | add // 0) complaints, \(map(.Rejects) | add // 0) rejects"' \
-  || fail "SES statistics"
+if j=$(aws sesv2 get-account --output json 2>/dev/null); then
+  jq -r '"- Sending enabled: \(.SendingEnabled); enforcement \(.EnforcementStatus); production access (out of the sandbox): \(.ProductionAccessEnabled)"' <<< "$j"
+else
+  fail "SES"
+fi
+if j=$(aws ses get-send-statistics --output json 2>/dev/null); then
+  jq -r --arg start "$start_iso" '[.SendDataPoints[] | select(.Timestamp >= $start)]
+      | "- In the window: \(map(.DeliveryAttempts) | add // 0) sent, \(map(.Bounces) | add // 0) bounces, \(map(.Complaints) | add // 0) complaints, \(map(.Rejects) | add // 0) rejects"' <<< "$j"
+else
+  fail "SES statistics"
+fi
 
 # 9. Certificate and DNS
 section "9. Certificate and DNS"
 cert=$(aws acm list-certificates --query 'CertificateSummaryList[0].CertificateArn' --output text 2>/dev/null)
 if [ -n "$cert" ] && [ "$cert" != None ]; then
-  aws acm describe-certificate --certificate-arn "$cert" --output json 2>/dev/null \
-    | jq -r '.Certificate | "- Certificate: \(.Status); expires \(.NotAfter); renewal \(.RenewalEligibility)"' || fail "the certificate"
+  if j=$(aws acm describe-certificate --certificate-arn "$cert" --output json 2>/dev/null); then
+    jq -r '.Certificate | "- Certificate: \(.Status); expires \(.NotAfter); renewal \(.RenewalEligibility)"' <<< "$j"
+  else
+    fail "the certificate"
+  fi
 else
   fail "the certificate"
 fi
@@ -192,9 +224,11 @@ fi
 # 10. Budget
 section "10. Budget"
 if [ -n "$account" ]; then
-  aws budgets describe-budget --account-id "$account" --budget-name fleet-homelab-monthly --output json 2>/dev/null \
-    | jq -r '.Budget | "- This month: $\(.CalculatedSpend.ActualSpend.Amount | tonumber | . * 100 | round / 100) actual, $\(.CalculatedSpend.ForecastedSpend.Amount // "0" | tonumber | . * 100 | round / 100) forecast, of a $\(.BudgetLimit.Amount | tonumber | round) limit"' \
-    || fail "the budget"
+  if j=$(aws budgets describe-budget --account-id "$account" --budget-name fleet-homelab-monthly --output json 2>/dev/null); then
+    jq -r '.Budget | "- This month: $\(.CalculatedSpend.ActualSpend.Amount | tonumber | . * 100 | round / 100) actual, $\(.CalculatedSpend.ForecastedSpend.Amount // "0" | tonumber | . * 100 | round / 100) forecast, of a $\(.BudgetLimit.Amount | tonumber | round) limit"' <<< "$j"
+  else
+    fail "the budget"
+  fi
 else
   fail "the account"
 fi
