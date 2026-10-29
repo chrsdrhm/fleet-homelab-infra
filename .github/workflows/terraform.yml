@@ -247,8 +247,10 @@ jobs:
           for _ in $(seq 80); do
             busy=0
             for event in workflow_dispatch schedule; do
+              # review and scan runs (named by run-name above) never touch the stack.
               n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
+                --json status,displayTitle --jq 'map(select(.status != "completed"
+                  and (.displayTitle | IN("Terraform review", "Terraform scan") | not))) | length')
               busy=$((busy + n))
             done
             [ "$busy" = 0 ] && exit 0
@@ -707,8 +709,10 @@ jobs:
           for _ in $(seq 80); do
             busy=0
             for event in workflow_dispatch schedule; do
+              # review and scan runs (named by run-name above) never touch the stack.
               n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
+                --json status,displayTitle --jq 'map(select(.status != "completed"
+                  and (.displayTitle | IN("Terraform review", "Terraform scan") | not))) | length')
               busy=$((busy + n))
             done
             [ "$busy" = 0 ] && exit 0

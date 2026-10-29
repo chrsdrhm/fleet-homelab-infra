@@ -383,14 +383,19 @@ resource "aws_iam_role_policy_attachment" "github_actions_scan" {
   policy_arn = aws_iam_policy.github_actions_scan.arn
 }
 
+# The role ARNs hold the account ID, so they're sensitive (terraform output -raw still
+# prints them, for the GitHub secrets).
 output "github_actions_apply_role_arn" {
-  value = aws_iam_role.github_actions_apply.arn
+  value     = aws_iam_role.github_actions_apply.arn
+  sensitive = true
 }
 
 output "github_actions_plan_role_arn" {
-  value = aws_iam_role.github_actions_plan.arn
+  value     = aws_iam_role.github_actions_plan.arn
+  sensitive = true
 }
 
 output "github_actions_scan_role_arn" {
-  value = aws_iam_role.github_actions_scan.arn
+  value     = aws_iam_role.github_actions_scan.arn
+  sensitive = true
 }

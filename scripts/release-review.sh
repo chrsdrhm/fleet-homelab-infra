@@ -70,10 +70,16 @@ fi
 # Fleet's GitOps template (what `fleetctl new` writes), which the GitOps repo's layout
 # and .github/fleet-gitops/ come from: a diff of every file that changed between the tags.
 template=cmd/fleetctl/fleetctl/templates/new/
+# GitHub cuts a recursive tree off past 100,000 entries or 7 MB (Fleet's has about
+# 24,000), and a cut-off tree would read as "no template files changed", so stop instead.
 for tag in "$from" "$to"; do
-  gh api "repos/fleetdm/fleet/git/trees/fleet-v$tag?recursive=1" \
-    --jq ".tree[] | select(.type == \"blob\" and (.path | startswith(\"$template\"))) | \"\(.path) \(.sha)\"" \
-    | sort > "$work/tree-$tag"
+  gh api "repos/fleetdm/fleet/git/trees/fleet-v$tag?recursive=1" > "$work/tree.json"
+  if [ "$(jq -r .truncated "$work/tree.json")" != false ]; then
+    echo "GitHub returned Fleet's file list for $tag cut off, so the template diff can't be trusted." >&2
+    exit 1
+  fi
+  jq -r --arg t "$template" '.tree[] | select(.type == "blob" and (.path | startswith($t))) | "\(.path) \(.sha)"' \
+    "$work/tree.json" | sort > "$work/tree-$tag"
 done
 {
   echo "<template_diff from=\"$from\" to=\"$to\">"
