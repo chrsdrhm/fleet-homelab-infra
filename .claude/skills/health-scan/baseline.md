@@ -24,7 +24,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 ## 4. Aurora
 - Status `available`, engine `8.0.mysql_aurora.3.13.0`.
-- Events after an `up`: cluster created from snapshot, instance created, restarted and shut down (crash recovery during the restore), topology updated. Outside an `up`: none.
+- Events after an `up`: cluster created from snapshot, instance created, restarted and shut down (crash recovery during the restore), topology updated. A window reaching back into a teardown also shows the instance and cluster deleted. Otherwise: none.
 - Pending maintenance: 0.
 - CPU: average 10–15%, maximum about 60% (the restore and migrations).
 - CPU credit balance: 0 right after creation, then climbing (past 100 within a day of use). Surplus credits charged: 0. Charged surplus credits mean the instance ran out of credits.
@@ -35,12 +35,12 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Memory: maximum under 50%.
 
 ## 6. Redis
-- Events after an `up`: cluster created, node added, and a note that this node type doesn't support persistence (expected: Redis holds nothing that must survive).
+- Events after an `up`: cluster created, node added, and a note that this node type doesn't support persistence (expected: Redis holds nothing that must survive). A window reaching back into a teardown also shows the cluster deleted and its nodes removed.
 - Engine CPU under 1%. Evictions: 0.
 
 ## 7. WAF
 - Allowed is about the load balancer's request count.
-- Blocked: many more than allowed over several days (the US-only rule blocks foreign scanners); only a few just after an `up`.
+- Blocked: often more than allowed over a day or more (the US-only rule blocks foreign scanners; a few hundred a day is normal); only a few in the hours just after an `up`.
 
 ## 8. SES
 - Sending enabled, enforcement `HEALTHY`, production access `false` (still in the sandbox, by design).
@@ -56,4 +56,4 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 ## 11. Fleet and GitHub
 - `/healthz` 200. Status endpoints, when checked: `{}` (healthy).
 - Latest GitOps run: success. Open Dependabot and secret-scanning alerts: 0 in both repos.
-- **In CI, just after an `up`:** the GitOps run that `up` started may still be running (a blank result instead of success), the status endpoints are skipped (no Fleet API token), and the alert counts can read `n/a` (the job's token can't read them).
+- **In CI (any run):** the status endpoints are skipped (no Fleet API token), and the Dependabot and secret-scanning counts read `n/a` (the job's token can't read alerts). Just after an `up`, the GitOps run that `up` started may still be running (a blank result instead of success).

@@ -219,7 +219,7 @@ When the nightly run opens or updates "A newer Fleet release is available", the 
 
 ## 8. Optional: a health scan after every `up`
 
-After a successful `up`, the `health-scan` job in `terraform.yml` runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never fails the run: a scan or comparison that fails only warns. It needs step 7's Claude setup.
+After a successful `up`, the `apply` job starts the health scan as its own run (`action=scan`, shown as "Terraform scan"). Its `health-scan` job runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never holds up or fails the `up`: a scan or comparison that fails only warns. It needs step 7's Claude setup.
 
 **Set it up:**
 1. **Create the scan role** locally (CI can't change its own roles): `terraform apply -var-file=terraform.tfvars -target=aws_iam_role_policy_attachment.github_actions_scan`.
