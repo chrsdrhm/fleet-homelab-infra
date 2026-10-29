@@ -192,7 +192,7 @@ Claude reviews each pull request when it's opened (`.github/workflows/claude-rev
 
 ## 7. Optional: Claude reviews new Fleet releases
 
-When the nightly run opens or updates "A newer Fleet release is available", the same nightly job (`fleet-release` in `terraform.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not nightly. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the nightly run and the issue are unaffected.
+When the daily release check opens or updates "A newer Fleet release is available", the same job (`fleet-release` in `fleet-checks.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not daily. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the release check and the issue are unaffected.
 
 **Set it up** in the [Claude Console](https://platform.claude.com) (you need the admin or owner role):
 1. **A workspace for this repo,** with a monthly spend limit (about $10 is plenty).
@@ -210,7 +210,7 @@ When the nightly run opens or updates "A newer Fleet release is available", the 
    gh secret set ANTHROPIC_SERVICE_ACCOUNT_ID --repo $OWNER/fleet-homelab-infra
    ```
    If the rule covers more than one workspace, also set `ANTHROPIC_WORKSPACE_ID`.
-4. **Test it** from the Actions tab: run the `Terraform` workflow on `main` with `action` set to `review`, and `review_from` and `review_to` set to two past versions (for example 4.93.0 and 4.93.2). The review appears on the run's summary page, not in an issue. A failed sign-in shows in the Console under Workload identity → history.
+4. **Test it** from the Actions tab: run the `Fleet checks` workflow on `main` with `action` set to `review`, and `review_from` and `review_to` set to two past versions (for example 4.93.0 and 4.93.2). The review appears on the run's summary page, not in an issue. A failed sign-in shows in the Console under Workload identity → history.
 
 **Security:**
 - **Only `main` can sign in.** A pull request's run has a different identity, so the rule rejects it, and forks get no identity token at all. Changing what runs on `main` takes a merged pull request.
@@ -219,7 +219,7 @@ When the nightly run opens or updates "A newer Fleet release is available", the 
 
 ## 8. Optional: a health scan after every `up`
 
-After a successful `up`, the `apply` job starts the health scan as its own run (`action=scan`, shown as "Terraform scan"). Its `health-scan` job runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never holds up or fails the `up`: a scan or comparison that fails only warns. It needs step 7's Claude setup.
+After a successful `up`, and after an apply on merge that changed something (a Fleet upgrade, say), `terraform.yml` starts the health scan in the `Fleet checks` workflow (`fleet-checks.yml`, shown as "Health scan after up" or "Health scan after apply on merge"). Its `health-scan` job runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never holds up or fails the `up` or the apply: a scan or comparison that fails only warns. It needs step 7's Claude setup.
 
 **Set it up:**
 1. **Create the scan role** locally (CI can't change its own roles): `terraform apply -var-file=terraform.tfvars -target=aws_iam_role_policy_attachment.github_actions_scan`.
@@ -227,7 +227,7 @@ After a successful `up`, the `apply` job starts the health scan as its own run (
    ```bash
    gh secret set AWS_SCAN_ROLE_ARN --repo $OWNER/fleet-homelab-infra --body "$(aws iam get-role --role-name fleet-homelab-github-actions-scan --query Role.Arn --output text)"
    ```
-3. **Test it** from the Actions tab: run the `Terraform` workflow on `main` with `action` set to `scan` while the stack is up. By hand, it scans the last day.
+3. **Test it** from the Actions tab: run the `Fleet checks` workflow on `main` with `action` set to `scan` while the stack is up. By hand, it scans the last day.
 
 **Security:**
 - **The scan role only reads.** It allows exactly the calls the scan makes, and Logs Insights queries only on Fleet's log group. It trusts only runs on `main`, like the apply role, and the job never gets the apply role.

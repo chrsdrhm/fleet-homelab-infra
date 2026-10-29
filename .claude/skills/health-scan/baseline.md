@@ -56,4 +56,4 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 ## 11. Fleet and GitHub
 - `/healthz` 200. Status endpoints, when checked: `{}` (healthy).
 - Latest GitOps run: success. Open Dependabot and secret-scanning alerts: 0 in both repos.
-- **In CI (any run, whether after an `up` or started by hand; the report's first line says "in CI"):** the status endpoints are skipped (no Fleet API token), and the Dependabot and secret-scanning counts read `n/a` (the job's token can't read alerts). Just after an `up`, the GitOps run that `up` started may still be running (a blank result instead of success).
+- **In CI (any run, whether after an `up`, after an apply on merge or started by hand; the report's first line says "in CI"):** the status endpoints are skipped (no Fleet API token), and the Dependabot and secret-scanning counts read `n/a` (the job's token can't read alerts). Just after an `up`, the GitOps run that `up` started may still be running (a blank result instead of success).

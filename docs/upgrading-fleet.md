@@ -1,6 +1,6 @@
 # Upgrading Fleet
 
-Fleet is self-hosted here, so upgrades are yours to do. Fleet releases about every three weeks; watch [Fleet's releases](https://github.com/fleetdm/fleet/releases) (Watch → Custom → Releases on GitHub) to hear about them. The version is the image tag in `fleet.Dockerfile`. With CI, the nightly run also opens an issue, "A newer Fleet release is available", once a release has been out for a week, and closes it when `fleet.Dockerfile` catches up. (Dependabot can't do this one: `fleetdm/fleet` has tens of thousands of image tags, and its check never finishes.)
+Fleet is self-hosted here, so upgrades are yours to do. Fleet releases about every three weeks; watch [Fleet's releases](https://github.com/fleetdm/fleet/releases) (Watch → Custom → Releases on GitHub) to hear about them. The version is the image tag in `fleet.Dockerfile`. With CI, the daily release check also opens an issue, "A newer Fleet release is available", once a release has been out for a week, and closes it when `fleet.Dockerfile` catches up. (Dependabot can't do this one: `fleetdm/fleet` has tens of thousands of image tags, and its check never finishes.)
 
 With [Claude Code](https://claude.com/claude-code), `/fleet-upgrade` (in `.claude/skills/`) runs this routine with you: it reviews the releases in between against this setup, takes the snapshot, opens the pull request and checks the result, asking before each step that changes something. This page is the manual way.
 
@@ -15,7 +15,7 @@ From the version in `fleet.Dockerfile` (`FROM fleetdm/fleet:vX.Y.Z`) to the targ
 - **Deprecations:** things the GitOps repo or `fleet.tf` does that still work but that Fleet now does a new way, such as a renamed key that still accepts the old name. Not urgent, but easier to adopt with the upgrade than after the old way is removed.
 - **Changes to Fleet's GitOps template** (what `fleetctl new` writes), which the GitOps repo's layout and `.github/fleet-gitops/` come from.
 
-With CI, the nightly release issue also carries a first review by Claude ([GitHub setup step 7](github-setup.md#7-optional-claude-reviews-new-fleet-releases)): the releases in between checked against this setup, sorted into **Breaking**, **Must change**, **Deprecated, still works** and **New and relevant**, with a ✅ / ⚠️ / ❌ verdict. It's a head start, not a substitute: it sees only the release notes, the template and the two repos' files, so read anything it marks before upgrading. `/fleet-upgrade` does the full review, in the same four groups.
+With CI, the daily release issue also carries a first review by Claude ([GitHub setup step 7](github-setup.md#7-optional-claude-reviews-new-fleet-releases)): the releases in between checked against this setup, sorted into **Breaking**, **Must change**, **Deprecated, still works** and **New and relevant**, with a ✅ / ⚠️ / ❌ verdict. It's a head start, not a substitute: it sees only the release notes, the template and the two repos' files, so read anything it marks before upgrading. `/fleet-upgrade` does the full review, in the same four groups.
 
 Skipping releases is fine; migrations run in order. Also check [`fleet-terraform`](https://github.com/fleetdm/fleet-terraform/tags) for newer `tf-mod-root-*` and add-on tags: their changelogs say which Fleet version they target and what changed. Bump those in the same pull request only if the release needs it; otherwise they're a separate change.
 
@@ -50,7 +50,7 @@ Then check:
 ## Rolling back
 
 Rolling back means restoring the pre-upgrade snapshot with the old version:
-1. Revert the upgrade pull request, so `fleet.Dockerfile` has the old tag again. The nightly release issue opens again; leave it open until the problem is fixed.
+1. Revert the upgrade pull request, so `fleet.Dockerfile` has the old tag again. The release issue opens again; leave it open until the problem is fixed.
 2. Tear down with `./scripts/down.sh`. Its new teardown snapshot holds the upgraded database, so don't restore from it.
 3. Rebuild from the pre-upgrade snapshot instead of the newest teardown one:
    ```bash

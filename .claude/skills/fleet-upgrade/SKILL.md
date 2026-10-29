@@ -16,7 +16,7 @@ Invoking the skill asks for a review and a plan. **Each step that changes someth
 ## 1. Versions
 
 - **Current:** the `FROM fleetdm/fleet:vX.Y.Z` line in `fleet.Dockerfile` (`fleet.tf` reads it). If the stack is up, also check what's running: `aws ecs describe-task-definition --task-definition fleet --query 'taskDefinition.containerDefinitions[0].image' --output text`.
-- **Target:** what the person names, or the newest release: `gh release list --repo fleetdm/fleet --limit 30`, keeping only `fleet-v*` tags (the repo also publishes agent releases). If the nightly "A newer Fleet release is available" issue is open, it names one.
+- **Target:** what the person names, or the newest release: `gh release list --repo fleetdm/fleet --limit 30`, keeping only `fleet-v*` tags (the repo also publishes agent releases). If the "A newer Fleet release is available" issue is open, it names one.
 - **Every release in between, patch releases included:** both the target's line and any patches on the current line (for example 4.92.1 to 4.92.3 when going from 4.92.0 to 4.93.0).
 - **The image exists:** `fleetdm/fleet:v<target>` on Docker Hub (`https://hub.docker.com/v2/repositories/fleetdm/fleet/tags/v<target>`).
 
@@ -73,7 +73,7 @@ Then tell the person it's ready to merge, and what happens: the apply on merge s
 - **The migrations and errors,** in Fleet's log group (`aws logs describe-log-groups --log-group-name-prefix terraform- --query 'logGroups[0].logGroupName' --output text`) with Logs Insights over the last 45 minutes:
   - `fields @timestamp, @message | filter @message like /Missing migrations/ or @message like /\[20\d\d-\d\d-\d\d\]/ | sort @timestamp asc` lists the migrations `fleet prepare db` ran.
   - `filter level in ["error","warn"] or @message like /(?i)panic|fatal/ | stats count(*), min(@timestamp), max(@timestamp) by level, msg` sums up errors. `unlock failed` with `context canceled` while the old task shuts down is expected (plan Task 21's baseline); anything else needs a look.
-  - Then run `/health-scan` over the hours since the merge: it covers the rest of the stack, compared with its baseline.
+  - The apply on merge then starts "Health scan after apply on merge" (`gh run list --workflow fleet-checks.yml --limit 1`): watch it and report its verdict. For a closer look, run `/health-scan` over the hours since the merge.
 - **The version, through GitOps:** start a GitOps run (`gh workflow run workflow.yml --repo <owner>/fleet-homelab-gitops --ref main`, on a yes), watch it, and check its log says `Installing fleetctl v<target>` with the checksum `OK`: the workflow reads the server's version to choose `fleetctl`, so this confirms the server reports the target, without handling an API token here.
 
 ## 7. If a check fails

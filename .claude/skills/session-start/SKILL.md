@@ -38,7 +38,7 @@ It takes about 20-25 minutes. Watch it in the background (`gh run watch <id> --e
 ## 4. Verify
 
 - The run succeeded, and its log's summary line shows `/healthz -> HTTP 200` and `/ -> HTTP 200`. A 307 to `/setup` means it came up with an empty database: say so straight away.
-- A successful `up` also starts the health scan as its own run ("Terraform scan", `--event workflow_dispatch`, a minute or two). Watch it to the end, then report its verdict: `gh run view <id>` shows a "Health scan" warning when something is outside the baseline, and "The health scan found something to look at" is then open (or commented on). The figures and Claude's comparison are on the run's summary page, which only the person can open; offer `/health-scan` to look closer.
+- A successful `up` also starts the health scan, "Health scan after up" in the other workflow (`gh run list --workflow fleet-checks.yml --limit 1`, a minute or two). Watch it to the end, then report its verdict: `gh run view <id>` shows a "Health scan" warning when something is outside the baseline, and "The health scan found something to look at" is then open (or commented on). The figures and Claude's comparison are on the run's summary page, which only the person can open; offer `/health-scan` to look closer.
 - `up.sh` starts a GitOps run. Find the newest `workflow.yml` run in the GitOps repo (`gh run list --repo <owner>/fleet-homelab-gitops --workflow workflow.yml --limit 1`), and if it's still going, watch it to the end before reporting.
 - If the stack was already up, ask before checking it over HTTP, and keep the URL out of the command line: `curl -s -o /dev/null -w '%{http_code}' "$(terraform output -raw fleet_url)/healthz"`.
 
