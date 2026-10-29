@@ -21,7 +21,7 @@ This project follows Fleet's documented approach wherever it can. Before changin
 
 ## Hard rules
 
-- **No private or identifying values, anywhere.** That covers files, commit messages, branch names, and PR titles, bodies and comments. Private values include the real hostname or domain, the AWS account ID (and ARNs or bucket names that contain it), Okta org names, IDs and URLs, email addresses, and any credential.
+- **No private or identifying values, anywhere.** That covers files, commit messages, branch names, PR titles, bodies and comments, and everything CI posts: issues, run summaries and logs (all public). Private values include the real hostname or domain, the AWS account ID (and ARNs or bucket names that contain it), Okta org names, IDs and URLs, email addresses, and any credential.
   - Use placeholders: `fleet.example.com`, `example.com`, `123456789012`, `<aws-account-id>`. Placeholder email addresses use `example.com`, `example.org` or `example.net`, the only domains the private-values check accepts.
   - **A new variable or output that holds an identifying value must be `sensitive = true`,** so Terraform hides it in plans, which are posted to public pull requests.
   - In tests and examples, label placeholders as placeholders.
@@ -39,6 +39,7 @@ This project follows Fleet's documented approach wherever it can. Before changin
   - **The spec** says what the design is now.
   - **The plan** is a record. Add a dated note when something changes, and state rules, not incident stories.
   - **User-facing pages** (the READMEs, `docs/setup.md`) use rounded figures (about $0.25 an hour, $15 a month on average). The spec and plan keep exact figures.
+- **Use the skills in `.claude/skills/`** when the person asks for what they do: `/session-start` and `/session-end` (bring the stack up or down, and the checks around it), `/fleet-upgrade` (a Fleet upgrade, from release notes to checks after the merge) and `/health-scan` (the read-only health scan, compared with its baseline). Each says what it may run without asking.
 - **Use the data-loss guard:** a plan that destroys or replaces stateful resources (the database, secrets, buckets, DNS, the certificate) fails its check on purpose. Don't work around it; explain the change and let the owner decide on `allow-destroy`.
 
 ## When reviewing a pull request
@@ -67,10 +68,11 @@ Reliability is deliberately traded for cost here. Raise a trade-off only if a ch
    - Network exposure (security groups, anything made public, WAF rules)
    - Encryption, and secrets kept in Secrets Manager or GitHub secrets, never in variables, outputs or logs
    - Workflow permissions, untrusted input reaching `run:` steps, and anything that could print a secret or the account ID to the public CI logs
+   - Calls to Claude from CI (`scripts/claude-message.sh`): signed in through workload identity federation, never an API key; no tools; input such as release notes and logs treated as untrusted; and the output sanitized (mentions, links, HTML) before it goes anywhere public
 3. **Data and teardown:**
    - Destroying or replacing stateful resources
    - A new resource either torn down by `down.sh` or deliberately kept
-   - Restoring from the snapshot still working (see "What survives a teardown" in the README)
+   - Restoring from the snapshot still working (see "Teardown and rebuild" in the README)
 4. **Cost:** new charges, especially anything kept through teardowns (it bills around the clock), and size changes. The spec's Cost section should be updated to match.
 5. **Departures from Fleet's documented approach,** unless the spec explains them.
 6. **Supply chain:** providers, modules, images, actions and tools pinned (versions, commit SHAs, checksums), and covered by Dependabot where it can be.

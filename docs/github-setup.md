@@ -1,6 +1,6 @@
 # GitHub setup
 
-The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label and an optional GitHub App. It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
+The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label, an optional GitHub App, and the optional Claude reviews and checks (steps 6–8). It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
 
 ```bash
 OWNER=$(gh api user --jq .login)
