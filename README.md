@@ -15,7 +15,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned, and merging it applies the change while the stack is up; the checks live in [`checks/`](checks/README.md). Optionally, an AI reviews each pull request too: Claude with a Claude subscription, or GitHub Copilot or another tool instead. With Claude, comment `@claude` on a pull request to review its latest commit again (see [GitHub setup](docs/github-setup.md#6-optional-claude-reviews-pull-requests)).
-- **Checks on the running stack (optional):** after every rebuild, CI runs a read-only health scan and has Claude compare it with what's normal, and when Fleet ships a new release, Claude reviews it against this setup before I upgrade. Either opens an issue when something needs a look. Both use the Claude API, signing in from GitHub Actions with workload identity federation, so there's no API key to store.
+- **Checks on the running stack (optional):** after every rebuild, and after every change that goes live (a Fleet upgrade, say), CI runs a read-only health scan and has Claude compare it with what's normal, and when Fleet ships a new release, Claude reviews it against this setup before I upgrade. Either opens an issue when something needs a look. Both use the Claude API, signing in from GitHub Actions with workload identity federation, so there's no API key to store.
 
 ## Getting started
 
@@ -29,7 +29,7 @@ Left running, the stack would cost about **$7 a day, or about $200 a month** (ro
 
 **A rebuilt Fleet picks up where you left off: the same users, hosts, settings and SSO.** Nothing starts fresh. Two scripts do it, and the same scripts run from my terminal or from GitHub Actions:
 
-- **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable is left.
+- **`scripts/down.sh`** (about 20 minutes) snapshots the Aurora database, destroys the expensive part of the stack (VPC and NAT Gateway, Aurora, Redis, load balancer, ECS, WAF), keeps the two newest snapshots, and checks that nothing billable from the stack is left.
 - **`scripts/up.sh`** (about 20 minutes) finds the newest snapshot, rebuilds the stack from it, waits until Fleet answers, and then starts a run in the GitOps repo so the latest Fleet configuration is reapplied, including any changes merged there while the stack was down.
 - **A nightly check** in GitHub Actions tears the stack down if it's still up overnight (it's scheduled for 2:17am Chicago time, 1:17am in winter, and acts whenever GitHub starts it before 8am), so a forgotten stack costs a few hours, not a month. If a teardown fails, or GitHub starts the check too late to act, an issue says so. To keep it up, set the `AUTO_DOWN_SKIP_UNTIL` repository variable to the last day you want it up; the check the next night brings it down as usual (see [GitHub setup](docs/github-setup.md)).
 
