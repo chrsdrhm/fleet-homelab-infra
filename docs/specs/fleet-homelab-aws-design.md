@@ -176,7 +176,7 @@ Non-goals above.
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan runbook (plan Task 21) and the nightly run's issues (a failed teardown, kept snapshots, a newer Fleet release) |
+| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan (`scripts/health-scan.sh`, which CI runs after every `up`; plan Tasks 21 and 30) and the nightly run's issues (a failed teardown, kept snapshots, a newer Fleet release) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
@@ -341,9 +341,10 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
 | **Total** | **~$1.40 (about $0.05/day)** |
 
-**Claude API:** the release review (see Remote execution) bills the Claude API
-separately, in a workspace capped at $10 a month; expected well under $1 a
-month, since it runs once per Fleet release.
+**Claude API:** the release review and the health scan after `up` (see Remote
+execution) bill the Claude API separately, in a workspace capped at $10 a month;
+expected well under $1 a month, since one runs once per Fleet release and the
+other once per `up` (about 10,000 tokens, a few cents).
 
 **Average:** at roughly one weekend a month of use (~7% uptime, about 50
 hours):
@@ -493,7 +494,10 @@ the installers bucket) still has to be removed in code first. Two IAM roles serv
 (assumable only by a run on `main`) for `up`/`down` and the apply on merge,
 and a **read-only plan role** (assumable only from the `pull_request` context)
 for the PR checks — a PR workflow runs the file from the PR's own branch, so it
-gets no write access. The apply role is scoped by AWS service (EC2/VPC, RDS,
+gets no write access. A third, **read-only scan role** (also only from `main`)
+allows just the calls the health scan makes (Logs Insights queries only on
+Fleet's log group), so the job that sends the scan to Claude never holds the
+apply role. The apply role is scoped by AWS service (EC2/VPC, RDS,
 ElastiCache, ECS + Application Auto Scaling, ELB, WAFv2, CloudWatch/Logs, SES,
 Route 53, ACM, Firehose, Budgets), with Secrets Manager limited to `fleet*`
 secrets, S3 limited to this project's buckets (`fleet-homelab-*` and the ECS
@@ -546,6 +550,16 @@ lasts 10 minutes, in a workspace with a $10 monthly spend limit. The job has no
 AWS role and no Terraform secrets, posts only Claude's text (with `@mentions`
 broken), and a failed review only warns. Expected cost: about 10,000–50,000
 input tokens a review, $0.05–0.50 at Opus prices, a few reviews a month.
+
+**Health scan after `up`.** After a successful `up`, and by hand
+(`action=scan`), the `health-scan` job runs `scripts/health-scan.sh` with the
+scan role and sends its report with the baseline
+(`.claude/skills/health-scan/baseline.md`) to Claude, through the same
+federation and the same helper (`scripts/claude-message.sh`), in one request
+with no tools. Both go to the run's summary; a verdict other than ✅ opens an
+issue, which a clean scan closes. The report is public, so the scan masks the
+hostname, domain, account ID, ARNs, email and IP addresses. Every step only
+warns on failure, so the scan never fails an `up`.
 
 **Starting the GitOps run after `up`.** A workflow's own token is limited to
 its repo, so the infra workflow cannot start the GitOps repo's workflow with

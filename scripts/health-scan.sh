@@ -10,7 +10,7 @@
 # adds Fleet's status endpoints; without it they're skipped.
 #
 # The report is safe to post publicly: the Fleet hostname and domain, account IDs, ARNs
-# and email addresses are masked, and only counts and figures are printed.
+# email addresses and IP addresses are masked, and only counts and figures are printed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export AWS_REGION="${AWS_REGION:-us-east-1}" AWS_PAGER=""
@@ -34,7 +34,8 @@ account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null 
 # Everything printed goes through mask.
 mask() {
   local s
-  s=$(sed -E 's#arn:aws[a-zA-Z-]*:[^ ,")]*#<arn>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g')
+  s=$(sed -E 's#arn:aws[a-zA-Z-]*:[^ ,")]*#<arn>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g
+    s/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g')
   [ -n "$host" ] && s=${s//"$host"/<fleet-host>}
   [ -n "$domain" ] && [ "$domain" != "$host" ] && s=${s//"$domain"/<domain>}
   [ -n "$account" ] && s=${s//"$account"/<account>}

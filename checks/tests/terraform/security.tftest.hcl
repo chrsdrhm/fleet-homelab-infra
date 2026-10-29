@@ -110,6 +110,17 @@ run "ci_roles_trust_only_their_own_triggers" {
     }
     error_message = "The plan role must trust only pull_request runs in this repo (exact sub, StringEquals)."
   }
+  assert {
+    condition     = length(jsondecode(aws_iam_role.github_actions_scan.assume_role_policy).Statement) == 1
+    error_message = "The scan role's trust policy must have exactly one statement."
+  }
+  assert {
+    condition = jsondecode(aws_iam_role.github_actions_scan.assume_role_policy).Statement[0].Condition.StringEquals == {
+      "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+      "token.actions.githubusercontent.com:sub" = "repo:octo@1/fleet-homelab-infra@2:ref:refs/heads/main"
+    }
+    error_message = "The scan role must trust only a run on main in this repo (exact sub, StringEquals)."
+  }
 }
 
 run "apply_role_keeps_its_denies" {
@@ -134,6 +145,23 @@ run "plan_role_is_read_only" {
       ] if s.effect == "Allow"
     ]))
     error_message = "Every action the plan role allows must be a Describe, Get, List or View action."
+  }
+}
+
+run "scan_role_is_read_only" {
+  command = plan
+
+  assert {
+    condition = alltrue(flatten([
+      for s in data.aws_iam_policy_document.github_actions_scan.statement : [
+        for a in s.actions : can(regex("^[a-z0-9-]+:(Describe|Get|List|View)", a)) || a == "logs:StartQuery"
+      ] if s.effect == "Allow"
+    ]))
+    error_message = "Every action the scan role allows must be a Describe, Get, List or View action, or logs:StartQuery."
+  }
+  assert {
+    condition     = one([for s in data.aws_iam_policy_document.github_actions_scan.statement : s.resources if contains(s.actions, "logs:StartQuery")]) == toset(["arn:aws:logs:*:123456789012:log-group:terraform-*"])
+    error_message = "The scan role may start Logs Insights queries only on Fleet's log group (terraform-*)."
   }
 }
 

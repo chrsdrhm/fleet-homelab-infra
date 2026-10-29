@@ -9,12 +9,9 @@
 # --context-only prints what Claude would get, without calling it.
 #
 # Claude gets one request with everything in it and no tools: the release notes are
-# untrusted input, so the most they can steer is the text of the review. Signs in with
-# workload identity federation, not an API key: the GitHub Actions identity token in
-# ANTHROPIC_IDENTITY_TOKEN_FILE is exchanged for an Anthropic token that lasts minutes.
-# Needs ANTHROPIC_ORGANIZATION_ID, ANTHROPIC_FEDERATION_RULE_ID and
-# ANTHROPIC_SERVICE_ACCOUNT_ID (ANTHROPIC_WORKSPACE_ID only if the rule covers more than
-# one workspace), GH_TOKEN, and CLAUDE_REVIEW_MODEL (optional).
+# untrusted input, so the most they can steer is the text of the review. Signs in
+# through scripts/claude-message.sh (workload identity federation; see it for the
+# variables it needs), and needs GH_TOKEN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -125,7 +122,7 @@ if [ "${4:-}" = --context-only ]; then
   exit 0
 fi
 
-system=$(cat <<'EOF'
+cat > "$work/system.md" <<'EOF'
 You review a Fleet (fleetdm.com) server upgrade for a small self-hosted deployment, before
 anyone runs it. The deployment: Fleet Premium on AWS (ECS Fargate, Aurora MySQL,
 ElastiCache Redis) built from Fleet's fleet-terraform modules, with Fleet's configuration
@@ -164,35 +161,8 @@ Rules:
 Start with exactly one verdict line, then the sections:
 **Verdict:** ✅ Upgrade as is | ⚠️ Upgrade with the changes below | ❌ Wait (say why)
 EOF
-)
 
-jwt_file="${ANTHROPIC_IDENTITY_TOKEN_FILE:?ANTHROPIC_IDENTITY_TOKEN_FILE}"
-exchange=$(jq -n --rawfile jwt "$jwt_file" \
-  --arg rule "${ANTHROPIC_FEDERATION_RULE_ID:?}" \
-  --arg org "${ANTHROPIC_ORGANIZATION_ID:?}" \
-  --arg account "${ANTHROPIC_SERVICE_ACCOUNT_ID:?}" \
-  --arg workspace "${ANTHROPIC_WORKSPACE_ID:-}" \
-  '{grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: ($jwt | rtrimstr("\n")),
-    federation_rule_id: $rule, organization_id: $org, service_account_id: $account}
-   + (if $workspace == "" then {} else {workspace_id: $workspace} end)' \
-  | curl -sS --fail-with-body https://api.anthropic.com/v1/oauth/token \
-      -H "content-type: application/json" --data-binary @-) || {
-  echo "The Anthropic token exchange failed (see the Console's Workload identity history)." >&2
-  exit 1
-}
-token=$(jq -r '.access_token // empty' <<< "$exchange")
-[ -n "$token" ] || { echo "The token exchange returned no access token." >&2; exit 1; }
-
-response=$(jq -n --arg model "$model" --arg system "$system" --rawfile context "$context" \
-  '{model: $model, max_tokens: 8000, system: $system,
-    messages: [{role: "user", content: $context}]}' \
-  | curl -sS --fail-with-body --max-time 600 https://api.anthropic.com/v1/messages \
-      -H "authorization: Bearer $token" \
-      -H "anthropic-version: 2023-06-01" \
-      -H "content-type: application/json" --data-binary @-) || {
-  echo "The Claude API request failed: $(jq -r '.error.message // "no details"' <<< "$response" 2>/dev/null)" >&2
-  exit 1
-}
+response=$(./scripts/claude-message.sh "$work/system.md" "$context")
 review=$(jq -r '[.content[] | select(.type == "text") | .text] | join("\n")' <<< "$response")
 if [ -z "$review" ] || ! grep -q '^\*\*Verdict:\*\*' <<< "$review"; then
   echo "The review came back empty or without a verdict (stop reason: $(jq -r .stop_reason <<< "$response"))." >&2
