@@ -998,9 +998,9 @@ jobs:
         run: |
           echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
           if [ "$AFTER_UP" = true ]; then
-            hours=2 when="just after an up"
+            hours=2 when="in CI, just after an up"
           else
-            hours=24 when="by hand, not after an up"
+            hours=24 when="in CI, started by hand"
           fi
           { echo "Run: $when."; echo; ./scripts/health-scan.sh "$hours"; } > "$RUNNER_TEMP/scan.md"
           {
