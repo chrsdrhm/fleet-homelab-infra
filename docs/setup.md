@@ -161,7 +161,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 | Check the stack's health | `scripts/health-scan.sh` (read-only; what's normal is in [`baseline.md`](../.claude/skills/health-scan/baseline.md)), or run `/health-scan` in Claude Code. CI also runs it after every `up` and every change that goes live ([GitHub setup step 8](github-setup.md#8-optional-a-health-scan-after-every-up)) |
 
 **Run `up` and `down` from GitHub** (with CI, step 8). The same scripts run on GitHub's machines instead of yours:
-- **In a browser,** a phone's included: the repo's **Actions** tab → **Terraform** → **Run workflow**, then pick `up` or `down`. For `down`, also type `destroy` in the confirm box.
+- **On github.com or in the GitHub mobile app:** the repo's **Actions** tab → **Terraform** → **Run workflow**, then pick `up` or `down`. For `down`, also type `destroy` in the confirm box.
 - **From a terminal:** `gh workflow run terraform.yml -f action=up`, or `-f action=down -f confirm=destroy`.
 
 It's the easier way day to day:
