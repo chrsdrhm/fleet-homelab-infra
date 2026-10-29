@@ -154,11 +154,20 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 
 | To | Run |
 |---|---|
-| Tear down (keeps your data) | `./scripts/down.sh`. With CI, a nightly check also does it overnight if the stack is still up (see below to change or skip it). |
-| Bring it back | `./scripts/up.sh` |
+| Tear down (keeps your data) | `./scripts/down.sh`, or from GitHub with CI (below). With CI, a nightly check also does it overnight if the stack is still up (see below to change or skip it). |
+| Bring it back | `./scripts/up.sh`, or from GitHub with CI (below) |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md), or run `/fleet-upgrade` in Claude Code |
 | Check the stack's health | `scripts/health-scan.sh` (read-only; what's normal is in [`baseline.md`](../.claude/skills/health-scan/baseline.md)), or run `/health-scan` in Claude Code. CI also runs it after every `up` and every change that goes live ([GitHub setup step 8](github-setup.md#8-optional-a-health-scan-after-every-up)) |
+
+**Run `up` and `down` from GitHub** (with CI, step 8). The same scripts run on GitHub's machines instead of yours:
+- **In a browser,** a phone's included: the repo's **Actions** tab → **Terraform** → **Run workflow**, then pick `up` or `down`. For `down`, also type `destroy` in the confirm box.
+- **From a terminal:** `gh workflow run terraform.yml -f action=up`, or `-f action=down -f confirm=destroy`.
+
+It's the easier way day to day:
+- **Nothing has to stay open.** Start a `down` and close the laptop; it takes about 20 minutes either way.
+- **It works from anywhere,** with no AWS sign-in on the machine you start it from.
+- **It reports back.** After an `up`, the GitOps run and the health scan start on their own. A failed teardown opens an issue, which GitHub emails you.
 
 With [Claude Code](https://claude.com/claude-code), `/session-start` and `/session-end` (in `.claude/skills/`) do the routine around these: check sign-ins, open pull requests and runs in progress, run `up` or `down`, check the result, and handle the nightly teardown and leftover snapshots. They ask before setting the teardown variable or deleting anything, and `/session-end` asks before tearing down.
 
