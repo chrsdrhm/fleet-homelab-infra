@@ -73,7 +73,7 @@ Then tell the person it's ready to merge, and what happens: the apply on merge s
 - **The migrations and errors,** in Fleet's log group (`aws logs describe-log-groups --log-group-name-prefix terraform- --query 'logGroups[0].logGroupName' --output text`) with Logs Insights over the last 45 minutes:
   - `fields @timestamp, @message | filter @message like /Missing migrations/ or @message like /\[20\d\d-\d\d-\d\d\]/ | sort @timestamp asc` lists the migrations `fleet prepare db` ran.
   - `filter level in ["error","warn"] or @message like /(?i)panic|fatal/ | stats count(*), min(@timestamp), max(@timestamp) by level, msg` sums up errors. `unlock failed` with `context canceled` while the old task shuts down is expected (plan Task 21's baseline); anything else needs a look.
-  - Once plan Task 30's health-scan skill exists, run it as well.
+  - Then run `/health-scan` over the hours since the merge: it covers the rest of the stack, compared with its baseline.
 - **The version, through GitOps:** start a GitOps run (`gh workflow run workflow.yml --repo <owner>/fleet-homelab-gitops --ref main`, on a yes), watch it, and check its log says `Installing fleetctl v<target>` with the checksum `OK`: the workflow reads the server's version to choose `fleetctl`, so this confirms the server reports the target, without handling an API token here.
 
 ## 7. If a check fails

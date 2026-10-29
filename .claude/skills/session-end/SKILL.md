@@ -24,6 +24,7 @@ The GitOps repo is assumed to sit next to this one (`../fleet-homelab-gitops`) u
 - **Open pull requests** in both repos (`gh pr list`). Say which would apply on merge if merged now, and which can wait for the next `up` (the infrastructure plan comment says ⏸️ when the stack is down). If a merge the person wants applied *now* is pending, ask before tearing down.
 - **Local work:** `git status` and unpushed commits (`git log @{u}..`) in both clones.
 - **Anything needing the running stack** that was planned for this session but not done, for example checking an upgrade (`docs/upgrading-fleet.md`, step 4).
+- **A last health check:** offer to run `/health-scan` over the session before tearing down. Fleet's logs and metrics are destroyed with the stack, so this is the last chance to look. Only if the person wants it; it takes about a minute.
 
 ## 3. Snapshots
 

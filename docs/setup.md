@@ -156,6 +156,7 @@ python3 checks/private-values/check.py --from-tfvars && checks/private-values/sy
 | Bring it back | `./scripts/up.sh` |
 | Run the checks locally | `checks/install-tools.sh`, then `checks/run.sh` |
 | Upgrade Fleet | Follow [Upgrading Fleet](upgrading-fleet.md), or run `/fleet-upgrade` in Claude Code |
+| Check the stack's health | `scripts/health-scan.sh` (read-only; what's normal is in [`baseline.md`](../.claude/skills/health-scan/baseline.md)), or run `/health-scan` in Claude Code |
 
 With [Claude Code](https://claude.com/claude-code), `/session-start` and `/session-end` (in `.claude/skills/`) do the routine around these: check sign-ins, open pull requests and runs in progress, run `up` or `down`, check the result, and handle the nightly teardown and leftover snapshots. They ask before setting the teardown variable or deleting anything, and `/session-end` asks before tearing down.
 

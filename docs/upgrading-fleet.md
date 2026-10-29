@@ -44,7 +44,7 @@ Before merging, make sure the plan is against the stack as it is now. If the sta
 
 Then check:
 - The server reports the new version. In a separate terminal, with your Fleet API token: `curl -s -H "Authorization: Bearer $TOKEN" https://<fleet_subdomain>/api/v1/fleet/version | jq .version`
-- Hosts are checking in, and Fleet's logs show no errors (the [health scan](plans/fleet-homelab-aws-deployment.md#task-21-health-and-error-scan-and-a-repo-review), checks 1, 2 and 11).
+- Hosts are checking in, and Fleet's logs show no errors. `scripts/health-scan.sh 2` gathers the figures for the last two hours (ECS, the logs grouped by message, the load balancer, Aurora and the rest), and [`.claude/skills/health-scan/baseline.md`](../.claude/skills/health-scan/baseline.md) says what's normal; with Claude Code, `/health-scan` runs it and compares.
 - The GitOps repo's next run passes. It installs the `fleetctl` that matches the server automatically, so start one to be sure: `gh workflow run workflow.yml --repo <you>/fleet-homelab-gitops`.
 
 ## Rolling back
