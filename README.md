@@ -15,6 +15,7 @@ Terraform for a **Fleet Premium** deployment on AWS, built as a homelab project 
 - **Identity (optional):** Okta SAML SSO with just-in-time provisioning and group-based roles, plus a break-glass admin. Nobody gets a Fleet role unless they are in one of the two Okta groups. It's a separate Terraform root, so you can leave it out and use password logins instead (see below).
 - **GitOps:** Fleet's configuration managed from a separate repo with `fleetctl gitops`.
 - **CI:** Terraform run from GitHub Actions using OIDC, so there are no long-lived AWS keys in GitHub. Every pull request is linted, tested against mocked providers, and planned, and merging it applies the change while the stack is up; the checks live in [`checks/`](checks/README.md). Optionally, an AI reviews each pull request too: Claude with a Claude subscription, or GitHub Copilot or another tool instead. With Claude, comment `@claude` on a pull request to review its latest commit again (see [GitHub setup](docs/github-setup.md#6-optional-claude-reviews-pull-requests)).
+- **Checks on the running stack (optional):** after every rebuild, CI runs a read-only health scan and has Claude compare it with what's normal, and when Fleet ships a new release, Claude reviews it against this setup before I upgrade. Either opens an issue when something needs a look. Both use the Claude API, signing in from GitHub Actions with workload identity federation, so there's no API key to store.
 
 ## Getting started
 
@@ -22,7 +23,7 @@ To build this in your own AWS account, follow the [setup guide](docs/setup.md): 
 
 ## Cost
 
-Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. Two things catch a stack I forget to tear down: a nightly check brings it down if it's still up overnight, so forgetting costs at most about a day (around $7), and a $100 AWS Budget emails me at every $10 of spend. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
+Left running, the stack would cost about **$7 a day, or about $200 a month** (roughly $0.25 an hour): mostly Aurora, the NAT Gateway, Fargate, Redis, the load balancer, and the public IPv4 addresses of the load balancer and NAT Gateway. That's too much for a homelab, so it's built to be **torn down when I'm not using it and rebuilt when I am**, without starting over: the database, users, hosts and settings come back each time (see [Teardown and rebuild](#teardown-and-rebuild)). Torn down, it costs about **$2 a month**, plus well under $1 a month of Claude API use for the optional checks. At roughly a weekend a month of use (about 50 hours), that averages out to around **$15 a month**. Two things catch a stack I forget to tear down: a nightly check brings it down if it's still up overnight, so forgetting costs at most about a day (around $7), and a $100 AWS Budget emails me at every $10 of spend. The [design spec](docs/specs/fleet-homelab-aws-design.md#cost) has the per-item breakdown.
 
 ## Teardown and rebuild
 
@@ -51,17 +52,19 @@ Single sign-on uses an **Okta Workforce Identity free trial**, which turns into 
 | `*.tf` | The Terraform configuration: AWS, plus the optional Cloudflare delegation (`cloudflare.tf`) |
 | `fleet.Dockerfile` | The Fleet server version, in one `FROM` line. It's never built; `fleet.tf` reads it |
 | `okta/` | Optional. The Okta side: the admin and enrollment SAML apps, groups and role attribute (its own Terraform root, applied locally) |
-| `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry) |
+| `scripts/` | `up.sh`, `down.sh` and `tf-apply.sh` (apply with one known retry); `health-scan.sh` (read-only health scan) and `health-review.sh` (Claude compares it with the baseline); `release-review.sh` (Claude reviews new Fleet releases); `claude-message.sh` (the Claude API call both use) and `notify-issue.sh` (the issues CI opens) |
+| `.claude/skills/` | Claude Code skills: `/session-start`, `/session-end`, `/fleet-upgrade` and `/health-scan` (with the scan's baseline) |
 | `checks/` | Every lint check, test and guard, with its own [README](checks/README.md): run them locally with `checks/run.sh`, or delete the folder to drop them all |
-| `.github/` | The CI workflow (lint, plan, apply), its shared setup action, Dependabot and CODEOWNERS |
+| `.github/` | The CI workflows (lint, plan, apply, release check, health scan, and the optional Claude review), the shared setup action, Dependabot and CODEOWNERS |
 | `AGENTS.md`, `CLAUDE.md` | Rules for AI assistants working in or reviewing this repo. `AGENTS.md` holds them and is read by Claude Code, GitHub Copilot and other tools; `CLAUDE.md` only imports it, for Claude Code setups that read nothing else. |
+| `docs/` | The [setup guide](docs/setup.md), [GitHub setup](docs/github-setup.md) and [Upgrading Fleet](docs/upgrading-fleet.md) |
 | `docs/specs/` | Design spec: decisions, cost and how teardown works |
 | `docs/plans/` | The implementation plan, including problems found and fixed while running it |
 | `example.tfvars`, `backend.example.hcl` | Placeholder values; real values live in gitignored `terraform.tfvars` and `backend.hcl` |
 
 ## Security notes
 
-- **No AWS keys in GitHub.** CI reaches AWS through OIDC. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role.
+- **No AWS keys in GitHub.** CI reaches AWS through OIDC. Rebuild and teardown use a role that only manual runs on `main` can assume; pull-request plans use a separate read-only role, and the health scan a third, which can only read what the scan checks. Claude's checks sign in the same way, with no API key: GitHub's identity token is exchanged for a Claude API token that lasts minutes.
 - **No shortcuts to `main`.** Every change goes through a pull request whose lint and plan checks pass, with no bypass, including for me. Plans posted on pull requests are masked, since comments on a public repo are public. A plan that would destroy or replace something holding data (the database, a secret, a bucket, DNS, the certificate) fails its check unless the pull request has the `allow-destroy` label.
 - **No private values in the repo.** Every pull request is checked for AWS account IDs, Okta org and app IDs, personal email addresses and signed tokens, by pattern. Values a pattern can't describe (like my hostname) are checked against a list of their SHA-256 hashes in a repository secret, so the list contains no plaintext. It reports where it found something, never the value. Values that look real in examples and tests (`123456789012`, `example.com`) are standard placeholders. **If you reuse this repo:** the patterns work with no setup, and [`checks/README.md`](checks/README.md) explains adding your own values, the optional local hooks, and how to remove the checks entirely.
 - **Found a problem?** Please [report it privately](https://github.com/chrsdrhm/fleet-homelab-infra/security/advisories/new) through this repo's **Security** tab instead of opening a public issue.

@@ -21,7 +21,7 @@ The GitOps repo is assumed to sit next to this one (`../fleet-homelab-gitops`) u
 ## 2. Check the state before changing anything
 
 - **Is the stack already up?** `aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query 'DBClusters[0].Status' --output text` succeeds only while it is (or while it's being built). If it's up, skip step 3 and go to step 4.
-- **Notices:** open issues titled "The teardown failed", "The nightly teardown didn't run", "Kept snapshots older than 14 days" or "A newer Fleet release is available" (`gh issue list`). A failed teardown comes first: the stack may be partly up and billing, so read the linked run and sort it out before anything else (the next successful `down` closes the issue). The snapshot issue closes itself once those snapshots are deleted; the release issue, once an upgrade merges (`/fleet-upgrade`).
+- **Notices:** open issues titled "The teardown failed", "The nightly teardown didn't run", "Kept snapshots older than 14 days", "A newer Fleet release is available" or "The health scan found something to look at" (`gh issue list`). A failed teardown comes first: the stack may be partly up and billing, so read the linked run and sort it out before anything else (the next successful `down` closes the issue). The snapshot issue closes itself once those snapshots are deleted; the release issue, once an upgrade merges (`/fleet-upgrade`); the health scan issue, after the next clean scan (each `up` runs one).
 - **Did last night's check tear the stack down?** A successful nightly teardown sends no notice; it only marks its run with a "Stack left up" warning. Look at the newest nightly runs (`gh run list --workflow terraform.yml --event schedule --limit 2 --json databaseId,createdAt,conclusion`) and, for one that succeeded, whether its **Down** step ran (`gh run view <id> --json jobs --jq '.jobs[].steps[] | select(.name == "Down") | .conclusion'` says `success` rather than `skipped`). If it did, tell the person the stack had been left up and was torn down overnight. If GitHub started it after 7:59am, it only opened the "didn't run" issue: the stack has been up all night.
 - **Is a Terraform run already going?** `gh run list --workflow terraform.yml --status in_progress` and `--status queued`. Don't start another; watch that one instead.
 - **Open pull requests in both repos** (`gh pr list`, and with `--repo` for the GitOps repo), with their checks. Point out any in the infrastructure repo that would apply on merge once the stack is up.
@@ -38,6 +38,7 @@ It takes about 20-25 minutes. Watch it in the background (`gh run watch <id> --e
 ## 4. Verify
 
 - The run succeeded, and its log's summary line shows `/healthz -> HTTP 200` and `/ -> HTTP 200`. A 307 to `/setup` means it came up with an empty database: say so straight away.
+- A successful `up` also starts the health scan as its own run ("Terraform scan", `--event workflow_dispatch`, a minute or two). Watch it to the end, then report its verdict: `gh run view <id>` shows a "Health scan" warning when something is outside the baseline, and "The health scan found something to look at" is then open (or commented on). The figures and Claude's comparison are on the run's summary page, which only the person can open; offer `/health-scan` to look closer.
 - `up.sh` starts a GitOps run. Find the newest `workflow.yml` run in the GitOps repo (`gh run list --repo <owner>/fleet-homelab-gitops --workflow workflow.yml --limit 1`), and if it's still going, watch it to the end before reporting.
 - If the stack was already up, ask before checking it over HTTP, and keep the URL out of the command line: `curl -s -o /dev/null -w '%{http_code}' "$(terraform output -raw fleet_url)/healthz"`.
 
@@ -51,4 +52,4 @@ With CI, a scheduled check (07:17 UTC: 2:17am America/Chicago, 1:17am in winter)
 
 ## 6. Report
 
-A few lines: up (or already up) since when, restored data or not, the GitOps run's result, open pull requests and what each would do on merge, the teardown time and whether it's skipped, and what's next. If the person keeps session notes, add the same, without identifying values.
+A few lines: up (or already up) since when, restored data or not, the GitOps run's result, the health scan's verdict, open pull requests and what each would do on merge, the teardown time and whether it's skipped, and what's next. If the person keeps session notes, add the same, without identifying values.

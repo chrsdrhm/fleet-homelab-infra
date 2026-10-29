@@ -506,7 +506,7 @@ and IAM *write* limited to role/policy names the stack creates (`fleet*`, plus
 `terraform-*` — the AWS provider's auto-generated name for the addons' unnamed
 Firehose/SES/MDM roles and policies). `iam:PassRole` is limited to the three
 consuming services. Explicit `Deny`s close the escalation paths a service-level
-allow list leaves open: changing either CI role or its policies (so changes to
+allow list leaves open: changing any of the CI roles or their policies (so changes to
 `oidc.tf` are applied locally by an admin, never by CI), `sts:AssumeRole`
 (same-account role trust needs no identity-policy allow), attaching a
 fully-broad managed policy, and `ec2:RunInstances` (the stack is Fargate-only).

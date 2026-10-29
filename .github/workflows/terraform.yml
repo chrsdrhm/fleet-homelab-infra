@@ -247,8 +247,10 @@ jobs:
           for _ in $(seq 80); do
             busy=0
             for event in workflow_dispatch schedule; do
+              # review and scan runs (named by run-name above) never touch the stack.
               n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
+                --json status,displayTitle --jq 'map(select(.status != "completed"
+                  and (.displayTitle | IN("Terraform review", "Terraform scan") | not))) | length')
               busy=$((busy + n))
             done
             [ "$busy" = 0 ] && exit 0
@@ -707,8 +709,10 @@ jobs:
           for _ in $(seq 80); do
             busy=0
             for event in workflow_dispatch schedule; do
+              # review and scan runs (named by run-name above) never touch the stack.
               n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
+                --json status,displayTitle --jq 'map(select(.status != "completed"
+                  and (.displayTitle | IN("Terraform review", "Terraform scan") | not))) | length')
               busy=$((busy + n))
             done
             [ "$busy" = 0 ] && exit 0
@@ -994,9 +998,9 @@ jobs:
         run: |
           echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
           if [ "$AFTER_UP" = true ]; then
-            hours=2 when="just after an up"
+            hours=2 when="in CI, just after an up"
           else
-            hours=24 when="by hand, not after an up"
+            hours=24 when="in CI, started by hand"
           fi
           { echo "Run: $when."; echo; ./scripts/health-scan.sh "$hours"; } > "$RUNNER_TEMP/scan.md"
           {

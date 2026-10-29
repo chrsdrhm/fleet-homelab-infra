@@ -11,11 +11,12 @@ The first build takes about 30 minutes. While it's up, the stack costs about $0.
   - a domain you control. If its DNS is on Cloudflare, Terraform delegates the Fleet subdomain for you; with any other DNS provider, you add four NS records by hand (step 5).
   - a [Fleet Premium](https://fleetdm.com/pricing) license key
   - GitHub
+  - optional: an Okta org for single sign-on (step 6); Claude for the optional reviews and checks in CI (a Claude subscription for pull request reviews, a Claude Console organization for the release review and health scan)
 - **Tools:**
   - [Terraform](https://developer.hashicorp.com/terraform/install) 1.12 or newer (CI uses 1.14.8)
   - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
   - [GitHub CLI](https://cli.github.com/)
-  - git, curl, jq, python3
+  - git, curl, jq, python3, dig (for the health scan)
 
 ## 2. Get the code
 
@@ -136,6 +137,7 @@ With it, every pull request is checked before it can merge, and the results land
 - **Lint and tests:** a ❌ comment names any check that fails, including one that catches a private value about to go public.
 - **Terraform plan:** exactly what will change in AWS, with secrets masked, and a failed check if the change would destroy data.
 - **Claude review (optional):** a ✅ / ⚠️ / ❌ verdict against Fleet's approach and AWS and endpoint security baselines; comment `@claude` to review again after a fix.
+- **Claude on the running stack (optional):** after every `up`, a read-only health scan that Claude compares with what's normal, and a Claude review of each new Fleet release against this setup. Both use the Claude API (cents a month, billed separately from a Claude subscription), signing in with workload identity federation, with no API key ([GitHub setup steps 7 and 8](github-setup.md#7-optional-claude-reviews-new-fleet-releases)).
 - **Changes go live on merge** while the stack is up (while it's down, the next `up` applies them), and **`up` and `down` run from GitHub**, without your terminal.
 
 See it on closed example pull requests: in infra, [a change with its plan and review](https://github.com/chrsdrhm/fleet-homelab-infra/pull/47) (including an `@claude` re-review after a fix) and [a lint failure](https://github.com/chrsdrhm/fleet-homelab-infra/pull/44); in GitOps, [a new policy with its review](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/27) and [a lint failure on a private value](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/30).
@@ -165,6 +167,6 @@ With [Claude Code](https://claude.com/claude-code), `/session-start` and `/sessi
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the `schedule` block.
 
-**Notices in issues.** If a teardown fails (the nightly one or one you started), the run opens an issue in this repo, "The teardown failed", because the stack may still be partly up and billing; GitHub sends it to you by email and in its app, and the next successful teardown closes it. The nightly run also lists Aurora snapshots that aren't teardown snapshots and are older than 14 days (a pre-upgrade snapshot, say) in a "Kept snapshots older than 14 days" issue, since they bill until deleted; it updates nightly and closes itself once there are none. And when Fleet has a release that's been out for a week and is newer than `fleet.Dockerfile`, an "A newer Fleet release is available" issue links its notes, until an upgrade catches up ([Upgrading Fleet](upgrading-fleet.md)); optionally, Claude adds a first review of the releases to it ([GitHub setup step 7](github-setup.md#7-optional-claude-reviews-new-fleet-releases)). None of them changes anything.
+**Notices in issues.** If a teardown fails (the nightly one or one you started), the run opens an issue in this repo, "The teardown failed", because the stack may still be partly up and billing; GitHub sends it to you by email and in its app, and the next successful teardown closes it. The nightly run also lists Aurora snapshots that aren't teardown snapshots and are older than 14 days (a pre-upgrade snapshot, say) in a "Kept snapshots older than 14 days" issue, since they bill until deleted; it updates nightly and closes itself once there are none. And when Fleet has a release that's been out for a week and is newer than `fleet.Dockerfile`, an "A newer Fleet release is available" issue links its notes, until an upgrade catches up ([Upgrading Fleet](upgrading-fleet.md)); optionally, Claude adds a first review of the releases to it ([GitHub setup step 7](github-setup.md#7-optional-claude-reviews-new-fleet-releases)). If the health scan after an `up` finds something outside what's normal, "The health scan found something to look at" lists it, and the next clean scan closes it ([GitHub setup step 8](github-setup.md#8-optional-a-health-scan-after-every-up)). None of them changes anything.
 
 If something goes wrong, the [plan](plans/fleet-homelab-aws-deployment.md) records every problem hit while building this and its fix. Search it for the error message.

@@ -40,7 +40,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 ## 7. WAF
 - Allowed is about the load balancer's request count.
-- Blocked: often more than allowed over a day or more (the US-only rule blocks foreign scanners; a few hundred a day is normal); only a few in the hours just after an `up`.
+- Blocked: anything from a handful to several hundred, growing with how long the stack was up in the window (foreign scanners find a new load balancer within hours, and the US-only rule blocks them). Not a finding on its own; only if allowed requests, 4xx or 5xx rise with it.
 
 ## 8. SES
 - Sending enabled, enforcement `HEALTHY`, production access `false` (still in the sandbox, by design).
@@ -56,4 +56,4 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 ## 11. Fleet and GitHub
 - `/healthz` 200. Status endpoints, when checked: `{}` (healthy).
 - Latest GitOps run: success. Open Dependabot and secret-scanning alerts: 0 in both repos.
-- **In CI (any run):** the status endpoints are skipped (no Fleet API token), and the Dependabot and secret-scanning counts read `n/a` (the job's token can't read alerts). Just after an `up`, the GitOps run that `up` started may still be running (a blank result instead of success).
+- **In CI (any run, whether after an `up` or started by hand; the report's first line says "in CI"):** the status endpoints are skipped (no Fleet API token), and the Dependabot and secret-scanning counts read `n/a` (the job's token can't read alerts). Just after an `up`, the GitOps run that `up` started may still be running (a blank result instead of success).
