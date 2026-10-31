@@ -260,8 +260,9 @@ if [ -n "$owner" ]; then
   gh run list --repo "$owner/fleet-homelab-gitops" --workflow workflow.yml --limit 1 \
     --json conclusion,event,createdAt --jq '.[] | "- Latest GitOps run: \(.conclusion) (\(.event), \(.createdAt))"' 2>/dev/null || fail "GitOps runs"
   for repo in fleet-homelab-infra fleet-homelab-gitops; do
-    d=$(gh api "repos/$owner/$repo/dependabot/alerts?state=open" --jq length 2>/dev/null || echo "n/a")
-    s=$(gh api "repos/$owner/$repo/secret-scanning/alerts?state=open" --jq length 2>/dev/null || echo "n/a")
+    # gh prints the error body to stdout when it fails, so drop the output then.
+    d=$(gh api "repos/$owner/$repo/dependabot/alerts?state=open" --jq length 2>/dev/null) || d="n/a"
+    s=$(gh api "repos/$owner/$repo/secret-scanning/alerts?state=open" --jq length 2>/dev/null) || s="n/a"
     echo "- $repo: $d open Dependabot alerts, $s open secret-scanning alerts"
   done
 fi
