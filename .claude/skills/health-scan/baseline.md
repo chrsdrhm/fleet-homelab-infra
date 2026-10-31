@@ -41,7 +41,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 ## 7. WAF
 - Allowed is about the load balancer's request count.
-- Blocked: anything from a handful to several hundred, growing with how long the stack was up in the window (foreign scanners find a new load balancer within hours, and the US-only rule blocks them). Not a finding on its own; only if allowed requests, 4xx or 5xx rise with it.
+- Blocked: anything from a handful to several hundred, growing with how long the stack was up in the window (foreign scanners find a new load balancer within hours, and the US-only rule blocks them). Not a finding on its own; only if allowed requests, 4xx or 5xx rise with it. Just after an `up`, the load balancer has only been taking traffic for minutes, so allowed and blocked can both read `none`.
 
 ## 8. SES
 - Sending enabled, enforcement `HEALTHY`, production access `false` (still in the sandbox, by design).
@@ -52,7 +52,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - The Fleet host resolves to at least one address (the load balancer has three), and the zone has its name servers (2 on Cloudflare).
 
 ## 10. Budget
-- Under the $100 limit. A month with a few sessions comes to about $15–40. Flag a forecast over $80: something may have been left up.
+- Under the $100 limit. A month with a few sessions comes to about $15–40, and a busy month with many sessions to about $40–60. Flag a forecast over $80: something may have been left up.
 
 ## 11. Fleet and GitHub
 - `/healthz` 200. Status endpoints, when checked: `{}` (healthy).
