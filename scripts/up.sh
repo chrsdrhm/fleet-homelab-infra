@@ -27,14 +27,15 @@ else
   echo "--fresh: creating an empty database."
 fi
 
+# Terraform loads terraform.tfvars itself (locally); CI passes TF_VAR_* env instead.
 # ${arr[@]+"${arr[@]}"} keeps macOS bash 3.2 + `set -u` from erroring on an empty array
-VAR_ARGS=(-var-file=terraform.tfvars ${SNAPSHOT_ARGS[@]+"${SNAPSHOT_ARGS[@]}"})
-terraform plan -input=false "${VAR_ARGS[@]}" -out=tfplan
+VAR_ARGS=(${SNAPSHOT_ARGS[@]+"${SNAPSHOT_ARGS[@]}"})
+terraform plan -input=false ${VAR_ARGS[@]+"${VAR_ARGS[@]}"} -out=tfplan
 
 # tf-apply.sh auto-retries the one known IAM role-propagation race (see that file).
 LOG=$(mktemp)
 set +e
-./scripts/tf-apply.sh tfplan -- "${VAR_ARGS[@]}" 2>&1 | tee "$LOG"
+./scripts/tf-apply.sh tfplan -- ${VAR_ARGS[@]+"${VAR_ARGS[@]}"} 2>&1 | tee "$LOG"
 RC=${PIPESTATUS[0]}
 set -e
 rm -f tfplan

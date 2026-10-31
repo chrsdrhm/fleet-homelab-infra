@@ -241,25 +241,26 @@ jobs:
         with:
           role-arn: ${{ secrets.AWS_PLAN_ROLE_ARN }}
         env:
-          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
-          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
-          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
-          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
-          GH_OWNER: ${{ github.repository_owner }}
-          GH_OWNER_ID: ${{ github.repository_owner_id }}
-          GH_REPO_ID: ${{ github.repository_id }}
 
       # -lock=false: the plan role is read-only and cannot write the S3 lock file.
       # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
       - name: terraform plan
         id: plan
         if: steps.gate.outputs.run == 'true'
+        env:
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_fleet_license_key: ${{ secrets.FLEET_LICENSE_KEY }}
+          TF_VAR_cloudflare_zone_name: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          TF_VAR_waf_ci_header_value: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_github_owner: ${{ github.repository_owner }}
+          TF_VAR_github_owner_id: ${{ github.repository_owner_id }}
+          TF_VAR_github_repo_id: ${{ github.repository_id }}
         run: |
           set +e
-          terraform plan -input=false -lock=false -detailed-exitcode -var-file=terraform.tfvars -out=tfplan > plan.txt 2>&1
+          terraform plan -input=false -lock=false -detailed-exitcode -out=tfplan > plan.txt 2>&1
           code=$?
           set -e
           cat plan.txt
@@ -418,7 +419,7 @@ jobs:
 
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl plan.txt comment.md tfplan data-loss.txt
+        run: rm -f plan.txt comment.md tfplan data-loss.txt
 
   apply:
     name: terraform-apply
@@ -489,16 +490,7 @@ jobs:
         with:
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
         env:
-          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
-          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
-          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
-          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
-          GH_OWNER: ${{ github.repository_owner }}
-          GH_OWNER_ID: ${{ github.repository_owner_id }}
-          GH_REPO_ID: ${{ github.repository_id }}
 
       # Scheduled only: down.sh destroys module.fleet, so its absence from the state
       # means the stack is already down and there's nothing to do. Captured first, so an
@@ -558,6 +550,15 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_fleet_license_key: ${{ secrets.FLEET_LICENSE_KEY }}
+          TF_VAR_cloudflare_zone_name: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          TF_VAR_waf_ci_header_value: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_github_owner: ${{ github.repository_owner }}
+          TF_VAR_github_owner_id: ${{ github.repository_owner_id }}
+          TF_VAR_github_repo_id: ${{ github.repository_id }}
         run: ./scripts/up.sh
 
       # The health scan runs in its own workflow (fleet-checks.yml), so it never holds up
@@ -574,6 +575,15 @@ jobs:
         if: steps.mode.outputs.action == 'down' || steps.nightly.outputs.down == 'true'
         env:
           CONFIRM: destroy # a manual run was checked above; the nightly one is automatic
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_fleet_license_key: ${{ secrets.FLEET_LICENSE_KEY }}
+          TF_VAR_cloudflare_zone_name: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          TF_VAR_waf_ci_header_value: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_github_owner: ${{ github.repository_owner }}
+          TF_VAR_github_owner_id: ${{ github.repository_owner_id }}
+          TF_VAR_github_repo_id: ${{ github.repository_id }}
         run: ./scripts/down.sh
 
       # A failed teardown may leave the stack partly up and billing, so it opens an issue
@@ -648,7 +658,7 @@ jobs:
 
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl notice.md snapshots.md left-up.md
+        run: rm -f notice.md snapshots.md left-up.md
 
   apply-on-merge:
     name: terraform-apply-on-merge
@@ -700,16 +710,7 @@ jobs:
         with:
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
         env:
-          FLEET_SUBDOMAIN: ${{ secrets.FLEET_SUBDOMAIN }}
-          FLEET_LICENSE_KEY: ${{ secrets.FLEET_LICENSE_KEY }}
-          CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
-          WAF_CI_HEADER_VALUE: ${{ secrets.WAF_CI_HEADER_VALUE }}
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
-          GH_OWNER: ${{ github.repository_owner }}
-          GH_OWNER_ID: ${{ github.repository_owner_id }}
-          GH_REPO_ID: ${{ github.repository_id }}
 
       # down.sh destroys module.fleet, so its absence from the state means the stack is
       # down. Applying then would build the whole stack, so this waits for the next up.
@@ -735,9 +736,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_fleet_license_key: ${{ secrets.FLEET_LICENSE_KEY }}
+          TF_VAR_cloudflare_zone_name: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          TF_VAR_waf_ci_header_value: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_github_owner: ${{ github.repository_owner }}
+          TF_VAR_github_owner_id: ${{ github.repository_owner_id }}
+          TF_VAR_github_repo_id: ${{ github.repository_id }}
         run: |
           set +e
-          terraform plan -input=false -var-file=terraform.tfvars -detailed-exitcode -out=tfplan
+          terraform plan -input=false -detailed-exitcode -out=tfplan
           code=$?
           set -e
           [ "$code" != 1 ] || exit 1
@@ -774,7 +784,17 @@ jobs:
       # tf-apply.sh retries the known IAM role-propagation race (see that file).
       - name: Apply
         if: steps.plan.outputs.changes == 'true'
-        run: ./scripts/tf-apply.sh tfplan -- -var-file=terraform.tfvars
+        env:
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_fleet_license_key: ${{ secrets.FLEET_LICENSE_KEY }}
+          TF_VAR_cloudflare_zone_name: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+          TF_VAR_waf_ci_header_value: ${{ secrets.WAF_CI_HEADER_VALUE }}
+          TF_VAR_github_owner: ${{ github.repository_owner }}
+          TF_VAR_github_owner_id: ${{ github.repository_owner_id }}
+          TF_VAR_github_repo_id: ${{ github.repository_id }}
+        run: ./scripts/tf-apply.sh tfplan
 
       # A change that went live (a Fleet upgrade, say) gets the same health scan as an
       # up, once ECS has finished rolling it out. Best effort, like the up's.
@@ -789,4 +809,4 @@ jobs:
 
       - name: Remove the generated files
         if: always()
-        run: rm -f terraform.tfvars backend.hcl tfplan
+        run: rm -f tfplan
