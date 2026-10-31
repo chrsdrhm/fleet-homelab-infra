@@ -1,6 +1,6 @@
 # Health scan baseline
 
-What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's first run (2026-10-05, three days of use) and the Task 30 run (2026-10-29, just after an `up`). Anything outside this is worth a look. When something new turns out to be normal, add it here in a pull request, with the date.
+What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's first run (2026-10-05, three days of use) and the Task 30 runs (2026-10-29 and 2026-10-30, just after an `up`). Anything outside this is worth a look. When something new turns out to be normal, add it here in a pull request, with the date.
 
 **Right after an `up` or an upgrade,** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build.
 
@@ -20,13 +20,14 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - 1 healthy target.
 - Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet.
 - 4xx: a few are normal (sign-in redirects, scanners that got past the WAF).
-- Response time: average under 0.1 s, maximum about 1 s (cold paths after boot).
+- Response time: average under 0.1 s, maximum about 1 s (cold paths after boot). Just after an `up`, the window holds only a handful of requests, mostly cold, so an average up to about 0.2 s is normal.
+- RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
 
 ## 4. Aurora
 - Status `available`, engine `8.0.mysql_aurora.3.13.0`.
 - Events after an `up`: cluster created from snapshot, instance created, restarted and shut down (crash recovery during the restore), topology updated. A window reaching back into a teardown also shows the instance and cluster deleted. Otherwise: none.
 - Pending maintenance: 0.
-- CPU: average 10–15%, maximum about 60% (the restore and migrations).
+- CPU: average 10–15%, maximum about 60% (the restore and migrations). Just after an `up`, when the window is mostly the restore and migrations, an average up to about 25% is normal.
 - CPU credit balance: 0 right after creation, then climbing (past 100 within a day of use). Surplus credits charged: 0. Charged surplus credits mean the instance ran out of credits.
 - Freeable memory: minimum about 1.2 GB. Connections: up to about 20.
 
