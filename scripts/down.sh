@@ -38,7 +38,8 @@ else
   echo "No Aurora cluster found: nothing to snapshot (the stack may already be down)."
 fi
 
-terraform destroy -input=false -auto-approve -var-file=terraform.tfvars \
+# Terraform loads terraform.tfvars itself (locally); CI passes TF_VAR_* env instead.
+terraform destroy -input=false -auto-approve \
   -target=aws_route53_record.fleet_alb \
   -target=aws_cloudwatch_log_group.container_insights \
   -target=module.migrations \

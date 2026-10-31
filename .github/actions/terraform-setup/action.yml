@@ -1,9 +1,10 @@
-# Shared setup for both Terraform jobs: AWS credentials through OIDC (the caller picks
-# the role), the account ID masked, Terraform installed, terraform.tfvars and
-# backend.hcl written from secrets, and terraform init. The caller passes the secret
-# values as step env, since a composite action cannot read secrets itself.
+# Shared setup for the Terraform jobs: AWS credentials through OIDC (the caller picks
+# the role), the account ID masked, Terraform installed, and terraform init with the
+# state bucket from TF_STATE_BUCKET (step env, since a composite action cannot read
+# secrets itself). Nothing is written to disk: the jobs pass the variables as TF_VAR_*
+# env on the steps that run Terraform.
 name: terraform-setup
-description: Log in to AWS with a role, install Terraform, write the inputs, and init.
+description: Log in to AWS with a role, install Terraform, and init.
 
 inputs:
   role-arn:
@@ -32,23 +33,6 @@ runs:
         terraform_version: "1.14.8"
         terraform_wrapper: false
 
-    - name: Write terraform.tfvars and backend.hcl
-      shell: bash
-      run: |
-        umask 077
-        {
-          printf 'fleet_subdomain      = "%s"\n' "$FLEET_SUBDOMAIN"
-          printf 'fleet_license_key    = "%s"\n' "$FLEET_LICENSE_KEY"
-          printf 'cloudflare_zone_name = "%s"\n' "$CLOUDFLARE_ZONE_NAME"
-          printf 'cloudflare_api_token = "%s"\n' "$CLOUDFLARE_API_TOKEN"
-          printf 'budget_alert_email   = "%s"\n' "$BUDGET_ALERT_EMAIL"
-          printf 'waf_ci_header_value  = "%s"\n' "$WAF_CI_HEADER_VALUE"
-          printf 'github_owner         = "%s"\n' "$GH_OWNER"
-          printf 'github_owner_id      = "%s"\n' "$GH_OWNER_ID"
-          printf 'github_repo_id       = "%s"\n' "$GH_REPO_ID"
-        } > terraform.tfvars
-        printf 'bucket = "%s"\n' "$TF_STATE_BUCKET" > backend.hcl
-
     - name: terraform init
       shell: bash
-      run: terraform init -input=false -backend-config=backend.hcl
+      run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
