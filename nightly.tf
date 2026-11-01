@@ -1,15 +1,15 @@
-# Starts the nightly check at 2:17am Chicago time from AWS (plan Task 37). GitHub's own
-# schedule often starts hours late, past the 7:59am cutoff, so a stack left up stayed up
-# all day; EventBridge Scheduler fires on time and follows daylight saving. It calls a
-# small Lambda function (lambda/nightly/index.mjs) that dispatches terraform.yml with
-# action=nightly, signing in as a GitHub App whose client ID and key are SSM parameters
-# set by hand (docs/github-setup.md). The workflow treats any run the app starts as the
-# nightly check, so the app can't start an up or a down. GitHub's schedule stays as a
-# backup, later in the night.
+# Starts the nightly check at 3am Chicago time from AWS (plan Task 37). GitHub's own
+# schedule often started hours late, past the 7:59am cutoff, so a stack left up stayed up
+# all day; EventBridge Scheduler fires on time and follows daylight saving. 3am, not 2am:
+# on the night clocks spring forward, 2:00-2:59 doesn't exist and Scheduler skips the
+# run. It calls a small Lambda function (lambda/nightly/index.mjs) that dispatches
+# terraform.yml with action=nightly, signing in as a GitHub App whose client ID and key
+# are SSM parameters set by hand (docs/github-setup.md). The workflow treats any run the
+# app starts as the nightly check, so the app can't start an up or a down.
 #
 # Kept through teardowns: down.sh doesn't target any of this, since it has to fire while
-# the stack is up. A failed start emails budget_alert_email (confirm the subscription
-# once).
+# the stack is up. A failed or missed start emails budget_alert_email (confirm the
+# subscription once).
 
 locals {
   nightly_name                = "fleet-homelab-nightly"
@@ -88,7 +88,7 @@ resource "aws_lambda_function" "nightly" {
   handler          = "index.handler"
   filename         = data.archive_file.nightly.output_path
   source_code_hash = data.archive_file.nightly.output_base64sha256
-  memory_size      = 128
+  memory_size      = 256
   timeout          = 30
 
   environment {
@@ -143,8 +143,8 @@ resource "aws_iam_role_policy" "nightly_scheduler" {
 
 resource "aws_scheduler_schedule" "nightly" {
   name                         = local.nightly_name
-  description                  = "The nightly check, 2:17am Chicago time all year"
-  schedule_expression          = "cron(17 2 * * ? *)"
+  description                  = "The nightly check, 3am Chicago time all year"
+  schedule_expression          = "cron(0 3 * * ? *)"
   schedule_expression_timezone = "America/Chicago"
 
   flexible_time_window {
@@ -162,8 +162,8 @@ resource "aws_scheduler_schedule" "nightly" {
   }
 }
 
-# A failed start is emailed: the function erroring (a bad key, GitHub down) or the
-# scheduler giving up on calling it. GitHub's backup schedule still runs later.
+# A failed or missed start is emailed: the function erroring (a bad key, GitHub down), or
+# not being called at all (the scheduler gave up, or the schedule is disabled or gone).
 resource "aws_sns_topic" "nightly_alerts" {
   name = "${local.nightly_name}-alerts"
 }
@@ -189,17 +189,19 @@ resource "aws_cloudwatch_metric_alarm" "nightly_function_errors" {
   alarm_actions       = [aws_sns_topic.nightly_alerts.arn]
 }
 
-resource "aws_cloudwatch_metric_alarm" "nightly_schedule_dropped" {
-  alarm_name          = "${local.nightly_name}-schedule-dropped"
-  alarm_description   = "EventBridge Scheduler gave up calling the nightly timer's function."
-  namespace           = "AWS/Scheduler"
-  metric_name         = "InvocationDroppedCount"
-  dimensions          = { ScheduleGroup = "default" }
+# No call in 26 hours: one run's gap is 23 to 25 hours around daylight saving changes,
+# so a missed 3am run alarms around 5am. No data counts as missing a run.
+resource "aws_cloudwatch_metric_alarm" "nightly_missed" {
+  alarm_name          = "${local.nightly_name}-missed"
+  alarm_description   = "The nightly timer's function wasn't called in the last 26 hours, so the nightly check didn't start. Check the schedule, ${local.nightly_name}, in EventBridge Scheduler."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Invocations"
+  dimensions          = { FunctionName = aws_lambda_function.nightly.function_name }
   statistic           = "Sum"
-  period              = 300
-  evaluation_periods  = 1
+  period              = 3600
+  evaluation_periods  = 26
   threshold           = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  treat_missing_data  = "notBreaching"
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
   alarm_actions       = [aws_sns_topic.nightly_alerts.arn]
 }

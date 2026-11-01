@@ -14,6 +14,16 @@ data "tls_certificate" "github_actions" {
 locals {
   account_id        = data.aws_caller_identity.current.account_id
   github_sub_prefix = "repo:${var.github_owner}@${var.github_owner_id}/fleet-homelab-infra@${var.github_repo_id}"
+
+  # Every IAM role the apply role manages, by exact name, and the one service each may be
+  # passed to. Fleet's two are the module's default names (fleet_config.iam); the timer's
+  # are in nightly.tf. The CI roles themselves aren't here: they're applied locally.
+  ci_managed_roles = {
+    "fleet-role"                      = "ecs-tasks.amazonaws.com"
+    "fleet-execution-role"            = "ecs-tasks.amazonaws.com"
+    "${local.nightly_name}-function"  = "lambda.amazonaws.com"
+    "${local.nightly_name}-scheduler" = "scheduler.amazonaws.com"
+  }
 }
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
@@ -144,39 +154,53 @@ data "aws_iam_policy_document" "github_actions_apply" {
     resources = ["*"]
   }
 
+  # Roles by exact name, not a pattern: the stack's roles (local.ci_managed_roles) and no
+  # others, so a run on main can't create a new role with a broad policy and hand it to a
+  # service it can start. A new role in the stack has to be added there, or its apply fails
+  # with AccessDenied. Fleet's module creates its two ECS roles without a permissions
+  # boundary option, so a boundary can't be required here (plan Task 42).
   statement {
-    sid    = "IamManageStackRolesAndPolicies"
+    sid    = "IamManageStackRoles"
     effect = "Allow"
     actions = [
       "iam:CreateRole", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole",
       "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
-      "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:CreatePolicy", "iam:DeletePolicy",
-      "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:TagPolicy", "iam:UntagPolicy",
+      "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+    ]
+    resources = [for name in keys(local.ci_managed_roles) : "arn:aws:iam::${local.account_id}:role/${name}"]
+  }
+
+  # Managed policies keep patterns: the MDM and SES modules name theirs terraform-<random>.
+  # A policy grants nothing until it's attached, and only the roles above can attach one.
+  statement {
+    sid    = "IamManageStackPolicies"
+    effect = "Allow"
+    actions = [
+      "iam:CreatePolicy", "iam:DeletePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+      "iam:TagPolicy", "iam:UntagPolicy",
     ]
     resources = [
-      "arn:aws:iam::${local.account_id}:role/fleet*", "arn:aws:iam::${local.account_id}:role/terraform-*",
       "arn:aws:iam::${local.account_id}:policy/fleet*", "arn:aws:iam::${local.account_id}:policy/terraform-*",
     ]
   }
 
-  # Roles may only be handed to the services that consume them here: ECS tasks
-  # (task + execution roles), Firehose, RDS enhanced monitoring, and the nightly timer's
-  # function and schedule (Lambda, Scheduler). Verify at execution:
-  # a PassRole AccessDenied naming another service means add it here.
-  statement {
-    sid     = "PassStackRolesToStackServices"
-    effect  = "Allow"
-    actions = ["iam:PassRole"]
-    resources = [
-      "arn:aws:iam::${local.account_id}:role/fleet*", "arn:aws:iam::${local.account_id}:role/terraform-*",
-    ]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values = [
-        "ecs-tasks.amazonaws.com", "firehose.amazonaws.com", "monitoring.rds.amazonaws.com",
-        "lambda.amazonaws.com", "scheduler.amazonaws.com",
+  # Each role may only be handed to the one service that uses it (local.ci_managed_roles):
+  # Fleet's task and execution roles to ECS tasks, the nightly timer's to Lambda and
+  # Scheduler. A PassRole AccessDenied after adding a role means adding it there.
+  dynamic "statement" {
+    for_each = toset(distinct(values(local.ci_managed_roles)))
+    content {
+      sid     = "PassStackRolesTo${replace(title(replace(split(".", statement.value)[0], "-", " ")), " ", "")}"
+      effect  = "Allow"
+      actions = ["iam:PassRole"]
+      resources = [
+        for name, service in local.ci_managed_roles : "arn:aws:iam::${local.account_id}:role/${name}" if service == statement.value
       ]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = [statement.value]
+      }
     }
   }
 
