@@ -478,8 +478,11 @@ as a comment (mirroring the dry run the GitOps repo has for Fleet config), so
 merging to `main` is an informed decision. The plan first waits for a running
 `up`/`down` to finish, so it never shows a half-built or half-torn-down stack. On merge, the `apply-on-merge` job
 plans `main` again and applies it if the stack is up (the state holds
-`module.fleet`). While the stack is down it applies nothing, since that would
-build the whole stack; the next `up` applies `main` instead. It waits for a
+`module.fleet`). While the stack is down, applying `main` would build the whole
+stack, so it applies only the changed resources that survive a teardown (everything
+but `scripts/stack-targets`, the list `down.sh` destroys: the nightly timer and its
+alarms, the budget, DNS, secrets, buckets), through a targeted plan, and applies
+nothing if that plan would still touch the stack; the next `up` applies the rest. It waits for a
 running `up`/`down` to finish (before signing in to AWS), and every plan and
 apply waits up to 15 minutes on Terraform's state lock rather than failing, so they never overlap; if the stack went down meanwhile
 (its plan would create the ECS cluster or the database), it applies nothing. **A data-loss guard** sits in that check: if the plan would destroy

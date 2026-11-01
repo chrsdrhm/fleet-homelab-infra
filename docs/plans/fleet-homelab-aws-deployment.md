@@ -3027,6 +3027,17 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 
 ---
 
+### Task 40: Apply what a teardown keeps, even while the stack is down
+
+Added 2026-11-01 at my request. The apply on merge applied nothing while the stack was down, including changes to resources a teardown keeps, so the nightly timer's 2026-11-01 changes waited for the next `up`.
+
+**Built 2026-11-01:** `down.sh`'s targets moved to `scripts/stack-targets`, which `down.sh` and the apply on merge both read. With the stack down, the apply on merge plans `main`, then plans again targeting only the changed resources not covered by that list. It applies nothing if the targeted plan would still change a stack resource (a dependency), and the data-loss guard runs as before. No health scan, since Fleet isn't running.
+
+- [x] **Step 1: Build it** (`scripts/stack-targets`, `scripts/down.sh`, the apply on merge in `terraform.yml`), and document it in the README, the setup guide, the spec and `docs/upgrading-fleet.md`.
+- [ ] **Step 2: Test it:** the next merge that changes a kept resource while the stack is down applies only that, and the next `down.sh` still destroys the same resources.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
