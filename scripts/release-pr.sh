@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Keeps one open pull request that upgrades Fleet (plan Task 39): fleet.Dockerfile set to
 # the newest release, on a branch named for it (fleet-release-<version>), with Claude's
-# review in its body. The daily release check runs it. Merging it is the upgrade
-# (docs/upgrading-fleet.md). A newer release gets a new pull request, and the older one is
-# closed, so each pull request is one release.
+# review in its body. The daily release check runs it. To complete the upgrade, merge that
+# pull request (docs/upgrading-fleet.md). A newer release gets a new pull request, and the
+# older one is closed, so each pull request is one release.
 #
 #   release-pr.sh open  <version> <title> <body-file>   the version's pull request: new,
 #                                                       or its body updated; then close

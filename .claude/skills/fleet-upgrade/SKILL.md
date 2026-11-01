@@ -35,11 +35,12 @@ If the release check's pull request carries Claude's review (plan Tasks 38 and 3
 
 Then report, briefly, sorted the same way as that review, leaving out a group with nothing in it:
 1. **Breaking:** what stops working or behaves differently here: removed or renamed settings, variables, YAML keys or flags these repos use, changed defaults, new minimum versions, migrations that need care.
-2. **Must change:** edits either repo needs before or with the upgrade, with the file and the change.
+2. **Must change:** edits either repo needs before or with the upgrade, beyond the version bump itself, with the file and the change.
 3. **Deprecated, still works:** what these repos do that still works but that Fleet now does a new way (a renamed key that still accepts the old name, a moved setting, a new template field), with the suggested change. Worth doing in the upgrade pull request or soon after.
 4. **New and relevant:** new features touching what we use (Windows MDM, Okta and end-user authentication, GitOps, the AWS modules) that might be worth adopting.
+5. **Check before merging:** what the repos can't show and someone should confirm first, such as the fleetd versions hosts run or an identity provider setting. Check what you can (for example the hosts' versions in Fleet, on a yes) and say what's left.
 
-And a verdict: ✅ upgrade as is, ⚠️ upgrade with these changes, or ❌ wait (say why, for example a regression reported in Fleet's issues). If a release note is unclear, say so and link it; don't guess.
+And a verdict: ✅ upgrade as is, ⚠️ upgrade with these changes (only when **Must change** has an edit; things to check alone don't make it ⚠️), or ❌ wait (say why, for example a regression reported in Fleet's issues). If a release note is unclear, say so and link it; don't guess.
 
 ## 3. Choose the order
 
