@@ -293,11 +293,11 @@ GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack l
 
 ## 11. Optional: upgrade pull requests for new Fleet releases
 
-The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.Dockerfile` with Fleet's newest release. When there's a newer one, it opens a pull request, "Upgrade Fleet to X.Y.Z", on the branch `fleet-release`: the tag change in `fleet.Dockerfile`, a link to the release notes, and Claude's review (step 7). A pull request opened with the workflow's own token wouldn't start the plan and lint checks, so it's opened by a GitHub App. Without the app, the release check only warns in its run.
+The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.Dockerfile` with Fleet's newest release. When there's a newer one, it opens a pull request, "Upgrade Fleet to X.Y.Z", on the branch `fleet-release-X.Y.Z`: the tag change in `fleet.Dockerfile`, a link to the release notes, and Claude's review (step 7). A pull request opened with the workflow's own token wouldn't start the plan and lint checks, so it's opened by a GitHub App. Without the app, the release check only warns in its run.
 
 **What it does over time:**
 - **Once per upgrade:** while the pull request already has a review of the same two versions, it's left alone. A failed review is retried the next day.
-- **A newer release before you merge:** the same pull request moves to it, with a new review. Commits you pushed to its branch stay.
+- **A newer release before you merge:** a new pull request for it, with a new review, and the older one is closed (with a link to the new one) and its branch deleted, commits pushed to it included.
 - **`fleet.Dockerfile` caught up another way:** the pull request is closed and its branch deleted.
 - **Merging it is the upgrade.** With the stack up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then applies; with it down, the next `up` upgrades. See [upgrading Fleet](upgrading-fleet.md).
 

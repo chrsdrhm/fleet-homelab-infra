@@ -86,11 +86,12 @@ jobs:
       # Dependabot can't watch the Fleet image: fleetdm/fleet has tens of thousands of
       # tags (one per branch build), and listing them never finishes. Instead, daily,
       # compare fleet.Dockerfile with Fleet's newest release, and keep one pull request
-      # open that upgrades to it (scripts/release-pr.sh). No waiting period (unlike
-      # Dependabot's cooldown): it's a homelab, and nothing upgrades until it's merged.
-      # Claude's review is in the pull request's body with a marker naming the versions;
-      # while the marker matches, the pull request is left alone, so each upgrade is
-      # reviewed once. A failed review leaves no marker, so the next day tries again.
+      # open that upgrades to it (scripts/release-pr.sh); a newer release gets a new one,
+      # and the older one is closed. No waiting period (unlike Dependabot's cooldown):
+      # it's a homelab, and nothing upgrades until it's merged. Claude's review is in the
+      # pull request's body with a marker naming the versions; while the marker matches,
+      # the pull request is left alone, so each upgrade is reviewed once. A failed review
+      # leaves no marker, so the next day tries again.
       - name: Check for a newer Fleet release
         id: release
         if: github.event_name == 'schedule' || inputs.action == 'release'
@@ -119,7 +120,7 @@ jobs:
             if [ -n "$(./scripts/release-pr.sh show)" ]; then
               echo "close=$current" >> "$GITHUB_OUTPUT"
             fi
-          elif ./scripts/release-pr.sh show | grep -qF "<!-- release-review: $current..$latest -->"; then
+          elif ./scripts/release-pr.sh show "$latest" | grep -qF "<!-- release-review: $current..$latest -->"; then
             echo "The upgrade pull request already has a review of $current to $latest."
           else
             echo "review_from=$current" >> "$GITHUB_OUTPUT"
@@ -226,7 +227,7 @@ jobs:
           {
             printf '@%s Fleet %s is out; `fleet.Dockerfile` is on %s. This pull request upgrades it.\n\n' "$OWNER" "$TO" "$FROM"
             printf 'Release notes: https://github.com/fleetdm/fleet/releases/tag/fleet-v%s\n\n' "$TO"
-            printf '**Merging it upgrades Fleet.** If the stack is up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then the migrations add-on runs the database migrations for the new version and rolls it out. If it is down, the next `up` upgrades it, and the teardown snapshot is the restore point. Read the review below first; for anything it says must change, run `/fleet-upgrade` on this pull request, or push to its branch, `fleet-release`. See `docs/upgrading-fleet.md`.\n'
+            printf '**Merging it upgrades Fleet.** If the stack is up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then the migrations add-on runs the database migrations for the new version and rolls it out. If it is down, the next `up` upgrades it, and the teardown snapshot is the restore point. Read the review below first; for anything it says must change, run `/fleet-upgrade` on this pull request, or push to its branch, `fleet-release-%s`. See `docs/upgrading-fleet.md`.\n' "$TO"
             if [ "$reviewed" = true ]; then
               printf "\n## Claude's review: Fleet %s to %s\n\n" "$FROM" "$TO"
               cat "$RUNNER_TEMP/review.md"
