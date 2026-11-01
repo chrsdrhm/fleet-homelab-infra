@@ -139,6 +139,7 @@ Settings → Rules → Rulesets shows the result. If CI itself ever breaks, an a
 When `up` runs from CI, it starts the GitOps repo's workflow so Fleet's configuration is reapplied. A workflow's own token can't start another repo's workflow, so a small GitHub App does it. Without the app, `up` still works, but it shows a warning and the nightly GitOps run catches up instead.
 
 1. Go to GitHub → your avatar → **Settings → Developer settings → GitHub Apps → New GitHub App**:
+   - Any unique name, for example `fleet-homelab-gitops-<your-username>` (app names are unique across GitHub), and the repo's URL as the homepage.
    - Webhook off.
    - Repository permissions → **Actions: Read and write**, and nothing else.
    - **Only on this account**.
