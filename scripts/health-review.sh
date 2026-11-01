@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Asks Claude to compare a health-scan report with the baseline (plan Task 30 Step 4),
-# and prints its findings as Markdown, starting with a verdict line. The apply job's
-# health-scan job runs it after every up; the /health-scan skill does the same by hand.
+# and prints its findings as Markdown, starting with a verdict line. fleet-checks.yml's
+# health-scan job runs it after an up or an apply on merge that changed something (and by
+# hand); the /health-scan skill does the same review interactively.
 #
 #   health-review.sh <report.md> [--context-only]
 #

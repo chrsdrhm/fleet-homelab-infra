@@ -1,4 +1,4 @@
-# Terraform for this stack, in four jobs (plus lint-comment, which comments on the PR
+# Terraform for this stack, in five jobs (plus lint-comment, which comments on the PR
 # when lint fails). The Fleet release check and the health scan, which don't run
 # Terraform, are in fleet-checks.yml.
 #  - lint:  on every pull request, no AWS: checks/run.sh (private values, fmt, validate,
@@ -27,8 +27,8 @@
 #           A change to fleet.Dockerfile (a Fleet upgrade) snapshots the database first.
 #           When it changed something, it starts a health scan (fleet-checks.yml).
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts runs on main,
-# which only a merge or a manual run can start, so a pull request cannot get it even by
-# editing this file. Values that identify
+# which only a merge, a manual run or the nightly timer's app (forced to nightly) can
+# start, so a pull request cannot get it even by editing this file. Values that identify
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform

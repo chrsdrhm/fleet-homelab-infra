@@ -9,7 +9,7 @@ name: Claude review
 
 on:
   # Not on every push, to save the plan's usage. To review the latest commit again,
-  # comment @claude on the pull request (only the repository owner can trigger it).
+  # comment @claude on the pull request (only people with write access can trigger it).
   pull_request:
     types: [opened, reopened, ready_for_review]
   issue_comment:
@@ -157,7 +157,7 @@ jobs:
 
             Comment only on things that matter: put specific issues as inline comments on
             the lines concerned. Do not post any other comment. Your final message is posted
-            for you as the review's summary comment (updated in place on later runs), so make
+            for you as the review's summary comment (each run posts a new one and hides earlier ones), so make
             it only that summary, with no heading or preamble. Start it with a one-line
             verdict that begins with exactly one of:
               ✅ Good to merge: nothing that needs changing.

@@ -33,7 +33,7 @@ aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$SN
 
 ## 3. The pull request
 
-With CI, the release check's pull request already has the tag change; push anything else the release notes call for to its branch, `fleet-release-X.Y.Z`. By hand, change the tag in `fleet.Dockerfile`, for example `fleetdm/fleet:v4.92.0` → `fleetdm/fleet:v4.93.0`, plus anything the release notes call for. The pull request's plan should show the Fleet task definition replaced and the service and migrations add-on updated, with nothing that holds data destroyed. If the stack is down, the plan still works; it describes what the next `up` will do.
+With CI, the release check's pull request already has the tag change; push anything else the release notes call for to its branch, `fleet-release-X.Y.Z`. By hand, change the tag in `fleet.Dockerfile`, for example `fleetdm/fleet:v4.92.0` → `fleetdm/fleet:v4.93.0`, plus anything the release notes call for. The pull request's plan should show the Fleet task definition and the migrations add-on replaced and the ECS service updated, with nothing that holds data destroyed. If the stack is down, the plan still works; it describes what the next `up` will do.
 
 Before merging, make sure the plan is against the stack as it is now. If the stack came up after the pull request was opened, or the branch is behind `main` (branches must be up to date to merge), select **Update branch** and wait for the new plan.
 
@@ -50,12 +50,12 @@ Then check:
 ## Rolling back
 
 Rolling back means restoring the pre-upgrade snapshot with the old version:
-1. Revert the upgrade pull request, so `fleet.Dockerfile` has the old tag again. The next release check opens the upgrade pull request again; leave it unmerged until the problem is fixed.
-2. Tear down with `./scripts/down.sh`. Its new teardown snapshot holds the upgraded database, so don't restore from it.
+1. Tear down first, with `./scripts/down.sh`. Reverting while the stack is up would roll the old version onto the already-migrated database. Its new teardown snapshot holds the upgraded database, so don't restore from it.
+2. Revert the upgrade pull request, so `fleet.Dockerfile` has the old tag again. With the stack down, the merge doesn't touch Fleet. The next release check opens the upgrade pull request again; leave it unmerged until the problem is fixed.
 3. Rebuild from the pre-upgrade snapshot instead of the newest teardown one:
    ```bash
-   terraform plan -input=false -var-file=terraform.tfvars -var rds_snapshot_identifier="$SNAP" -out=tfplan
-   ./scripts/tf-apply.sh tfplan -- -var-file=terraform.tfvars -var rds_snapshot_identifier="$SNAP"
+   terraform plan -input=false -var rds_snapshot_identifier="$SNAP" -out=tfplan
+   ./scripts/tf-apply.sh tfplan -- -var rds_snapshot_identifier="$SNAP"
    ```
 
 Anything recorded between the upgrade and the rollback is lost with it.
