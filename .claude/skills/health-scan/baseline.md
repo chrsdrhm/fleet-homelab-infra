@@ -2,7 +2,7 @@
 
 What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's first run (2026-10-05, three days of use) and the Task 30 runs (2026-10-29 and 2026-10-30, just after an `up`). Anything outside this is worth a look. When something new turns out to be normal, add it here in a pull request, with the date.
 
-**Right after an `up` or an upgrade,** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build.
+**Right after an `up` or an upgrade,** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build. **A scan after an apply on merge** looks back two hours, so within about two hours of an `up` its window can start partway through the `up`: then it shows only the later restore events. Redis is created a few minutes before Aurora is restored, so Aurora's restore events with no Redis events, or the other way round, is the window's start, not a missing check. The run list shows when the `up` ran.
 
 ## 1. ECS service
 - Running 1 of 1, rollout `COMPLETED`, one deployment.
