@@ -46,6 +46,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
           COMMENTER: ${{ github.event.comment.user.login }}
+          SENDER_TYPE: ${{ github.event.sender.type }}
         run: |
           # From a comment, only someone with write access (admin, maintain or write) can
           # start a review.
@@ -66,6 +67,11 @@ jobs:
           elif [ -z "$TOKEN" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Claude review skipped::No CLAUDE_CODE_OAUTH_TOKEN secret here (it needs a Claude Pro or Max subscription; forks and Dependabot never get it)."
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$SENDER_TYPE" = Bot ]; then
+            # claude-code-action refuses runs started by an app. The release app's upgrade
+            # pull request already carries Claude's release review; @claude still works.
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Claude review skipped::This pull request event came from an app. Comment @claude to review it."
           elif [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Claude review skipped::@claude doesn't review pull requests from forks, whose files could run code while the job holds the token."

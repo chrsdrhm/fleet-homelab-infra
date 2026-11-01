@@ -3028,6 +3028,19 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 
 ---
 
+### Task 39: An upgrade pull request for each new Fleet release
+
+Added 2026-11-01 at my request. The release check opened an issue, and the upgrade was a separate pull request. Instead, the release check opens the pull request itself: the tag change in `fleet.Dockerfile` and Claude's review, so the upgrade is reviewing and merging it.
+
+**Built 2026-11-01 (`scripts/release-pr.sh`, `fleet-checks.yml`, `terraform.yml`):** one pull request on the branch `fleet-release`, opened by a GitHub App, because a pull request opened with the workflow's own token doesn't start the plan and lint checks. The app has Contents and Pull requests write on this repo only. Its token is made after Claude's review, and only the last step holds it, so no step that handles the release notes has it. The commit goes through the contents API, so it's the app's and signed by GitHub. A marker in the body records the reviewed versions, as the issue's did. A newer release moves the same pull request, keeping commits pushed to it, and a `fleet.Dockerfile` that caught up another way closes it. Only a pull request from this repo's own branch counts, never a fork's. The apply on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a merge that changed `fleet.Dockerfile`, found through the compare API, so merging from a phone still leaves a restore point. With the stack down, the teardown snapshot is the restore point. `claude-review.yml` skips pull request events sent by an app, which `claude-code-action` refuses anyway; `@claude` still works. `action=release` runs the check by hand.
+
+- [x] **Step 1: The app and the pull request** (`scripts/release-pr.sh`, the `fleet-release` job).
+- [x] **Step 2: The snapshot on merge** (`terraform.yml`'s apply on merge).
+- [x] **Step 3: Document it:** `docs/github-setup.md` step 11 and the secrets, `docs/upgrading-fleet.md`, the setup guide, the spec, the README, `AGENTS.md`, `/fleet-upgrade` and `/session-start`.
+- [ ] **Step 4: Test it:** create the app and its secrets, run `action=release`, and check the pull request for 4.94.0: its plan and lint checks run, and the body has the review. Merge it with the stack up, and check that the apply on merge takes the snapshot before applying.
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓

@@ -22,6 +22,7 @@
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
+#           A change to fleet.Dockerfile (a Fleet upgrade) snapshots the database first.
 #           When it changed something, it starts a health scan (fleet-checks.yml).
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts runs on main,
 # which only a merge or a manual run can start, so a pull request cannot get it even by
@@ -927,6 +928,29 @@ jobs:
             fi
             echo "::notice title=Destroy accepted::the merged pull request had the allow-destroy label."
           fi
+
+      # A merge that changes fleet.Dockerfile is a Fleet upgrade, whose migrations change
+      # the database: snapshot it first, as docs/upgrading-fleet.md does by hand, so a
+      # rollback has a restore point. Kept until deleted (down.sh prunes only teardown
+      # snapshots); the nightly "Kept snapshots" issue lists it after 14 days.
+      - name: Snapshot before a Fleet upgrade
+        if: steps.plan.outputs.changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Captured first, so an API error fails the step instead of skipping the snapshot.
+          changed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$SHA" --jq '.files[].filename')
+          if ! grep -qx 'fleet.Dockerfile' <<< "$changed"; then
+            echo "fleet.Dockerfile didn't change; no snapshot needed."
+            exit 0
+          fi
+          snap="fleet-homelab-pre-upgrade-$(date -u +%Y%m%d%H%M%S)"
+          aws rds create-db-cluster-snapshot --db-cluster-identifier fleet-homelab \
+            --db-cluster-snapshot-identifier "$snap" > /dev/null
+          aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$snap"
+          echo "::notice title=Pre-upgrade snapshot::$snap. Delete it once the new version has run cleanly for a while (docs/upgrading-fleet.md)."
 
       # tf-apply.sh retries the known IAM role-propagation race (see that file).
       - name: Apply

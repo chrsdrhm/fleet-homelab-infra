@@ -172,7 +172,7 @@ Non-goals above.
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
-| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens an issue when a newer release is out (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
+| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens a pull request that upgrades to a newer release the day it's out (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
@@ -538,13 +538,17 @@ removed (see `docs/github-setup.md`).
 
 **Claude's review of a new Fleet release.** The daily release check runs in its
 own workflow (`fleet-checks.yml`, job `fleet-release`, noon Chicago time), apart from the
-teardown, so a teardown neither delays nor skips it. When it opens or updates its issue, the same job sends Claude the
+teardown, so a teardown neither delays nor skips it. When it opens or updates its upgrade pull request, the same job sends Claude the
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
 Deprecated (still works) and New and relevant, with a ✅ / ⚠️ / ❌ verdict, and
-the job adds it to the issue, once per upgrade (a marker in the issue records
-which versions were reviewed). It runs on the Claude API, signing in through
+the job puts it in the pull request's body, once per upgrade (a marker in the body records
+which versions were reviewed). The pull request is opened by a GitHub App (Contents and
+Pull requests write, this repo only), so its checks run; the app's token is made after
+the review, in the last step only. Merging it is the upgrade: with the stack up, the apply
+on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a change to
+`fleet.Dockerfile`. It runs on the Claude API, signing in through
 workload identity federation: the job's GitHub identity token, issued only to
 runs on `main` by the Console's federation rule, is exchanged for a token that
 lasts 10 minutes, in a workspace with a $10 monthly spend limit. The job has no
@@ -619,7 +623,7 @@ the time by design, a red board usually means "torn down on purpose".
   Okta side (applied locally), the optional self-hosted Grafana's
   configuration in `grafana/` (not applied to AWS), the
   `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
-  (the daily Fleet release check with Claude's review, and the health scan) and
+  (the daily Fleet release check, which opens an upgrade pull request with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
   merges, `apply` for on-demand up/down and a nightly check (started at 2:17am
   Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda

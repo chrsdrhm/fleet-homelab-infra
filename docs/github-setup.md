@@ -23,6 +23,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `FLEET_SUBDOMAIN`, `FLEET_LICENSE_KEY`, `BUDGET_ALERT_EMAIL`, `WAF_CI_HEADER_VALUE` | The same values as in `terraform.tfvars` | yes |
 | `CLOUDFLARE_ZONE_NAME`, `CLOUDFLARE_API_TOKEN` | The same as in `terraform.tfvars`; skip both if your DNS isn't on Cloudflare | yes |
 | `GITOPS_APP_CLIENT_ID`, `GITOPS_APP_PRIVATE_KEY` | Optional, from the GitHub App in step 5 | |
+| `RELEASE_APP_CLIENT_ID`, `RELEASE_APP_PRIVATE_KEY` | Optional, from the release GitHub App in step 11 | |
 | `PRIVATE_HASHES` | Set by `checks/private-values/sync-hashes.sh` (see [`checks/README.md`](../checks/README.md#private-values)) | yes (the script sets both) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
 | `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7) and of the health scan (step 8); IDs, not credentials | |
@@ -93,7 +94,7 @@ gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homel
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
-The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when the nightly check starts too late to tear down a stack that's up, one listing kept snapshots older than 14 days, and one when a newer Fleet release is out (see the setup guide's [Day to day](setup.md#9-day-to-day)). Leave **Issues** turned on in the repo's settings for them.
+The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when the nightly check starts too late to tear down a stack that's up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
 
 GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 
@@ -193,7 +194,7 @@ Claude reviews each pull request when it's opened (`.github/workflows/claude-rev
 
 ## 7. Optional: Claude reviews new Fleet releases
 
-When the daily release check opens or updates "A newer Fleet release is available", the same job (`fleet-release` in `fleet-checks.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and adds the verdict to the issue ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not daily. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the release check and the issue are unaffected.
+When the daily release check opens or updates its upgrade pull request (step 11), the same job (`fleet-release` in `fleet-checks.yml`, running `scripts/release-review.sh`) has Claude review the releases in between against this setup, and puts the verdict in the pull request's body ([upgrading Fleet](upgrading-fleet.md#1-read-the-release-notes)). Each upgrade is reviewed once, not daily. **It uses the Claude API, not your subscription**, and signs in with workload identity federation: the job exchanges its GitHub identity token for a Claude API token that lasts about ten minutes, so there's no API key to store or rotate. Without the three secrets the review fails with a warning; the pull request is opened without it, and the next day's run tries again.
 
 **Set it up** in the [Claude Console](https://platform.claude.com) (you need the admin or owner role):
 1. **A workspace for this repo,** with a monthly spend limit (about $10 is plenty).
@@ -289,3 +290,33 @@ GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack l
 - **The app can only start the nightly check.** Its token is for this repo with Actions write only, the function revokes it when done, and the workflow runs anything the app starts as `nightly`.
 - **The key never leaves AWS:** an SSM SecureString that only the function's role can read, not in Terraform state, the repo or GitHub.
 - **A failed start emails you:** an alarm on the function's errors, and on the scheduler giving up. The backup schedule still runs.
+
+## 11. Optional: upgrade pull requests for new Fleet releases
+
+The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.Dockerfile` with Fleet's newest release. When there's a newer one, it opens a pull request, "Upgrade Fleet to X.Y.Z", on the branch `fleet-release`: the tag change in `fleet.Dockerfile`, a link to the release notes, and Claude's review (step 7). A pull request opened with the workflow's own token wouldn't start the plan and lint checks, so it's opened by a GitHub App. Without the app, the release check only warns in its run.
+
+**What it does over time:**
+- **Once per upgrade:** while the pull request already has a review of the same two versions, it's left alone. A failed review is retried the next day.
+- **A newer release before you merge:** the same pull request moves to it, with a new review. Commits you pushed to its branch stay.
+- **`fleet.Dockerfile` caught up another way:** the pull request is closed and its branch deleted.
+- **Merging it is the upgrade.** With the stack up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then applies; with it down, the next `up` upgrades. See [upgrading Fleet](upgrading-fleet.md).
+
+**Set it up:**
+1. **Create a GitHub App:** your profile → Settings → Developer settings → GitHub Apps → **New GitHub App**.
+   - Any unique name, for example `fleet-homelab-release-<your-username>`, and the repo's URL as the homepage.
+   - **Webhook:** untick **Active**.
+   - **Repository permissions:** **Contents: Read and write** and **Pull requests: Read and write**, nothing else.
+   - **Where can this GitHub App be installed?** Only on this account.
+2. **Generate a private key** (the app's page, at the bottom), and note its **Client ID**.
+3. **Install it:** Install App → your account → **Only select repositories** → `fleet-homelab-infra`.
+4. **Store both as secrets,** then delete the key file:
+   ```bash
+   gh secret set RELEASE_APP_CLIENT_ID --repo $OWNER/fleet-homelab-infra
+   gh secret set RELEASE_APP_PRIVATE_KEY --repo $OWNER/fleet-homelab-infra < path/to/the-key.pem
+   ```
+5. **Test it:** `gh workflow run fleet-checks.yml --repo $OWNER/fleet-homelab-infra -f action=release` runs the release check now. If `fleet.Dockerfile` is behind, it opens the pull request; if it's current, the run says so and opens nothing.
+
+**Security:**
+- **The app can't change `main`.** It writes only to its own branch; `main` takes changes only through a pull request with passing checks, and merging is yours.
+- **Its token never meets the release notes:** it's made after Claude's review, and only the last step holds it. Claude's text goes only into the pull request's body, with `@mentions` broken.
+- **Claude's pull request review skips the app's pull requests** (it already carries the release review); comment `@claude` on it to have one.
