@@ -48,8 +48,7 @@ data "aws_iam_policy_document" "github_actions_apply" {
   # root module + addons actually create (not guessed): VPC/EC2, RDS, ElastiCache,
   # ECS + Application Auto Scaling (byo-ecs creates aws_appautoscaling_*), ELB,
   # WAFv2, CloudWatch (+ Logs), SES, Route 53, ACM, Firehose, Budgets.
-  # No Lambda/Events/SNS: only the monitoring addon's unused cron_monitoring path
-  # creates Lambda/Events, and no SNS topic is wired up.
+  # Lambda, Scheduler and SNS only for the nightly timer, in their own statement below.
   statement {
     sid    = "CoreInfraServices"
     effect = "Allow"
@@ -60,6 +59,19 @@ data "aws_iam_policy_document" "github_actions_apply" {
       "sts:GetCallerIdentity",
     ]
     resources = ["*"]
+  }
+
+  # The nightly timer (nightly.tf, Task 37): its function, schedule and alert topic are
+  # all named fleet-homelab-*. Its two SSM parameters are set by hand, never by CI.
+  statement {
+    sid     = "NightlyTimer"
+    effect  = "Allow"
+    actions = ["lambda:*", "scheduler:*", "sns:*"]
+    resources = [
+      "arn:aws:lambda:*:${local.account_id}:function:fleet-homelab-*",
+      "arn:aws:scheduler:*:${local.account_id}:schedule/default/fleet-homelab-*",
+      "arn:aws:sns:*:${local.account_id}:fleet-homelab-*",
+    ]
   }
 
   # Secrets Manager: every secret this stack creates is named fleet* (fleet-scep,
@@ -148,7 +160,8 @@ data "aws_iam_policy_document" "github_actions_apply" {
   }
 
   # Roles may only be handed to the services that consume them here: ECS tasks
-  # (task + execution roles), Firehose, RDS enhanced monitoring. Verify at execution:
+  # (task + execution roles), Firehose, RDS enhanced monitoring, and the nightly timer's
+  # function and schedule (Lambda, Scheduler). Verify at execution:
   # a PassRole AccessDenied naming another service means add it here.
   statement {
     sid     = "PassStackRolesToStackServices"
@@ -160,7 +173,10 @@ data "aws_iam_policy_document" "github_actions_apply" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["ecs-tasks.amazonaws.com", "firehose.amazonaws.com", "monitoring.rds.amazonaws.com"]
+      values = [
+        "ecs-tasks.amazonaws.com", "firehose.amazonaws.com", "monitoring.rds.amazonaws.com",
+        "lambda.amazonaws.com", "scheduler.amazonaws.com",
+      ]
     }
   }
 
@@ -278,6 +294,19 @@ data "aws_iam_policy_document" "github_actions_plan" {
       "iam:Get*", "iam:List*", "kms:Describe*", "kms:List*", "kms:Get*", "sts:GetCallerIdentity", "tag:GetResources",
     ]
     resources = ["*"]
+  }
+
+  # The nightly timer's reads, on its own resources only: GetFunction returns a
+  # function's environment and code, so no other function in the account is readable.
+  statement {
+    sid     = "ReadNightlyTimer"
+    effect  = "Allow"
+    actions = ["lambda:Get*", "lambda:List*", "scheduler:Get*", "scheduler:List*", "sns:Get*", "sns:List*"]
+    resources = [
+      "arn:aws:lambda:*:${local.account_id}:function:fleet-homelab-*",
+      "arn:aws:scheduler:*:${local.account_id}:schedule/default/fleet-homelab-*",
+      "arn:aws:sns:*:${local.account_id}:fleet-homelab-*",
+    ]
   }
 
   # Terraform's refresh reads secret_version resources (the private key, the Aurora
