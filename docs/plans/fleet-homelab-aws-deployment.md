@@ -1470,6 +1470,8 @@ git add scripts/
 git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 ```
 
+**Changed 2026-11-01:** `down.sh` treats only `DBClusterNotFoundFault` as "no database". Any other error checking for the cluster stops it before anything is destroyed. Before, any error read as "no cluster" and skipped the snapshot, and the module skips Aurora's final snapshot (`skip_final_snapshot` defaults to `true`), so a failed check during a teardown would have deleted the database with no snapshot.
+
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
