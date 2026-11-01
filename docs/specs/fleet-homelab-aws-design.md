@@ -172,7 +172,7 @@ Non-goals above.
 | Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
-| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens an issue when a newer release is a week old (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
+| Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens a pull request that upgrades to a newer release within a day of it (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
@@ -481,8 +481,11 @@ as a comment (mirroring the dry run the GitOps repo has for Fleet config), so
 merging to `main` is an informed decision. The plan first waits for a running
 `up`/`down` to finish, so it never shows a half-built or half-torn-down stack. On merge, the `apply-on-merge` job
 plans `main` again and applies it if the stack is up (the state holds
-`module.fleet`). While the stack is down it applies nothing, since that would
-build the whole stack; the next `up` applies `main` instead. It waits for a
+`module.fleet`). While the stack is down, applying `main` would build the whole
+stack, so it applies only the changed resources that survive a teardown (everything
+but `scripts/stack-targets`, the list `down.sh` destroys: the nightly timer and its
+alarms, the budget, DNS, secrets, buckets), through a targeted plan, and applies
+nothing if that plan would still touch the stack; the next `up` applies the rest. It waits for a
 running `up`/`down` to finish (before signing in to AWS), and every plan and
 apply waits up to 15 minutes on Terraform's state lock rather than failing, so they never overlap; if the stack went down meanwhile
 (its plan would create the ECS cluster or the database), it applies nothing. **A data-loss guard** sits in that check: if the plan would destroy
@@ -506,10 +509,13 @@ ElastiCache, ECS + Application Auto Scaling, ELB, WAFv2, CloudWatch/Logs, SES,
 Route 53, ACM, Firehose, Budgets), with Secrets Manager limited to `fleet*`
 secrets, S3 limited to this project's buckets (`fleet-homelab-*` and the ECS
 module's `fleet-software-installers-*`), KMS use limited by `kms:ViaService`,
-and IAM *write* limited to role/policy names the stack creates (`fleet*`, plus
-`terraform-*` — the AWS provider's auto-generated name for the addons' unnamed
-Firehose/SES/MDM roles and policies). `iam:PassRole` is limited to the three
-consuming services. Explicit `Deny`s close the escalation paths a service-level
+and IAM *write* limited to the roles the stack creates, **by exact name**
+(`local.ci_managed_roles` in `oidc.tf`: Fleet's `fleet-role` and
+`fleet-execution-role`, and the nightly timer's function and scheduler roles), and to
+managed policies named `fleet*` or `terraform-*` (the AWS provider's generated name
+for the MDM and SES addons' policies). `iam:PassRole` passes each of those roles only
+to its own service: Fleet's to ECS tasks, the timer's to Lambda and Scheduler. A new
+role in the stack must be added to that list. Explicit `Deny`s close the escalation paths a service-level
 allow list leaves open: changing any of the CI roles or their policies (so changes to
 `oidc.tf` are applied locally by an admin, never by CI), `sts:AssumeRole`
 (same-account role trust needs no identity-policy allow), attaching a
@@ -520,11 +526,12 @@ review found the first draft — broad IAM write on `*` with only
 any role's trust policy and become admin; the above closes that.
 
 This is *scoped*, not formally least-privilege: within each service, actions
-are still broad (`rds:*`, `ecs:*`), and one residual remains — a compromised
-apply token can still create a new `fleet*`/`terraform-*` role and run code as
-it in an ECS task it also defines. Closing that needs a permissions-boundary
-condition on every role it creates, and Fleet's modules expose no
-`permissions_boundary` input. It can also read the `fleet*` secrets and the
+are still broad (`rds:*`, `ecs:*`), and one residual remains. A compromised
+apply token can't create a new role, but it can still widen Fleet's own task or
+execution role (CI has to manage their policies to deploy Fleet) and run code as
+it in an ECS task it defines. Closing that needs a permissions boundary required
+on every role CI creates, and Fleet's module creates its execution role with no
+`permissions_boundary` input (asking Fleet for one is on the list, plan Task 42 Step 4). It can also read the `fleet*` secrets and the
 state. The mitigation that fits is the trust policy — only a manual dispatch on
 `main` of this single-owner repo can assume the role — with an optional
 stronger gate (a GitHub Environment with a required reviewer) not built here.
@@ -540,14 +547,18 @@ only read the repo and comment, and can be swapped for another reviewer or
 removed (see `docs/github-setup.md`).
 
 **Claude's review of a new Fleet release.** The daily release check runs in its
-own workflow (`fleet-checks.yml`, job `fleet-release`, 13:47 UTC), apart from the
-teardown, so a teardown neither delays nor skips it. When it opens or updates its issue, the same job sends Claude the
+own workflow (`fleet-checks.yml`, job `fleet-release`, noon Chicago time), apart from the
+teardown, so a teardown neither delays nor skips it. When it opens or updates its upgrade pull request, the same job sends Claude the
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
 Deprecated (still works) and New and relevant, with a ✅ / ⚠️ / ❌ verdict, and
-the job adds it to the issue, once per upgrade (a marker in the issue records
-which versions were reviewed). It runs on the Claude API, signing in through
+the job puts it in the pull request's body, once per upgrade (a marker in the body records
+which versions were reviewed). The pull request is opened by a GitHub App (Contents and
+Pull requests write, this repo only), so its checks run; the app's token is made after
+the review, in the last step only. Merging it is the upgrade: with the stack up, the apply
+on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a change to
+`fleet.Dockerfile`. It runs on the Claude API, signing in through
 workload identity federation: the job's GitHub identity token, issued only to
 runs on `main` by the Console's federation rule, is exchanged for a token that
 lasts 10 minutes, in a workspace with a $10 monthly spend limit. The job has no
@@ -622,13 +633,13 @@ the time by design, a red board usually means "torn down on purpose".
   Okta side (applied locally), the optional self-hosted Grafana's
   configuration in `grafana/` (not applied to AWS), the
   `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
-  (the daily Fleet release check with Claude's review, and the health scan) and
+  (the daily Fleet release check, which opens an upgrade pull request with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down and a nightly check (started at 2:17am
+  merges, `apply` for on-demand up/down and a nightly check (started at 3am
   Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda
-  function and a GitHub App that can only start the check; GitHub's own
-  schedule, 09:17 UTC, is the backup; it acts until 7:59am Chicago time, and
-  only reports, in an issue, if it starts later) that tears the stack down if it was left up and keeps an
+  function and a GitHub App that can only start the check, with alarms emailed
+  when it fails or isn't called; it acts until 7:59am Chicago time, and only
+  reports, in an issue, if started later by hand) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that

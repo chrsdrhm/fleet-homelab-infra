@@ -1,5 +1,7 @@
 output "fleet_url" {
   value = "https://${var.fleet_subdomain}"
+  # The hostname; `terraform output -raw fleet_url` (up.sh, health-scan.sh) still shows it.
+  sensitive = true
 }
 
 # The four name servers that fleet_subdomain must be delegated to (NS records at the

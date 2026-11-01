@@ -14,14 +14,17 @@
 #           them. okta/ is still applied locally.
 #  - apply: started by hand (up or down with the apply role), and nightly, when it
 #           tears the stack down if it was left up. The nightly check is started at
-#           2:17am Chicago time by an AWS timer (nightly.tf: a GitHub App dispatching
-#           action=nightly), with GitHub's own schedule as a later backup (or, if GitHub started it after
-#           7:59am, opens an issue saying it's still up). A failed down (either kind)
-#           opens an issue that the next successful down closes, and the nightly run
-#           lists kept snapshots older than 14 days in another (scripts/notify-issue.sh).
+#           3am Chicago time by an AWS timer (nightly.tf: a GitHub App dispatching
+#           action=nightly), which emails if it didn't run. A nightly check started by
+#           hand after 7:59am only opens an issue saying the stack is still up. A failed
+#           down (either kind) opens an issue that the next successful down closes, and
+#           the nightly run lists kept snapshots older than 14 days in another
+#           (scripts/notify-issue.sh).
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
-#           plan and apply main, so a change goes live on merge; if it's down, nothing
-#           happens (the next up applies main). The data-loss guard runs again here.
+#           plan and apply main, so a change goes live on merge; if it's down, only what
+#           survives a teardown is applied (not scripts/stack-targets), and the next up
+#           applies the rest. The data-loss guard runs again here.
+#           A change to fleet.Dockerfile (a Fleet upgrade) snapshots the database first.
 #           When it changed something, it starts a health scan (fleet-checks.yml).
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts runs on main,
 # which only a merge or a manual run can start, so a pull request cannot get it even by
@@ -29,7 +32,7 @@
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
-run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || (github.event_name == 'schedule' || inputs.action == 'nightly' || (vars.NIGHTLY_APP_ACTOR != '' && github.triggering_actor == vars.NIGHTLY_APP_ACTOR)) && 'Terraform nightly check (down if up)' || format('Terraform {0}', inputs.action) }}"
+run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || (inputs.action == 'nightly' || (vars.NIGHTLY_APP_ACTOR != '' && github.triggering_actor == vars.NIGHTLY_APP_ACTOR)) && 'Terraform nightly check (down if up)' || format('Terraform {0}', inputs.action) }}"
 
 on:
   pull_request:
@@ -39,13 +42,6 @@ on:
     branches: [main]
     # Docs-only merges change nothing in AWS.
     paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
-  # The backup for the AWS timer (nightly.tf), which starts the nightly check at 2:17am
-  # Chicago time: if the timer failed, this tears the stack down, or reports it up if it
-  # starts after 7:59am. Cron is UTC and doesn't follow daylight saving: 09:17 UTC is
-  # 4:17am in Chicago in summer (CDT) and 3:17am in winter. :17, not :00: GitHub delays
-  # scheduled runs most at the top of the hour.
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
     inputs:
       action:
@@ -242,12 +238,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 80); do
-            busy=0
-            for event in workflow_dispatch schedule; do
-              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
-              busy=$((busy + n))
-            done
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30
@@ -575,7 +567,7 @@ jobs:
 
   apply:
     name: terraform-apply
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
     permissions:
@@ -621,17 +613,22 @@ jobs:
             echo "action=$ACTION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Compared as text, so only a real YYYY-MM-DD date counts: anything else (a typo,
+          # "tomorrow") would compare as later than every date and skip every night.
+          if [ -n "$SKIP_UNTIL" ] && [[ ! "$SKIP_UNTIL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::warning title=Skip variable ignored::AUTO_DOWN_SKIP_UNTIL isn't a date like 2026-11-05, so the check runs as usual. Fix or delete it."
+            SKIP_UNTIL=""
+          fi
           today=$(TZ=America/Chicago date +%F)
           if [ -n "$SKIP_UNTIL" ] && [[ ! "$today" > "$SKIP_UNTIL" ]]; then
             echo "::notice title=Nightly teardown skipped::AUTO_DOWN_SKIP_UNTIL is $SKIP_UNTIL, so the stack stays up tonight."
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # GitHub can start a scheduled run hours late (once at 11:34am, once at 7:03am);
-          # the timer's run is on time.
+          # The timer's run is on time; a nightly check started by hand in the day only reports.
           hour=$(TZ=America/Chicago date +%-H)
           if [ "$hour" -gt 7 ]; then
-            echo "::notice title=Nightly check ran late::GitHub started it at $(TZ=America/Chicago date +%H:%M) in Chicago, after the teardown window, so it only reports."
+            echo "::notice title=Nightly check ran late::It started at $(TZ=America/Chicago date +%H:%M) in Chicago, after the teardown window, so it only reports."
             echo "action=late" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -651,7 +648,7 @@ jobs:
         env:
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
 
-      # Scheduled only: down.sh destroys module.fleet, so its absence from the state
+      # Nightly only: down.sh destroys module.fleet, so its absence from the state
       # means the stack is already down and there's nothing to do. Captured first, so an
       # error fails the run instead of reading as "down".
       - name: Is the stack up?
@@ -674,7 +671,7 @@ jobs:
           fi
 
       # A late check leaves the stack up, so say so: it bills until someone runs down.
-      # The issue closes once a teardown succeeds, or a scheduled check finds it down.
+      # The issue closes once a teardown succeeds, or a nightly check finds it down.
       - name: Report a stack left up
         if: steps.mode.outputs.action == 'late' && steps.nightly.outputs.up == 'true'
         env:
@@ -684,7 +681,7 @@ jobs:
         run: |
           when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p')
           # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
-          printf '@%s The nightly check started late (%s Chicago time), after the teardown window, and the AWS timer'"'"'s check (2:17am) didn'"'"'t tear the stack down, so it is still up and billing (about $0.25 an hour). Run `down` if you are not using it, or `/session-end`. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
+          printf '@%s The nightly check started late (%s Chicago time), after the teardown window, and the AWS timer'"'"'s check (3am) didn'"'"'t tear the stack down, so it is still up and billing (about $0.25 an hour). Run `down` if you are not using it, or `/session-end`. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
             "$OWNER" "$when" "$RUN_URL" > left-up.md
           ./scripts/notify-issue.sh report "The nightly teardown didn't run" left-up.md
 
@@ -757,7 +754,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the schedule
+          when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the timer
           if [ "$MODE" = nightly ]; then what="The nightly check found the stack up, and its teardown failed"; else what="A manual teardown failed"; fi
           # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
           printf '@%s %s (%s Chicago time). The stack may still be partly up and billing: check the run, fix the cause, and run `down` again. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
@@ -851,12 +848,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 80); do
-            busy=0
-            for event in workflow_dispatch schedule; do
-              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
-              busy=$((busy + n))
-            done
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30
@@ -872,7 +865,8 @@ jobs:
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
 
       # down.sh destroys module.fleet, so its absence from the state means the stack is
-      # down. Applying then would build the whole stack, so this waits for the next up.
+      # down. Applying everything then would build the whole stack, so only what survives
+      # a teardown is applied (the plan below); the rest waits for the next up.
       - name: Check whether the stack is up
         id: stack
         run: |
@@ -883,16 +877,19 @@ jobs:
             echo "up=true" >> "$GITHUB_OUTPUT"
           else
             echo "up=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Stack is down::Nothing applied. The next up applies main, including this change."
           fi
 
-      # The same data-loss guard as the pull request's check: a plan that destroys or
-      # replaces a resource holding data stops here unless the merged pull request had
-      # the allow-destroy label.
+      # With the stack down, a second plan targets only the changed resources that survive
+      # a teardown (everything but scripts/stack-targets, what down.sh destroys: the
+      # nightly timer and its alarms, the budget, DNS, secrets, buckets), so they don't
+      # wait for the next up; if it would still touch the stack (a dependency), nothing
+      # is applied. Then the same data-loss guard as the pull request's check: a plan
+      # that destroys or replaces a resource holding data stops here unless the merged
+      # pull request had the allow-destroy label.
       - name: Plan
         id: plan
-        if: steps.stack.outputs.up == 'true'
         env:
+          UP: ${{ steps.stack.outputs.up }}
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
           TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
@@ -914,6 +911,39 @@ jobs:
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=No changes::main matches what's deployed."
             exit 0
+          fi
+          # The changed resources by whether down.sh destroys them ("stack") or not ("kept").
+          changed() {
+            terraform show -json tfplan | jq -r --arg want "$1" --rawfile targets scripts/stack-targets '
+              ($targets | split("\n") | map(select(length > 0 and (startswith("#") | not)))) as $stack
+              | .resource_changes[]?
+              | select(.change.actions != ["no-op"] and .change.actions != ["read"])
+              | .address as $a
+              | ([$stack[] | . as $t | $a == $t or ($a | startswith($t + ".")) or ($a | startswith($t + "["))] | any) as $in_stack
+              | select(($want == "stack") == $in_stack)
+              | $a'
+          }
+          if [ "$UP" != true ]; then
+            mapfile -t kept < <(changed kept)
+            if [ "${#kept[@]}" = 0 ]; then
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Stack is down::Nothing outside the stack changed, so nothing was applied. The next up applies main, including this change."
+              exit 0
+            fi
+            targets=()
+            for address in "${kept[@]}"; do targets+=("-target=$address"); done
+            set +e
+            terraform plan -input=false -detailed-exitcode -out=tfplan "${targets[@]}"
+            code=$?
+            set -e
+            [ "$code" != 1 ] || exit 1
+            if [ "$code" = 0 ] || [ -n "$(changed stack)" ]; then
+              changed stack
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Stack is down::Applying what survives a teardown would also change the stack, so nothing was applied. The next up applies main."
+              exit 0
+            fi
+            echo "::notice title=Stack is down::Applying only what survives a teardown: ${kept[*]}. The next up applies the rest."
           fi
           # If the stack went down between the check above and this plan, the plan would
           # build it all: creating the ECS cluster or the database means exactly that.
@@ -940,6 +970,29 @@ jobs:
             echo "::notice title=Destroy accepted::the merged pull request had the allow-destroy label."
           fi
 
+      # A merge that changes fleet.Dockerfile is a Fleet upgrade, whose migrations change
+      # the database: snapshot it first, as docs/upgrading-fleet.md does by hand, so a
+      # rollback has a restore point. Kept until deleted (down.sh prunes only teardown
+      # snapshots); the nightly "Kept snapshots" issue lists it after 14 days.
+      - name: Snapshot before a Fleet upgrade
+        if: steps.plan.outputs.changes == 'true' && steps.stack.outputs.up == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Captured first, so an API error fails the step instead of skipping the snapshot.
+          changed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$SHA" --jq '.files[].filename')
+          if ! grep -qx 'fleet.Dockerfile' <<< "$changed"; then
+            echo "fleet.Dockerfile didn't change; no snapshot needed."
+            exit 0
+          fi
+          snap="fleet-homelab-pre-upgrade-$(date -u +%Y%m%d%H%M%S)"
+          aws rds create-db-cluster-snapshot --db-cluster-identifier fleet-homelab \
+            --db-cluster-snapshot-identifier "$snap" > /dev/null
+          aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier "$snap"
+          echo "::notice title=Pre-upgrade snapshot::$snap. Delete it once the new version has run cleanly for a while (docs/upgrading-fleet.md)."
+
       # tf-apply.sh retries the known IAM role-propagation race (see that file).
       - name: Apply
         if: steps.plan.outputs.changes == 'true'
@@ -958,7 +1011,7 @@ jobs:
       # A change that went live (a Fleet upgrade, say) gets the same health scan as an
       # up, once ECS has finished rolling it out. Best effort, like the up's.
       - name: Start the health scan
-        if: steps.plan.outputs.changes == 'true'
+        if: steps.plan.outputs.changes == 'true' && steps.stack.outputs.up == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
