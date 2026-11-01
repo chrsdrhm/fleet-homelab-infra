@@ -20,8 +20,10 @@ AWS cost, since this is for personal homelab learning, not production scale.
   independent of the cost decisions below: Aurora/Redis/Fargate are sized
   for headroom and data durability, not for seamless failover. A documented
   future upgrade if that priority ever changes.
-- **Automated scheduled pause/resume** (Lambda + EventBridge) — I chose
-  manual scripts only, no auto-scheduling.
+- **Automated scheduled resume** — `up` is always started deliberately. The
+  only automatic action is the nightly teardown of a stack left up
+  (EventBridge Scheduler → a Lambda function → `terraform.yml` with
+  `action=nightly`; see Remote execution).
 
 ## Identity & access
 
@@ -176,7 +178,7 @@ Non-goals above.
 | ALB | Public, HTTPS via ACM (DNS-validated), target group → Fargate task |
 | WAF | A Web ACL written in `waf.tf`, not Fleet's `addons/waf-alb` (which cannot express "allow only one country"): default block, an `allow-us` geo rule, and ahead of it an `allow-ci-header` rule that admits requests carrying a secret `x-fleet-ci` header, so GitHub-hosted runners outside the US can reach Fleet (Fleet still requires an API token). Geo-based only, not an AWS Managed Rule Group; it does not provide signature-based protection against SQLi/XSS-style attacks |
 | MDM | `addons/mdm` — one `fleet-scep` secret holding the Windows WSTEP pair (Apple MDM is configured through the Fleet UI, `enable_apple_mdm = false`). Two-phase: secret created empty, populated, then wired into the task (an empty secret referenced by the task would fail to start). **Excluded from teardown** — see Teardown tooling. |
-| Monitoring | No standalone CloudWatch-alarm addon: alerting is in Grafana on the same metrics (see Dashboard, optional; self-hosted, outside AWS), plus a read-only health scan (`scripts/health-scan.sh`, which CI runs after every `up`; plan Tasks 21 and 30) and the issues CI opens (a failed teardown, kept snapshots, a newer Fleet release, a health scan outside the baseline) |
+| Monitoring | No standalone CloudWatch-alarm addon for the stack. A read-only health scan (`scripts/health-scan.sh`, which CI runs after every `up` and after an apply on merge that changed something; plan Tasks 21 and 30), what CI opens (a failed teardown, kept snapshots, a newer Fleet release, a health scan outside the baseline), and the nightly timer's two CloudWatch alarms, emailed through SNS (`nightly.tf`). Grafana alerting on the same metrics is planned, not built (see Dashboard; plan Task 17) |
 | Email | `addons/ses` — outbound mail for invites and break-glass password reset |
 | Secrets | AWS Secrets Manager: Aurora password (module-managed), the Windows WSTEP pair (module-managed secret, persisted across teardown), Fleet server private key (created **outside** the Fleet module specifically so it survives `module.fleet` being destroyed — see Teardown tooling). AWS-managed KMS keys (no CMKs) throughout. |
 | License | `FLEET_LICENSE_KEY` supplied as an environment variable on the ECS task, from the gitignored `terraform.tfvars` (a GitHub secret in CI) |
@@ -261,8 +263,9 @@ GitHub.
 - Enroll secrets are not in Git: Fleet's GitOps excepts them by default
   (`gitops.exceptions.secrets: true`) and they are managed in Fleet.
 - Repo secrets: `FLEET_URL`, `FLEET_API_TOKEN` (the GitOps-role API user),
-  `FLEET_OKTA_METADATA_URL`, `FLEET_IDP_IMAGE_URL`, and `FLEET_CI_HEADER`
-  (the WAF's `x-fleet-ci` value). The two Okta values are forwarded through
+  `FLEET_OKTA_METADATA_URL`, `FLEET_END_USER_OKTA_METADATA_URL`,
+  `FLEET_IDP_IMAGE_URL`, and `FLEET_CI_HEADER` (the WAF's `x-fleet-ci`
+  value). The Okta values and the logo URL are forwarded through
   the workflow's `env:` block, which only forwards `FLEET_URL` and
   `FLEET_API_TOKEN` by default.
 
@@ -273,11 +276,13 @@ Two separate log streams, not one:
 - **Server logs** (Fleet's own operational stdout/stderr) — already handled
   by the module's default `awslogs` CloudWatch driver on the ECS task.
 - **Osquery result/status logs** (device telemetry — the actual data enrolled
-  hosts send back) — routed via `addons/logging-destination-firehose` to
-  dedicated S3 buckets (osquery-results, osquery-status, audit), not left on
-  ephemeral container storage. Chosen over the simpler `stdout`-into-the-same-
-  CloudWatch-group option because I want durable, queryable, longer-
-  retention storage (Athena-queryable later) rather than the cheapest path.
+  hosts send back) — **planned, not built** (plan Task 12): routed via
+  `addons/logging-destination-firehose` to dedicated S3 buckets
+  (osquery-results, osquery-status, audit), not left on ephemeral container
+  storage. Chosen over the simpler `stdout`-into-the-same-CloudWatch-group
+  option because I want durable, queryable, longer-retention storage
+  (Athena-queryable later) rather than the cheapest path. Until then they go
+  where the module's defaults send them.
 
 ## Budget alerts
 
@@ -316,9 +321,9 @@ hourly items × 730 hours):
 
 Fixed by the resources: everything priced per hour. Estimated from light
 homelab use: Aurora I/O, NAT data, data transfer and logs, which grow with
-enrolled hosts and traffic. Also while up: Firehose for osquery logs
-(under $1/mo at 10 hosts; $0.029/GB with each record rounded up to 5 KB) and
-SES (cents).
+enrolled hosts and traffic. Also while up: SES (cents), and, once built
+(plan Task 12), Firehose for osquery logs (under $1/mo at 10 hosts; $0.029/GB
+with each record rounded up to 5 KB).
 The public IPv4 charge, which AWS added in 2024, is easy to miss: it costs more
 than the WAF.
 
@@ -337,12 +342,11 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | Item | ~$/month |
 |---|---|
 | What the teardown leaves (above) | $1.40 |
-| Activities webhook: API Gateway, Lambda, DynamoDB (per request; Lambda and DynamoDB stay in the free tier at this volume) | ~$0 |
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
-| Nightly timer: EventBridge Scheduler, Lambda, an SSM parameter, SNS email, two alarms (one call a night stays in the free tiers) | ~$0 |
+| Nightly timer: EventBridge Scheduler, Lambda, two SSM parameters, SNS email, two alarms (one call a night stays in the free tiers) | ~$0 |
 | **Total** | **~$1.40 (about $0.05/day)** |
 
-**Claude API:** the release review and the health scan after `up` (see Remote
+**Claude API:** the release review and the health scan after `up` or a change going live (see Remote
 execution) bill the Claude API separately, in a workspace capped at $10 a month;
 expected well under $1 a month, since one runs once per Fleet release and the
 other once per `up` (about 10,000 tokens, a few cents).
@@ -369,10 +373,11 @@ My actual usage pattern is intermittent — evenings/weekends only —
 so **`up`/`down` (full teardown) is the only mode**. There is no
 idle/resume pause: Redis, the ALB, WAF and the NAT Gateway have no
 "stopped" state, so pausing only Fargate and Aurora compute saves little,
-and only `up`/`down` removes their cost. No automatic scheduling
-(Lambda/EventBridge) either: `up` and `down` are always started deliberately,
-from my laptop (`scripts/up.sh`, `scripts/down.sh`) or from the infra repo's
-GitHub Actions workflow (see Remote execution), which runs the same scripts.
+and only `up`/`down` removes their cost. `up` is always started deliberately,
+from my laptop (`scripts/up.sh`) or from the infra repo's GitHub Actions
+workflow (see Remote execution), which runs the same scripts; so is `down`,
+except that a nightly check tears down a stack left up overnight (an
+EventBridge Scheduler schedule and a Lambda function start it, `nightly.tf`).
 
 **How long it takes** (measured on CI runs): `up` about **22 minutes**, `down`
 about **18–20 minutes**. Aurora dominates both: restoring the cluster and
@@ -403,6 +408,8 @@ down; the NAT Gateway and the migrations task add a few minutes.
    database).
 4. Starts a run of the GitOps repo's workflow, so Fleet's configuration from
    `main` is applied straight after the rebuild.
+5. Starts the health scan (`fleet-checks.yml`; from a terminal `up.sh` does it,
+   in CI the apply job does).
 
 **What survives a teardown**, and why:
   - **The database**, through the snapshot: hosts, policies, query results,
@@ -455,7 +462,7 @@ read-only by default, third-party actions are pinned to commit SHAs, and
 `main` is protected by a ruleset with no bypass, not even for the owner:
 every change, docs included, goes through a pull request whose
 `terraform-lint` and `terraform-plan` checks pass (the GitOps repo likewise
-requires its `fleet-gitops` check). Dependabot keeps actions, providers, modules and
+requires its `fleet-gitops` and `gitops-lint` checks). Dependabot keeps actions, providers, modules and
 the Terraform version current (the last through `.github/terraform/Dockerfile`, a
 one-line `FROM hashicorp/terraform:<version>` the workflows read, since a version
 passed to `setup-terraform` isn't something Dependabot can update), and its pull
@@ -463,8 +470,9 @@ requests get a plan too. Nothing personal or secret is committed:
 the commit author is the GitHub noreply address, and the budget-alert email,
 license key and Cloudflare token live only in gitignored `terraform.tfvars`
 and GitHub secrets. The AWS trust policy is the second lock: the apply role
-only trusts runs on `main` in this repo's immutable ID, which only a merge or a
-manual run can start.
+only trusts runs on `main` in this repo's immutable ID, which only a merge, a
+manual run or the nightly timer's GitHub App (which the workflow forces to the
+nightly check) can start.
 
 **The trust policy uses GitHub's newer immutable subject-claim format**
 (`repo:OWNER@OWNER-ID/REPO@REPO-ID:...`), not the older name-based one —
@@ -506,7 +514,8 @@ allows just the calls the health scan makes (Logs Insights queries only on
 Fleet's log group), so the job that sends the scan to Claude never holds the
 apply role. The apply role is scoped by AWS service (EC2/VPC, RDS,
 ElastiCache, ECS + Application Auto Scaling, ELB, WAFv2, CloudWatch/Logs, SES,
-Route 53, ACM, Firehose, Budgets), with Secrets Manager limited to `fleet*`
+Route 53, ACM, Firehose, Budgets, and, for the nightly timer, Lambda,
+EventBridge Scheduler and SNS on `fleet-homelab-*` only), with Secrets Manager limited to `fleet*`
 secrets, S3 limited to this project's buckets (`fleet-homelab-*` and the ECS
 module's `fleet-software-installers-*`), KMS use limited by `kms:ViaService`,
 and IAM *write* limited to the roles the stack creates, **by exact name**
@@ -532,8 +541,9 @@ execution role (CI has to manage their policies to deploy Fleet) and run code as
 it in an ECS task it defines. Closing that needs a permissions boundary required
 on every role CI creates, and Fleet's module creates its execution role with no
 `permissions_boundary` input (asking Fleet for one is on the list, plan Task 42 Step 4). It can also read the `fleet*` secrets and the
-state. The mitigation that fits is the trust policy — only a manual dispatch on
-`main` of this single-owner repo can assume the role — with an optional
+state. The mitigation that fits is the trust policy — only a run on `main` of
+this single-owner repo (a merge, a manual dispatch, or the nightly timer's app,
+forced to the nightly check) can assume the role — with an optional
 stronger gate (a GitHub Environment with a required reviewer) not built here.
 It would need revisiting in any shared or production account.
 
@@ -591,14 +601,14 @@ nothing beyond starting workflows in one repo. The step is best effort: if it
 fails, the rebuild still succeeds with a warning, and the nightly GitOps run
 catches up.
 
-## Dashboard (Grafana) — optional
+## Dashboard (Grafana) — optional, planned
 
-**Self-hosted Grafana OSS on my Proxmox host**, not in AWS (since
-2026-10-17; it replaced an Amazon Managed Grafana design that cost about
-$9/month whether used or not). The repo's `grafana/` folder holds what's
-needed to run it anywhere Docker runs: a Compose file with the image pinned,
-provisioned data sources and alert rules, and the dashboards as code. It is
-**optional**: the main stack, `up`/`down` and CI never reference it.
+**Planned, not built (plan Task 17).** **Self-hosted Grafana OSS on my Proxmox
+host**, not in AWS (chosen 2026-10-17; it replaced an Amazon Managed Grafana
+design that cost about $9/month whether used or not). A `grafana/` folder would
+hold what's needed to run it anywhere Docker runs: a Compose file with the
+image pinned, provisioned data sources and alert rules, and the dashboards as
+code. It is **optional**: the main stack, `up`/`down` and CI never reference it.
 
 - **Always on, at home.** It runs in a small LXC container on the LAN, with
   no inbound access from the internet. While the stack is down, CloudWatch
@@ -630,9 +640,9 @@ the time by design, a red board usually means "torn down on purpose".
 
 - **`fleet-homelab-infra`** (this repo) — Terraform config referencing the
   `fleet-terraform` root module and addons, the separate `okta/` root for the
-  Okta side (applied locally), the optional self-hosted Grafana's
-  configuration in `grafana/` (not applied to AWS), the
-  `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
+  Okta side (applied locally), the
+  `up`/`down` operational scripts, the nightly timer's function (`lambda/`), and three GitHub Actions workflows: `claude-review.yml`
+  (the optional pull request review), `fleet-checks.yml`
   (the daily Fleet release check, which opens an upgrade pull request with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
   merges, `apply` for on-demand up/down and a nightly check (started at 3am
