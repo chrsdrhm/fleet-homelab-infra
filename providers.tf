@@ -18,6 +18,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    # Zips the nightly timer's function (nightly.tf).
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
   }
 }
 

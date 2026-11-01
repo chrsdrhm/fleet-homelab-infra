@@ -339,6 +339,7 @@ costs the same as a teardown snapshot (cents a month) until it's deleted by hand
 | What the teardown leaves (above) | $1.40 |
 | Activities webhook: API Gateway, Lambda, DynamoDB (per request; Lambda and DynamoDB stay in the free tier at this volume) | ~$0 |
 | End-user SSO (a second Okta app); Apple push certificate | $0 |
+| Nightly timer: EventBridge Scheduler, Lambda, an SSM parameter, SNS email, two alarms (one call a night stays in the free tiers) | ~$0 |
 | **Total** | **~$1.40 (about $0.05/day)** |
 
 **Claude API:** the release review and the health scan after `up` (see Remote
@@ -620,9 +621,11 @@ the time by design, a red board usually means "torn down on purpose".
   `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
   (the daily Fleet release check with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down and a nightly check (07:17 UTC; it
-  acts until 7:59am Chicago time, and only reports, in an issue, if GitHub
-  starts it later) that tears the stack down if it was left up and keeps an
+  merges, `apply` for on-demand up/down and a nightly check (started at 2:17am
+  Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda
+  function and a GitHub App that can only start the check; GitHub's own
+  schedule, 09:17 UTC, is the backup; it acts until 7:59am Chicago time, and
+  only reports, in an issue, if it starts later) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that

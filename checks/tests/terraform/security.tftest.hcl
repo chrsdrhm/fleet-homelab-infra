@@ -165,6 +165,46 @@ run "scan_role_is_read_only" {
   }
 }
 
+run "nightly_timer_is_narrow" {
+  command = plan
+
+  assert {
+    condition = toset(flatten([for s in data.aws_iam_policy_document.nightly_function.statement : s.actions])) == toset([
+      "ssm:GetParameter", "kms:Decrypt", "logs:CreateLogStream", "logs:PutLogEvents",
+    ])
+    error_message = "The nightly function may only read its parameters (decrypting through SSM) and write its logs."
+  }
+  assert {
+    condition = one([for s in data.aws_iam_policy_document.nightly_function.statement : s.resources if contains(s.actions, "ssm:GetParameter")]) == toset([
+      "arn:aws:ssm:us-east-1:123456789012:parameter/fleet-homelab/nightly-app/client-id",
+      "arn:aws:ssm:us-east-1:123456789012:parameter/fleet-homelab/nightly-app/private-key",
+    ])
+    error_message = "The nightly function may read only the app's two parameters."
+  }
+  assert {
+    condition = alltrue([
+      for c in one([for s in data.aws_iam_policy_document.nightly_function.statement : s.condition if contains(s.actions, "kms:Decrypt")]) :
+      c.variable == "kms:ViaService" && toset(c.values) == toset(["ssm.us-east-1.amazonaws.com"])
+    ])
+    error_message = "The nightly function may decrypt only through SSM."
+  }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.nightly_scheduler.statement : s.actions])) == toset(["lambda:InvokeFunction"])
+    error_message = "The nightly schedule's role may only invoke the function."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.nightly.schedule_expression == "cron(17 2 * * ? *)" && aws_scheduler_schedule.nightly.schedule_expression_timezone == "America/Chicago"
+    error_message = "The nightly check must start at 2:17am Chicago time."
+  }
+  assert {
+    condition = alltrue([
+      for r in one([for s in data.aws_iam_policy_document.github_actions_apply.statement : s.resources if s.sid == "NightlyTimer"]) :
+      can(regex(":(function:|schedule/default/|)fleet-homelab-\\*$", r))
+    ])
+    error_message = "The apply role's Lambda, Scheduler and SNS access must stay limited to fleet-homelab-* resources."
+  }
+}
+
 run "waf_blocks_by_default_and_checks_the_ci_header_first" {
   command = plan
 

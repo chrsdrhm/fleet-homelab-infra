@@ -86,7 +86,7 @@ gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
   --description "Accept a plan that destroys or replaces a resource that holds data"
 ```
 
-**Nightly teardown.** With CI set up, the Terraform workflow checks every night (07:17 UTC: 2:17am Chicago time, 1:17am in winter) and runs `down` if the stack is still up, as long as GitHub starts it before 8am in Chicago. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the check the next night brings it down as usual. Delete the variable when you're done:
+**Nightly teardown.** With CI set up, the Terraform workflow checks every night and runs `down` if the stack is still up. The AWS timer in step 10 starts it at 2:17am Chicago time; without the timer, or if it fails, GitHub's own schedule (09:17 UTC: 4:17am Chicago time, 3:17am in winter) does, as long as GitHub starts it before 8am in Chicago. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the check the next night brings it down as usual. Delete the variable when you're done:
 
 ```bash
 gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homelab-infra   # up through Wednesday the 14th; down early on the 15th
@@ -261,3 +261,31 @@ It signs in as a second Okta service app that can only read. The one you apply w
 - **The key can only read** apps and groups, including who is in each group. It can't change who signs in to Fleet.
 - **Forks get no secrets,** so their pull requests skip the Okta plan. Dependabot's pull requests skip it too, unless you also set the four as Dependabot secrets.
 - **Only `okta.com` orgs:** the job uses the default `okta_base_url`.
+
+## 10. Optional: start the nightly check on time
+
+GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack left up can stay up all day. `nightly.tf` adds a timer in AWS that starts the check at 2:17am Chicago time all year: an EventBridge Scheduler schedule calls a small Lambda function (`lambda/nightly/index.mjs`), which signs in as a GitHub App and starts `terraform.yml` with `action=nightly`. The workflow treats every run the app starts as the nightly check, whatever it asks for, so the app can't start an `up` or a `down`. GitHub's schedule stays as the backup. It all costs nothing at this volume (free tiers), and stays through teardowns.
+
+**Set it up:**
+1. **Apply the CI roles' new scope** locally (CI can't change its own roles), before the pull request that adds the timer merges: `terraform apply -target=aws_iam_policy.github_actions_apply -target=aws_iam_policy.github_actions_plan`.
+2. **Create a GitHub App:** your profile → Settings → Developer settings → GitHub Apps → **New GitHub App**.
+   - Any unique name, for example `fleet-homelab-nightly-<your-username>`, and the repo's URL as the homepage.
+   - **Webhook:** untick **Active**.
+   - **Repository permissions:** **Actions: Read and write**, nothing else.
+   - **Where can this GitHub App be installed?** Only on this account.
+3. **Generate a private key** (the app's page, at the bottom), and note its **Client ID**.
+4. **Install it:** Install App → your account → **Only select repositories** → `fleet-homelab-infra`.
+5. **Store the client ID and key in SSM,** where only the timer's function can read them (never in Terraform or GitHub):
+   ```bash
+   aws ssm put-parameter --name /fleet-homelab/nightly-app/client-id --type String --value <client-id>
+   aws ssm put-parameter --name /fleet-homelab/nightly-app/private-key --type SecureString --value file://path/to/the-key.pem
+   ```
+   Then delete the key file.
+6. **Tell the workflow which app it is:** `gh variable set NIGHTLY_APP_ACTOR --body '<app-slug>[bot]' --repo $OWNER/fleet-homelab-infra`, where the slug is the app's name as it appears in its URL (`github.com/apps/<app-slug>`).
+7. **Confirm the alert email:** AWS emails `budget_alert_email` a subscription confirmation for the timer's failure alerts. Click it.
+8. **Test it:** `aws lambda invoke --function-name fleet-homelab-nightly /dev/null` starts a "Terraform nightly check (down if up)" run, started by the app. It tears down a running stack, so set `AUTO_DOWN_SKIP_UNTIL` to today first to test without a teardown.
+
+**Security:**
+- **The app can only start the nightly check.** Its token is for this repo with Actions write only, the function revokes it when done, and the workflow runs anything the app starts as `nightly`.
+- **The key never leaves AWS:** an SSM SecureString that only the function's role can read, not in Terraform state, the repo or GitHub.
+- **A failed start emails you:** an alarm on the function's errors, and on the scheduler giving up. The backup schedule still runs.
