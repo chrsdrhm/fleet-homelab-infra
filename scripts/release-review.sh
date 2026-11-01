@@ -113,6 +113,11 @@ done
   echo "## infra repo: module and provider pins"
   grep -n -E '^\s*(source|version)\s*=' ./*.tf || true
   echo
+  # Every file's path, though only some are sent below, so the review knows what exists
+  # (CLAUDE.md, AGENTS.md, skills, profiles) instead of reading a missing file as absent.
+  echo "## GitOps repo: every file (contents below only for the YAML and the workflow)"
+  git -C "$gitops" ls-files 2>/dev/null | sort || echo "(couldn't list them)"
+  echo
   while IFS= read -r file; do
     echo "## GitOps repo: ${file#"$gitops"/}"
     cat "$file"
