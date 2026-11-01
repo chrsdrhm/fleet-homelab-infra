@@ -562,11 +562,12 @@ teardown, so a teardown neither delays nor skips it. When it opens or updates it
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
-Deprecated (still works) and New and relevant, with a ✅ / ⚠️ / ❌ verdict, and
+Deprecated (still works), New and relevant, and Check before merging (what the files
+can't show), with a ✅ / ⚠️ / ❌ verdict (⚠️ only when the repos need an edit), and
 the job puts it in the pull request's body, once per upgrade (a marker in the body records
 which versions were reviewed). The pull request is opened by a GitHub App (Contents and
 Pull requests write, this repo only), so its checks run; the app's token is made after
-the review, in the last step only. Merging it is the upgrade: with the stack up, the apply
+the review, in the last step only. To complete the upgrade, the owner merges that pull request: with the stack up, the apply
 on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a change to
 `fleet.Dockerfile`. It runs on the Claude API, signing in through
 workload identity federation: the job's GitHub identity token, issued only to

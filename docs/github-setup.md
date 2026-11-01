@@ -306,7 +306,7 @@ The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.
 - **Once per upgrade:** while the pull request already has a review of the same two versions, it's left alone. A failed review is retried the next day.
 - **A newer release before you merge:** a new pull request for it, with a new review, and the older one is closed (with a link to the new one) and its branch deleted, commits pushed to it included.
 - **`fleet.Dockerfile` caught up another way:** the pull request is closed and its branch deleted.
-- **Merging it is the upgrade.** With the stack up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then applies; with it down, the next `up` upgrades. See [upgrading Fleet](upgrading-fleet.md).
+- **To complete the upgrade, merge the pull request.** With the stack up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then applies; with it down, the next `up` upgrades. See [upgrading Fleet](upgrading-fleet.md).
 
 **Set it up:**
 1. **Create a GitHub App:** your profile → Settings → Developer settings → GitHub Apps → **New GitHub App**.
