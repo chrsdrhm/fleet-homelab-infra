@@ -225,9 +225,9 @@ jobs:
           fi
           # shellcheck disable=SC2016 # the backticks are Markdown, for the pull request
           {
-            printf '@%s Fleet %s is out; `fleet.Dockerfile` is on %s. This pull request upgrades it.\n\n' "$OWNER" "$TO" "$FROM"
+            printf '@%s Fleet %s is out, and `fleet.Dockerfile` is on %s. This pull request changes `fleet.Dockerfile` to %s.\n\n' "$OWNER" "$TO" "$FROM" "$TO"
             printf 'Release notes: https://github.com/fleetdm/fleet/releases/tag/fleet-v%s\n\n' "$TO"
-            printf '**Merging it upgrades Fleet.** If the stack is up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then the migrations add-on runs the database migrations for the new version and rolls it out. If it is down, the next `up` upgrades it, and the teardown snapshot is the restore point. Read the review below first; for anything it says must change, run `/fleet-upgrade` on this pull request, or push to its branch, `fleet-release-%s`. See `docs/upgrading-fleet.md`.\n' "$TO"
+            printf '**To complete the upgrade, merge this pull request.** If the stack is up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then the migrations add-on runs the database migrations for the new version and rolls it out. If it is down, the next `up` upgrades it, and the teardown snapshot is the restore point. Read the review below first; for anything it says must change, run `/fleet-upgrade` on this pull request, or push to its branch, `fleet-release-%s`. See `docs/upgrading-fleet.md`.\n' "$TO"
             if [ "$reviewed" = true ]; then
               printf "\n## Claude's review: Fleet %s to %s\n\n" "$FROM" "$TO"
               cat "$RUNNER_TEMP/review.md"
