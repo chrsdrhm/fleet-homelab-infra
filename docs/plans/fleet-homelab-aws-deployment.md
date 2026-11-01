@@ -6,7 +6,7 @@
 
 **Architecture:** Terraform calls Fleet's own **root module** directly — one module call provisions the VPC, Aurora MySQL, Redis, an ALB, and an ECS Fargate service together, wiring their connection info and security groups automatically. This is a change from an earlier draft of this plan that called the nested `byo-vpc` module and hand-wrote a separate VPC — that split only existed to support NAT-off/public-subnet Fargate, a configuration this plan no longer uses (NAT is on, Fargate is private, which is the root module's own hardcoded default). Using the root module directly is simpler and closer to Fleet's own reference example. SES, MDM, and (planned) Firehose log delivery are added as Fleet's own addon modules; the WAF is a small custom Web ACL (Task 4), and monitoring moved into Grafana (Tasks 5 and 17). A separate `fleetctl new`-scaffolded repo drives Fleet's application config (SSO, teams, policies) via GitHub Actions GitOps. `up`/`down` scripts fully tear down and rebuild the stack each session, preserving actual Fleet data (not just infrastructure) via an Aurora snapshot and an externalized encryption key. The infra repo itself closes its own GitOps loop too (Tasks 15–16): `up`/`down` run on demand from a GitHub Actions workflow assuming an AWS role through OIDC (no long-lived AWS keys in GitHub), never on push, and every pull request gets a lint check and a `terraform plan` posted as a comment before merge — git is the source of truth for infra the same way it is for Fleet's own config, without forcing an apply every time something merges. An optional self-hosted Grafana on my Proxmox host (Task 17, outside AWS; its configuration and dashboards in `grafana/`) rounds this out with a dashboard and alerts over both CloudWatch infra metrics and Fleet's own asset data (hosts, policy compliance, vulnerabilities), reading CloudWatch through an IAM role rather than a stored key.
 
-**Tech Stack:** Terraform 1.14.8 (>= 1.12.0 required), AWS provider 6.x (>= 6.37.0), Cloudflare provider 5.x, Okta provider 7.x, `fleetdm/fleet-terraform` (root module + addons), Fleet and `fleetctl` 4.93 (the server version is in `fleet.Dockerfile`), GitHub Actions (OIDC-federated, no stored AWS credentials), Okta Workforce Identity (free trial converting to the Free Plan).
+**Tech Stack:** Terraform 1.17.1 (>= 1.12.0 required), AWS provider 6.x (>= 6.37.0), Cloudflare provider 5.x, Okta provider 7.x, `fleetdm/fleet-terraform` (root module + addons), Fleet and `fleetctl` 4.93 (the server version is in `fleet.Dockerfile`), GitHub Actions (OIDC-federated, no stored AWS credentials), Okta Workforce Identity (free trial converting to the Free Plan).
 
 **Spec:** `docs/specs/fleet-homelab-aws-design.md`
 
@@ -3024,6 +3024,18 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 - [x] **Step 4: Test it** by pointing it at an older version (for example 4.92.0 to 4.93.0, which `/fleet-upgrade` already reviewed by hand) and comparing the verdicts.
   - **Done 2026-10-28, on 4.93.0 to 4.93.2** (reviewed by hand the day before), with a manual `action=review` run on `main`. Same verdict, ✅: no migrations, no settings, keys or minimum versions changed, no template changes, and nothing to edit beyond `fleet.Dockerfile`. It also checked the 4.93.1 fixes against what we use (custom packages, Fleet-maintained apps and policy automations: none configured; the ADE user-mapping fix: ADE not set up), and flagged 4.93.2's removal of three emSign root certificates, noting it can't see the certificate chains of Okta and AWS from the files. It reported no instructions in the data.
 - [x] **Step 5: Document it:** `docs/upgrading-fleet.md` (the issue now carries a first review; `/fleet-upgrade` still does the full one), `docs/github-setup.md` (the secret and the spend limit), and the spec's CI and Cost sections (expected a few dollars a month at most).
+
+---
+
+### Task 41: Keep Terraform current
+
+Added 2026-11-01 at my request. CI was on Terraform 1.14.8 with 1.17.1 out: Dependabot updates providers, modules and actions, but not Terraform itself, whose version is an input to `setup-terraform` and a `required_version` minimum.
+
+**Built 2026-11-01:** both pins (the shared setup action, and the lint job, which sets up Terraform itself) moved to 1.17.1, read against the 1.15 to 1.17 release notes: no breaking changes for this repo, and 1.17 drops trust in some compromised certificate authorities. A daily `terraform-version` job in `fleet-checks.yml` keeps an issue, "A newer Terraform is available", open while HashiCorp's latest release is newer than the setup action's pin, warns if the two pins differ, and closes the issue once they catch up. Upgrade Terraform locally at the same time.
+
+- [x] **Step 1: Upgrade to 1.17.1** in CI and locally.
+- [x] **Step 2: The daily check** (`terraform-version` in `fleet-checks.yml`).
+- [ ] **Step 3: Test it:** this pull request's plan and lint run on 1.17.1, and the first scheduled run finds Terraform current and opens nothing.
 
 ---
 

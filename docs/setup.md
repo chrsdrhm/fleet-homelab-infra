@@ -13,7 +13,7 @@ The first build takes about 30 minutes. While it's up, the stack costs about $0.
   - GitHub
   - optional: an Okta org for single sign-on (step 6); Claude for the optional reviews and checks in CI (a Claude subscription for pull request reviews, a Claude Console organization for the release review and health scan)
 - **Tools:**
-  - [Terraform](https://developer.hashicorp.com/terraform/install) 1.12 or newer (CI uses 1.14.8)
+  - [Terraform](https://developer.hashicorp.com/terraform/install) 1.12 or newer (CI uses 1.17.1)
   - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
   - [GitHub CLI](https://cli.github.com/)
   - git, curl, jq, python3, dig (for the health scan)
