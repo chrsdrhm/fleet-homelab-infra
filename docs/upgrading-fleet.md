@@ -1,6 +1,6 @@
 # Upgrading Fleet
 
-Fleet is self-hosted here, so upgrades are yours to do. Fleet releases about every three weeks; watch [Fleet's releases](https://github.com/fleetdm/fleet/releases) (Watch → Custom → Releases on GitHub) to hear about them. The version is the image tag in `fleet.Dockerfile`. With CI, the daily release check also opens an issue, "A newer Fleet release is available", once a release has been out for a week, and closes it when `fleet.Dockerfile` catches up. (Dependabot can't do this one: `fleetdm/fleet` has tens of thousands of image tags, and its check never finishes.)
+Fleet is self-hosted here, so upgrades are yours to do. Fleet releases about every three weeks; watch [Fleet's releases](https://github.com/fleetdm/fleet/releases) (Watch → Custom → Releases on GitHub) to hear about them. The version is the image tag in `fleet.Dockerfile`. With CI, the daily release check also opens an issue, "A newer Fleet release is available", the day a release is out, and closes it when `fleet.Dockerfile` catches up. (Dependabot can't do this one: `fleetdm/fleet` has tens of thousands of image tags, and its check never finishes.)
 
 With [Claude Code](https://claude.com/claude-code), `/fleet-upgrade` (in `.claude/skills/`) runs this routine with you: it reviews the releases in between against this setup, takes the snapshot, opens the pull request and checks the result, asking before each step that changes something. This page is the manual way.
 

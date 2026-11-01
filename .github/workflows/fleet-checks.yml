@@ -80,9 +80,10 @@ jobs:
           persist-credentials: false
 
       # Dependabot can't watch the Fleet image: fleetdm/fleet has tens of thousands of
-      # tags (one per branch build), and listing them never finishes. Instead, nightly,
-      # compare fleet.Dockerfile with Fleet's newest release that's at least 7 days old (the
-      # same wait as Dependabot's cooldown), and keep one issue open while it's newer.
+      # tags (one per branch build), and listing them never finishes. Instead, daily,
+      # compare fleet.Dockerfile with Fleet's newest release, and keep one issue open while
+      # it's newer. No waiting period (unlike Dependabot's cooldown): it's a homelab, and
+      # nothing upgrades until fleet.Dockerfile is changed in a pull request.
       # Claude's review (below) is added to the issue with a marker naming the versions;
       # while the marker matches, the issue is left alone, so each upgrade is reviewed
       # once. A failed review leaves no marker, so the next night tries again.
@@ -94,13 +95,11 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           current=$(sed -n 's|^FROM fleetdm/fleet:v||p' fleet.Dockerfile)
-          cutoff=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
           # Captured first, so an API error fails the step instead of reading as "none".
           releases=$(gh api 'repos/fleetdm/fleet/releases?per_page=100')
-          latest=$(jq -r --arg cutoff "$cutoff" '.[]
+          latest=$(jq -r '.[]
             | select((.draft or .prerelease) | not)
             | select(.tag_name | test("^fleet-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
-            | select(.published_at <= $cutoff)
             | .tag_name | ltrimstr("fleet-v")' <<< "$releases" | sort -V | tail -n 1)
           if [ -z "$current" ] || [ -z "$latest" ]; then
             echo "::error title=Fleet release check::Couldn't read the current version ('$current') or the newest release ('$latest')."
@@ -108,13 +107,13 @@ jobs:
           fi
           title="A newer Fleet release is available"
           if [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)" = "$current" ]; then
-            ./scripts/notify-issue.sh resolve "$title" "fleet.Dockerfile is on $current, the newest release at least 7 days old; closing."
+            ./scripts/notify-issue.sh resolve "$title" "fleet.Dockerfile is on $current, the newest release; closing."
           elif ./scripts/notify-issue.sh show "$title" | grep -qF "<!-- release-review: $current..$latest -->"; then
             echo "The issue already has a review of $current to $latest."
           else
             # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
             {
-              printf '@%s Fleet %s has been out for at least 7 days; `fleet.Dockerfile` is on %s.\n\n' "$OWNER" "$latest" "$current"
+              printf '@%s Fleet %s is out; `fleet.Dockerfile` is on %s.\n\n' "$OWNER" "$latest" "$current"
               printf 'Release notes: https://github.com/fleetdm/fleet/releases/tag/fleet-v%s\n\n' "$latest"
               printf 'Upgrade with `/fleet-upgrade` or by following `docs/upgrading-fleet.md` (snapshot first). This issue updates nightly and closes itself once `fleet.Dockerfile` is current.\n'
             } > "$RUNNER_TEMP/release.md"
