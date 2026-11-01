@@ -72,8 +72,10 @@ gh api repos/$(gh api user --jq .login)/fleet-homelab-infra --jq '{github_owner:
 ```bash
 terraform init -backend-config=backend.hcl
 terraform apply -var-file=terraform.tfvars -target=aws_secretsmanager_secret_version.fleet_server_private_key   # first time only
-NO_GITOPS=1 ./scripts/up.sh
+NO_GITOPS=1 NO_SCAN=1 ./scripts/up.sh
 ```
+
+`NO_GITOPS=1` and `NO_SCAN=1` skip starting the GitOps run and the health scan, which need the GitOps repo and CI from later steps.
 
 **DNS not on Cloudflare?** Before running `up.sh`, create the Fleet subdomain's DNS zone and delegate it by hand, because the TLS certificate can't be issued until the subdomain points to it:
 

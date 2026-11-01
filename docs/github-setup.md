@@ -46,6 +46,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | Variable | Repo | What it does |
 |---|---|---|
 | `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly teardown skips until then (see **Nightly teardown** below). |
+| `NIGHTLY_APP_ACTOR` | `fleet-homelab-infra` | The nightly timer app's `<app-slug>[bot]` name: every run it starts is treated as the nightly check (step 10). |
 | `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and `claude-opus-5-5` for new releases and the health scan (steps 7 and 8). |
 
 ## 2. Repository settings
@@ -135,7 +136,7 @@ Settings → Rules → Rulesets shows the result. If CI itself ever breaks, an a
 
 ## 5. Optional: GitHub App for the GitOps run
 
-When `up` runs from CI, it starts the GitOps repo's workflow so Fleet's configuration is reapplied. A workflow's own token can't start another repo's workflow, so a small GitHub App does it. Without the app, `up` still works, but it shows a warning and the nightly GitOps run catches up instead.
+When `up` runs from CI, it starts the GitOps repo's workflow so Fleet's configuration is reapplied. A workflow's own token can't start another repo's workflow, so a small GitHub App does it. Without the app, `up` still works, but it shows a warning, and Fleet's configuration is applied by the next push to the GitOps repo or a manual run of its workflow (`gh workflow run workflow.yml --repo $OWNER/fleet-homelab-gitops`).
 
 1. Go to GitHub → your avatar → **Settings → Developer settings → GitHub Apps → New GitHub App**:
    - Webhook off.
@@ -223,7 +224,7 @@ When the daily release check opens or updates "A newer Fleet release is availabl
 After a successful `up` (from CI or from your terminal, where `up.sh` starts it with your GitHub login), and after an apply on merge that changed something (a Fleet upgrade, say), `terraform.yml` starts the health scan in the `Fleet checks` workflow (`fleet-checks.yml`, shown as "Health scan after up" or "Health scan after apply on merge"). Its `health-scan` job runs `scripts/health-scan.sh` over the last two hours, has Claude compare it with [`baseline.md`](../.claude/skills/health-scan/baseline.md) (`scripts/health-review.sh`), and writes both to the run's summary. If something is outside the baseline, it opens "The health scan found something to look at", which the next clean scan closes. It never holds up or fails the `up` or the apply: a scan or comparison that fails only warns. It needs step 7's Claude setup.
 
 **Set it up:**
-1. **Create the scan role** locally (CI can't change its own roles): `terraform apply -var-file=terraform.tfvars -target=aws_iam_role_policy_attachment.github_actions_scan`.
+1. **Create the scan role** locally, if your stack was built before this feature (CI can't change its own roles): `terraform apply -target=aws_iam_role_policy_attachment.github_actions_scan`. A fresh build already includes it.
 2. **Store its ARN** (this prints nothing):
    ```bash
    gh secret set AWS_SCAN_ROLE_ARN --repo $OWNER/fleet-homelab-infra --body "$(aws iam get-role --role-name fleet-homelab-github-actions-scan --query Role.Arn --output text)"
@@ -257,6 +258,11 @@ It signs in as a second Okta service app that can only read. The one you apply w
    Then delete the key file: only CI needs it, and Okta can generate a new one.
 6. **Test it** with a pull request that changes something under `okta/`.
 
+**If the plan fails to sign in:**
+- **"invalid private key":** the secret must be the PEM file exactly as Okta gave it, with no blank lines added. Set it again from the file.
+- **A TLS certificate error:** `OKTA_ORG_NAME` is only the part before `.okta.com`, not the full hostname.
+- **"empty access token":** in the Okta System Log, `invalid_token_endpoint_auth_method` means the app still uses a client secret. On its General tab, set **Client authentication** to **Public key / Private key**.
+
 **Security:**
 - **The key can only read** apps and groups, including who is in each group. It can't change who signs in to Fleet.
 - **Forks get no secrets,** so their pull requests skip the Okta plan. Dependabot's pull requests skip it too, unless you also set the four as Dependabot secrets.
@@ -267,7 +273,7 @@ It signs in as a second Okta service app that can only read. The one you apply w
 GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack left up can stay up all day. `nightly.tf` adds a timer in AWS that starts the check at 2:17am Chicago time all year: an EventBridge Scheduler schedule calls a small Lambda function (`lambda/nightly/index.mjs`), which signs in as a GitHub App and starts `terraform.yml` with `action=nightly`. The workflow treats every run the app starts as the nightly check, whatever it asks for, so the app can't start an `up` or a `down`. GitHub's schedule stays as the backup. It all costs nothing at this volume (free tiers), and stays through teardowns.
 
 **Set it up:**
-1. **Apply the CI roles' new scope** locally (CI can't change its own roles), before the pull request that adds the timer merges: `terraform apply -target=aws_iam_policy.github_actions_apply -target=aws_iam_policy.github_actions_plan`.
+1. **Apply the CI roles' timer scope** locally, if your stack was built before this feature (CI can't change its own roles): `terraform apply -target=aws_iam_policy.github_actions_apply -target=aws_iam_policy.github_actions_plan`. A fresh build already includes it.
 2. **Create a GitHub App:** your profile → Settings → Developer settings → GitHub Apps → **New GitHub App**.
    - Any unique name, for example `fleet-homelab-nightly-<your-username>`, and the repo's URL as the homepage.
    - **Webhook:** untick **Active**.

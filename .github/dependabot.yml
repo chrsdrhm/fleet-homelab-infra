@@ -1,6 +1,6 @@
 # Weekly update PRs for the pinned GitHub Actions (SHA pins, tag in a trailing comment)
 # and for the Terraform providers and Fleet modules in both roots. Not for the Fleet image
-# in fleet.Dockerfile: the nightly Terraform run checks Fleet's releases instead.
+# in fleet.Dockerfile: the daily release check (fleet-checks.yml) watches Fleet's releases instead.
 version: 2
 updates:
   - package-ecosystem: github-actions

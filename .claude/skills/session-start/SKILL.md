@@ -2,7 +2,7 @@
 name: session-start
 description: Start a homelab session - check sign-ins and open work, bring the stack up, verify it, and settle the nightly teardown. Run it only when the person asks, since the stack bills hourly once it's up.
 disable-model-invocation: true
-allowed-tools: Bash(aws sts get-caller-identity --query *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(gh auth status), Bash(gh pr list), Bash(gh pr list *), Bash(gh run list *), Bash(gh run view *), Bash(gh run watch *), Bash(gh variable list), Bash(gh variable list *), Bash(git status), Bash(git status *), Bash(git -C ../fleet-homelab-gitops status), Bash(git -C ../fleet-homelab-gitops status *), Bash(TZ=America/Chicago date), Bash(TZ=America/Chicago date *)
+allowed-tools: Bash(aws sts get-caller-identity --query *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(gh auth status), Bash(gh issue list), Bash(gh issue list *), Bash(gh pr list), Bash(gh pr list *), Bash(gh run list *), Bash(gh run view *), Bash(gh run watch *), Bash(gh variable list), Bash(gh variable list *), Bash(git status), Bash(git status *), Bash(git -C ../fleet-homelab-gitops status), Bash(git -C ../fleet-homelab-gitops status *), Bash(TZ=America/Chicago date), Bash(TZ=America/Chicago date *)
 ---
 
 # Start a session

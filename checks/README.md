@@ -6,13 +6,13 @@ Every lint check, test and guard for this repo lives here, so it's all in one pl
 |---|---|---|---|
 | Private values | `private-values/check.py` | Every PR (`run.sh`), optional local hooks | Fails if a change, file name, commit message, or PR title/body contains a private value. See [below](#private-values). |
 | Terraform format and validation | `run.sh` | Every PR | `terraform fmt -check` and `terraform validate` for both roots. |
-| Terraform tests | `tests/terraform/security.tftest.hcl` | Every PR | Plans the whole configuration against mocked providers (no AWS) and asserts the CI roles' trust, a read-only plan role, the WAF rules, the public bucket's scope and the budget. |
+| Terraform tests | `tests/terraform/security.tftest.hcl` | Every PR | Plans the whole configuration against mocked providers (no AWS) and asserts the CI roles' trust and the apply role's denies, the read-only plan and scan roles, the nightly timer's permissions and time, the WAF rules, the public bucket's scope, the budget and the DNS delegation. |
 | Checker self-test | `tests/test_private_values.py` | Every PR | Tests the private-values checker with phony values. |
 | shellcheck | `run.sh` | Every PR | Lints the shell scripts and hooks. |
 | actionlint | `run.sh` | Every PR | Lints the workflow files, including the shell in `run:` blocks. |
 | zizmor | `run.sh`, `zizmor.yml` | Every PR | Security audit of the workflows. Official image, pinned by digest. |
 | tflint | `run.sh`, `tflint.hcl` | Every PR | Lints our Terraform (not Fleet's modules) with the AWS ruleset. |
-| Data-loss guard | `data-loss-guard.sh` | Every PR's plan | Flags a plan that would destroy or replace the database, a secret, a bucket, DNS, the certificate, the SES identity or the server key. The plan check fails unless the PR has the `allow-destroy` label. |
+| Data-loss guard | `data-loss-guard.sh` | Every PR's plan, and the apply on merge | Flags a plan that would destroy or replace the database, a secret, a bucket, DNS, the certificate, the SES identity or the server key. The plan check fails unless the PR has the `allow-destroy` label. |
 | SSO smoke check | `sso-smoke.sh` | After each `up` | If Fleet reports SSO on, checks that starting a login redirects to the identity provider. Warns, never fails the rebuild. |
 
 All values in the tests and examples are placeholders: `123456789012` is the example account ID from AWS's documentation, `example.com` is reserved for documentation (RFC 2606), and the rest are made up.
@@ -53,7 +53,7 @@ To skip the hooks for one commit, use `git commit --no-verify`. CI still runs th
 Delete this folder. Nothing else breaks:
 
 - The lint job falls back to `terraform fmt` and `terraform validate`
-- The plan job skips the data-loss guard
+- The plan job skips the data-loss guard, and the apply on merge fails closed: any destroy or replace, not only of data-holding resources, then needs the `allow-destroy` label
 - `scripts/up.sh` skips the SSO check
 
 If the hooks were on, also run `git config --unset core.hooksPath`.
