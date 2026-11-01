@@ -1,6 +1,8 @@
 output "entity_id" {
   description = "Fleet's Entity ID. Goes in Fleet's SSO settings."
   value       = local.fleet_url
+  # Holds the hostname; `terraform output -raw entity_id` still shows it.
+  sensitive = true
 }
 
 # Contains the org name and app ID, so it is kept out of the plan output and the repo.

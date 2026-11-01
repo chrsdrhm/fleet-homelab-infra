@@ -4,11 +4,23 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # The workflows, and the composite action's own pins (configure-aws-credentials,
+    # setup-terraform), which directory: / alone doesn't cover.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     # Wait a week before proposing a new release, so a hijacked one is usually caught
     # and pulled before it reaches this repo.
+    cooldown:
+      default-days: 7
+  # The Terraform version CI uses: the tag in .github/terraform/Dockerfile, which the
+  # workflows read. Its own folder, so fleet.Dockerfile (too many tags) isn't scanned.
+  - package-ecosystem: docker
+    directory: /.github/terraform
+    schedule:
+      interval: weekly
     cooldown:
       default-days: 7
   - package-ecosystem: terraform

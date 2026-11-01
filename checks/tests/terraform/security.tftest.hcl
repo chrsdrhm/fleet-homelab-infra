@@ -135,6 +135,42 @@ run "apply_role_keeps_its_denies" {
   }
 }
 
+# The apply role manages and passes only the stack's roles, by exact name, each to its
+# own service: no pattern a run on main could use to create a new, broader role.
+run "apply_role_manages_only_the_stack_roles" {
+  command = plan
+
+  assert {
+    condition = one([for s in data.aws_iam_policy_document.github_actions_apply.statement : s.resources if s.sid == "IamManageStackRoles"]) == toset([
+      "arn:aws:iam::123456789012:role/fleet-role",
+      "arn:aws:iam::123456789012:role/fleet-execution-role",
+      "arn:aws:iam::123456789012:role/fleet-homelab-nightly-function",
+      "arn:aws:iam::123456789012:role/fleet-homelab-nightly-scheduler",
+    ])
+    error_message = "The apply role may create and change only the four stack roles, by exact name."
+  }
+  assert {
+    condition = alltrue(flatten([
+      for s in data.aws_iam_policy_document.github_actions_apply.statement : [
+        for r in s.resources : !strcontains(r, ":role/") || !strcontains(r, "*")
+      ] if s.effect == "Allow" && length(setintersection(s.actions, ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:UpdateAssumeRolePolicy", "iam:PassRole"])) > 0
+    ]))
+    error_message = "No Allow that creates, changes or passes roles may use a wildcard role ARN."
+  }
+  assert {
+    condition = {
+      for s in data.aws_iam_policy_document.github_actions_apply.statement :
+      one(one([for c in s.condition : c.values if c.variable == "iam:PassedToService"])) => s.resources
+      if contains(s.actions, "iam:PassRole")
+      } == {
+      "ecs-tasks.amazonaws.com" = toset(["arn:aws:iam::123456789012:role/fleet-role", "arn:aws:iam::123456789012:role/fleet-execution-role"])
+      "lambda.amazonaws.com"    = toset(["arn:aws:iam::123456789012:role/fleet-homelab-nightly-function"])
+      "scheduler.amazonaws.com" = toset(["arn:aws:iam::123456789012:role/fleet-homelab-nightly-scheduler"])
+    }
+    error_message = "Each stack role may be passed only to its own service: Fleet's to ECS tasks, the timer's to Lambda and Scheduler."
+  }
+}
+
 run "plan_role_is_read_only" {
   command = plan
 
@@ -193,8 +229,8 @@ run "nightly_timer_is_narrow" {
     error_message = "The nightly schedule's role may only invoke the function."
   }
   assert {
-    condition     = aws_scheduler_schedule.nightly.schedule_expression == "cron(17 2 * * ? *)" && aws_scheduler_schedule.nightly.schedule_expression_timezone == "America/Chicago"
-    error_message = "The nightly check must start at 2:17am Chicago time."
+    condition     = aws_scheduler_schedule.nightly.schedule_expression == "cron(0 3 * * ? *)" && aws_scheduler_schedule.nightly.schedule_expression_timezone == "America/Chicago"
+    error_message = "The nightly check must start at 3am Chicago time (2am is skipped when clocks spring forward)."
   }
   assert {
     condition = alltrue([

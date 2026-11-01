@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keeps one open GitHub issue per title, for notices from scheduled runs (the nightly
-# teardown, kept snapshots, a newer Fleet release). GitHub notifies the repository's owner of new issues and
+# teardown, kept snapshots, the health scan). GitHub notifies the repository's owner of new issues and
 # comments, by email and in its mobile app.
 #
 #   notify-issue.sh report  "<title>" <body-file>   new issue, or a comment on the open one
