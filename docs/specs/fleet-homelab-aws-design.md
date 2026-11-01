@@ -562,7 +562,8 @@ teardown, so a teardown neither delays nor skips it. When it opens or updates it
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one
 request with no tools. Claude sorts what it finds into Breaking, Must change,
-Deprecated (still works) and New and relevant, with a ✅ / ⚠️ / ❌ verdict, and
+Deprecated (still works), New and relevant, and Check before merging (what the files
+can't show), with a ✅ / ⚠️ / ❌ verdict (⚠️ only when the repos need an edit), and
 the job puts it in the pull request's body, once per upgrade (a marker in the body records
 which versions were reviewed). The pull request is opened by a GitHub App (Contents and
 Pull requests write, this repo only), so its checks run; the app's token is made after

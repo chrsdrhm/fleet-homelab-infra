@@ -148,14 +148,18 @@ nothing:
    removed or renamed settings, `FLEET_*` environment variables, YAML keys or CLI flags
    that these files use, changed defaults that matter here, new minimum MySQL or Redis
    versions, migrations that need care.
-2. **Must change**: edits these repos need before or with the upgrade. Name the file and
-   give the change.
+2. **Must change**: edits these repos need before or with the upgrade, beyond the version
+   bump itself (the upgrade pull request already changes `fleet.Dockerfile`, so never list
+   that). Name the file and give the change.
 3. **Deprecated, still works**: things these files do that still work but that Fleet now
    does a new way (a renamed key that still accepts the old name, a setting that moved,
    a new field in the GitOps template). Name the file and give the suggested change.
 4. **New and relevant**: new features touching what this deployment uses (Windows MDM,
    Okta and end-user authentication, GitOps, the AWS modules) that might be worth
    adopting. Skip everything else.
+5. **Check before merging**: things these files can't show, that someone should confirm
+   before the upgrade (for example the fleetd versions hosts run, or a setting in the
+   identity provider). Say what to check and why.
 
 Rules:
 - Only report what the release notes, the template diff or the files support. If a note
@@ -164,7 +168,10 @@ Rules:
 - Never repeat an email address, hostname, ID or secret, even one that looks like a
   placeholder.
 
-Start with exactly one verdict line, then the sections:
+Start with exactly one verdict line, then the sections. The verdict is ⚠️ only when
+**Must change** has an edit to these repos; items under **Check before merging** don't
+change it on their own (✅ with things to check is fine), and ❌ is for a reason to wait,
+such as a regression the notes report:
 **Verdict:** ✅ Upgrade as is | ⚠️ Upgrade with the changes below | ❌ Wait (say why)
 EOF
 
