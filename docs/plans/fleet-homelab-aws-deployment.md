@@ -1470,6 +1470,8 @@ git add scripts/
 git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 ```
 
+**Changed 2026-11-01:** `down.sh` treats only `DBClusterNotFoundFault` as "no database". Any other error checking for the cluster stops it before anything is destroyed. Before, any error read as "no cluster" and skipped the snapshot, and the module skips Aurora's final snapshot (`skip_final_snapshot` defaults to `true`), so a failed check during a teardown would have deleted the database with no snapshot.
+
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
@@ -3026,6 +3028,19 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 - [x] **Step 4: Test it** by pointing it at an older version (for example 4.92.0 to 4.93.0, which `/fleet-upgrade` already reviewed by hand) and comparing the verdicts.
   - **Done 2026-10-28, on 4.93.0 to 4.93.2** (reviewed by hand the day before), with a manual `action=review` run on `main`. Same verdict, ✅: no migrations, no settings, keys or minimum versions changed, no template changes, and nothing to edit beyond `fleet.Dockerfile`. It also checked the 4.93.1 fixes against what we use (custom packages, Fleet-maintained apps and policy automations: none configured; the ADE user-mapping fix: ADE not set up), and flagged 4.93.2's removal of three emSign root certificates, noting it can't see the certificate chains of Okta and AWS from the files. It reported no instructions in the data.
 - [x] **Step 5: Document it:** `docs/upgrading-fleet.md` (the issue now carries a first review; `/fleet-upgrade` still does the full one), `docs/github-setup.md` (the secret and the spend limit), and the spec's CI and Cost sections (expected a few dollars a month at most).
+
+---
+
+### Task 42: Narrow the apply role's IAM to the stack's roles
+
+Added 2026-11-01 from a code review: the apply role could create any `fleet*` or `terraform-*` role with any inline policy, pass it to Lambda or ECS (which it can also start), and so become an account admin in a few calls from any run on `main`. A permissions boundary required on `iam:CreateRole` is the usual fix, but Fleet's module creates its ECS execution role with no boundary input, so requiring one would break the next `up`.
+
+**Built 2026-11-01:** roles by exact name instead (`local.ci_managed_roles` in `oidc.tf`: `fleet-role`, `fleet-execution-role` and the nightly timer's two), each passable only to its own service (ECS tasks, Lambda, Scheduler). Managed policies keep `fleet*` and `terraform-*` (the MDM and SES addons' generated names); a policy grants nothing until attached, and only those four roles can have one attached. The unused Firehose and RDS-monitoring PassRole entries are gone; Task 12 adds Firehose's back. The residual, documented in the spec: CI can still widen Fleet's own two roles, which it must manage to deploy Fleet. A `terraform test` run pins the role list and the PassRole mapping.
+
+- [x] **Step 1: Narrow the roles and PassRole** (`oidc.tf`), with `apply_role_manages_only_the_stack_roles` in `security.tftest.hcl` (checked to fail with the old `role/fleet*` pattern).
+- [ ] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
+- [ ] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles).
+- [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
 
 ---
 
