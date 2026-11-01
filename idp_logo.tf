@@ -49,4 +49,6 @@ resource "aws_s3_bucket_policy" "idp_logo" {
 output "idp_logo_url" {
   description = "Public URL of the IdP logo. Goes in Fleet's SSO settings as the IdP image URL."
   value       = "https://${aws_s3_bucket.idp_logo.bucket}.s3.${data.aws_region.current.region}.amazonaws.com/${local.idp_logo_key}"
+  # The bucket name holds the account ID; `terraform output -raw` still shows it.
+  sensitive = true
 }
