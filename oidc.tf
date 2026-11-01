@@ -292,9 +292,21 @@ data "aws_iam_policy_document" "github_actions_plan" {
       "ses:Get*", "ses:List*", "ses:Describe*", "sesv2:Get*", "sesv2:List*", "route53:Get*", "route53:List*",
       "acm:Describe*", "acm:List*", "firehose:Describe*", "firehose:List*", "budgets:ViewBudget", "budgets:ListTagsForResource",
       "iam:Get*", "iam:List*", "kms:Describe*", "kms:List*", "kms:Get*", "sts:GetCallerIdentity", "tag:GetResources",
-      "lambda:Get*", "lambda:List*", "scheduler:Get*", "scheduler:List*", "sns:Get*", "sns:List*",
     ]
     resources = ["*"]
+  }
+
+  # The nightly timer's reads, on its own resources only: GetFunction returns a
+  # function's environment and code, so no other function in the account is readable.
+  statement {
+    sid     = "ReadNightlyTimer"
+    effect  = "Allow"
+    actions = ["lambda:Get*", "lambda:List*", "scheduler:Get*", "scheduler:List*", "sns:Get*", "sns:List*"]
+    resources = [
+      "arn:aws:lambda:*:${local.account_id}:function:fleet-homelab-*",
+      "arn:aws:scheduler:*:${local.account_id}:schedule/default/fleet-homelab-*",
+      "arn:aws:sns:*:${local.account_id}:fleet-homelab-*",
+    ]
   }
 
   # Terraform's refresh reads secret_version resources (the private key, the Aurora

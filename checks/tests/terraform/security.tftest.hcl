@@ -203,6 +203,13 @@ run "nightly_timer_is_narrow" {
     ])
     error_message = "The apply role's Lambda, Scheduler and SNS access must stay limited to fleet-homelab-* resources."
   }
+  assert {
+    condition = alltrue([
+      for r in one([for s in data.aws_iam_policy_document.github_actions_plan.statement : s.resources if s.sid == "ReadNightlyTimer"]) :
+      can(regex(":(function:|schedule/default/|)fleet-homelab-\\*$", r))
+    ])
+    error_message = "The plan role's Lambda, Scheduler and SNS reads must stay limited to fleet-homelab-* resources."
+  }
 }
 
 run "waf_blocks_by_default_and_checks_the_ci_header_first" {
