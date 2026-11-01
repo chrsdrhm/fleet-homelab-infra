@@ -1470,6 +1470,8 @@ git add scripts/
 git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 ```
 
+**Changed 2026-11-01:** `down.sh` treats only `DBClusterNotFoundFault` as "no database". Any other error checking for the cluster stops it before anything is destroyed. Before, any error read as "no cluster" and skipped the snapshot, and the module skips Aurora's final snapshot (`skip_final_snapshot` defaults to `true`), so a failed check during a teardown would have deleted the database with no snapshot.
+
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
@@ -2914,6 +2916,7 @@ Added at my request. Turns Task 21's twelve read-only checks into a Claude Code 
   - **2026-10-29, tested and changed:** the first `action=scan` run passed every step and opened the issue; its four findings were gaps in the baseline (status endpoints and alert counts unreadable on any CI run, WAF blocks over a full day, teardown events in a window that reaches back into one), now added to `baseline.md`. The scan is now its own run: a successful `up` starts `action=scan` with `after_up=true` (the `apply` job gets `actions: write` for it) instead of a job that `needs: apply`.
   - **2026-10-29, after a review of the last two weeks' changes:** the PR plan's and the apply on merge's wait for a running up or down now skips `review` and `scan` runs, which never touch the stack; `/session-start` reports the scan's verdict and lists its issue; the release review stops if GitHub returns Fleet's file list cut off (it would read as "no template files changed"); the three CI role ARN outputs are `sensitive`, since they hold the account ID.
   - **2026-10-29, workflows split:** `terraform.yml` keeps only the Terraform jobs (lint, plan, apply, apply on merge). The release check and the health scan moved to `fleet-checks.yml` ("Fleet checks"), so their runs aren't named "Terraform …": "Fleet release check" (daily, 13:47 UTC), "Fleet release review: … to …", "Health scan after up", "Health scan after apply on merge" and "Health scan". An apply on merge that changed something (a Fleet upgrade, say) now starts a scan too, once ECS is stable (the `after` input: `up`, `merge` or `hand`). The waits for a running up or down no longer need to skip review and scan runs, since they're in the other workflow. `down.sh`'s final check counts only this stack's resources: by the `Project` tag where the call returns tags (Aurora, NAT gateways, the VPC), else by the stack's names (Redis, the load balancer, the web ACL). `up.sh` run from a terminal also starts the scan (with the person's GitHub login; `NO_SCAN=1` skips it), so every `up` gets one; in CI the apply job still starts it, since `up.sh`'s token there only reaches the GitOps repo.
+  - **2026-11-01, release check at noon:** the `fleet-release` schedule is now `0 12 * * *` in `America/Chicago` (GitHub's cron takes a time zone), instead of 13:47 UTC. The 7-day wait before reporting a release is removed: it's a homelab, and nothing upgrades until `fleet.Dockerfile` changes in a pull request. Dependabot's cooldown for actions and providers stays.
 
 ### Task 31: A Windows packaging skill
 
@@ -3009,6 +3012,8 @@ Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run st
 - [x] **Step 5: Test it.** A one-off schedule a few minutes ahead (or a test invoke) starts a `nightly` run, which tears down a running stack; with the stack down it only reports. Check the run's actor is the app, and that the backup scheduled run later does nothing. *2026-10-31:* a test invoke with the skip variable set started a `nightly` run as the app, which skipped as expected. *2026-11-01:* the first scheduled run fired at 2:17am Chicago time (the night daylight saving ended), started as the app, and tore the stack down in about 19 minutes. GitHub started the backup run about 7 hours late, and it found the stack down. The function used 121 MB of its 128 MB, so its memory is now 256 MB.
 - [x] **Step 6: Document it:** the spec (CI and Cost: expected to stay within the free tiers), the README's nightly bullet, `docs/github-setup.md` (the app and the parameter), the setup guide, and `/session-start` (the check now runs at 2:17am Chicago time all year).
 
+**Changed 2026-11-01:** GitHub's backup schedule is removed. It started its run about 7 hours late the first night, past the 8am cutoff, so it could only report, never tear down. One new alarm replaces both it and the scheduler's dropped-call alarm: the function not called in 26 hours (a run's gap is 23 to 25 hours around daylight saving changes), which also catches a disabled or deleted schedule. The timer moves to 3am, `cron(0 3 * * ? *)`: :17 only spread load for GitHub, and 2:00 to 2:59am doesn't exist the night clocks spring forward, when Scheduler skips the run. GitHub setup step 10 is no longer optional: without the timer there's no nightly check.
+
 ---
 
 ### Task 38: A Claude review of each new Fleet release
@@ -3027,14 +3032,40 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 
 ---
 
+### Task 39: An upgrade pull request for each new Fleet release
+
+Added 2026-11-01 at my request. The release check opened an issue, and the upgrade was a separate pull request. Instead, the release check opens the pull request itself: the tag change in `fleet.Dockerfile` and Claude's review, so the upgrade is reviewing and merging it.
+
+**Built 2026-11-01 (`scripts/release-pr.sh`, `fleet-checks.yml`, `terraform.yml`):** one pull request per release, on a branch named for it (`fleet-release-X.Y.Z`), opened by a GitHub App, because a pull request opened with the workflow's own token doesn't start the plan and lint checks. The app has Contents and Pull requests write on this repo only. Its token is made after Claude's review, and only the last step holds it, so no step that handles the release notes has it. The commit goes through the contents API, so it's the app's and signed by GitHub. A marker in the body records the reviewed versions, as the issue's did. A newer release gets a new pull request, and the older one is closed with a link to it and its branch deleted (at my request: one pull request per release, not one that moves); a `fleet.Dockerfile` that caught up another way closes it. Only a pull request from this repo's own branch counts, never a fork's. The apply on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a merge that changed `fleet.Dockerfile`, found through the compare API, so merging from a phone still leaves a restore point. With the stack down, the teardown snapshot is the restore point. `claude-review.yml` skips pull request events sent by an app, which `claude-code-action` refuses anyway; `@claude` still works. `action=release` runs the check by hand.
+
+- [x] **Step 1: The app and the pull request** (`scripts/release-pr.sh`, the `fleet-release` job).
+- [x] **Step 2: The snapshot on merge** (`terraform.yml`'s apply on merge).
+- [x] **Step 3: Document it:** `docs/github-setup.md` step 11 and the secrets, `docs/upgrading-fleet.md`, the setup guide, the spec, the README, `AGENTS.md`, `/fleet-upgrade` and `/session-start`.
+- [ ] **Step 4: Test it:** create the app and its secrets, run `action=release`, and check the pull request for 4.94.0: its plan and lint checks run, and the body has the review. Merge it with the stack up, and check that the apply on merge takes the snapshot before applying.
+
+---
+
 ### Task 40: Apply what a teardown keeps, even while the stack is down
 
 Added 2026-11-01 at my request. The apply on merge applied nothing while the stack was down, including changes to resources a teardown keeps, so the nightly timer's 2026-11-01 changes waited for the next `up`.
 
-**Built 2026-11-01:** `down.sh`'s targets moved to `scripts/stack-targets`, which `down.sh` and the apply on merge both read. With the stack down, the apply on merge plans `main`, then plans again targeting only the changed resources not covered by that list. It applies nothing if the targeted plan would still change a stack resource (a dependency), and the data-loss guard runs as before. No health scan, since Fleet isn't running.
+**Built 2026-11-01:** `down.sh`'s targets moved to `scripts/stack-targets`, which `down.sh` and the apply on merge both read. With the stack down, the apply on merge plans `main`, then plans again targeting only the changed resources not covered by that list. It applies nothing if the targeted plan would still change a stack resource (a dependency), and the data-loss guard runs as before. No health scan, and no pre-upgrade snapshot (Task 39), since Fleet and its database aren't running.
 
 - [x] **Step 1: Build it** (`scripts/stack-targets`, `scripts/down.sh`, the apply on merge in `terraform.yml`), and document it in the README, the setup guide, the spec and `docs/upgrading-fleet.md`.
 - [ ] **Step 2: Test it:** the next merge that changes a kept resource while the stack is down applies only that, and the next `down.sh` still destroys the same resources.
+
+---
+
+### Task 42: Narrow the apply role's IAM to the stack's roles
+
+Added 2026-11-01 from a code review: the apply role could create any `fleet*` or `terraform-*` role with any inline policy, pass it to Lambda or ECS (which it can also start), and so become an account admin in a few calls from any run on `main`. A permissions boundary required on `iam:CreateRole` is the usual fix, but Fleet's module creates its ECS execution role with no boundary input, so requiring one would break the next `up`.
+
+**Built 2026-11-01:** roles by exact name instead (`local.ci_managed_roles` in `oidc.tf`: `fleet-role`, `fleet-execution-role` and the nightly timer's two), each passable only to its own service (ECS tasks, Lambda, Scheduler). Managed policies keep `fleet*` and `terraform-*` (the MDM and SES addons' generated names); a policy grants nothing until attached, and only those four roles can have one attached. The unused Firehose and RDS-monitoring PassRole entries are gone; Task 12 adds Firehose's back. The residual, documented in the spec: CI can still widen Fleet's own two roles, which it must manage to deploy Fleet. A `terraform test` run pins the role list and the PassRole mapping.
+
+- [x] **Step 1: Narrow the roles and PassRole** (`oidc.tf`), with `apply_role_manages_only_the_stack_roles` in `security.tftest.hcl` (checked to fail with the old `role/fleet*` pattern).
+- [ ] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
+- [ ] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles).
+- [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
 
 ---
 

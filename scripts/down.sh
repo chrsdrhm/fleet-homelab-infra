@@ -25,7 +25,19 @@ if [ "${CONFIRM:-}" != "destroy" ]; then
 fi
 if [ "$CONFIRM" != "destroy" ]; then echo "Aborted: nothing was changed." >&2; exit 1; fi
 
-if aws rds describe-db-clusters --db-cluster-identifier fleet-homelab >/dev/null 2>&1; then
+# Only "not found" means there's no database to snapshot. Any other error (throttling,
+# an expired session, the network) stops here: the module skips Aurora's final
+# snapshot, so destroying without this one would lose the data.
+if cluster_err=$(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query 'DBClusters[0].Status' --output text 2>&1 >/dev/null); then
+  cluster=present
+elif grep -q DBClusterNotFoundFault <<< "$cluster_err"; then
+  cluster=absent
+else
+  echo "Couldn't check for the Aurora cluster, so nothing was destroyed:" >&2
+  sed -E 's/[0-9]{12}/<account>/g' <<< "$cluster_err" >&2
+  exit 1
+fi
+if [ "$cluster" = present ]; then
   SNAPSHOT_ID="fleet-homelab-teardown-$(date -u +%Y%m%d%H%M%S)"
   echo "Snapshotting Aurora as $SNAPSHOT_ID..."
   aws rds create-db-cluster-snapshot --db-cluster-identifier fleet-homelab \

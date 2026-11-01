@@ -8,7 +8,7 @@ Terraform for a homelab Fleet Premium deployment on AWS (`us-east-1`), built fro
 - **Fleet's configuration:** lives in the separate `fleet-homelab-gitops` repo.
 - **Design and history:** [`docs/specs/`](docs/specs/fleet-homelab-aws-design.md) is the current design; [`docs/plans/`](docs/plans/fleet-homelab-aws-deployment.md) records how each part was built, task by task.
 - **Checks:** all lint checks, tests and guards are in [`checks/`](checks/README.md).
-- **CI:** `.github/workflows/terraform.yml` runs Terraform (lint, plan, the read-only Okta plan on `okta/` changes, apply, up and down, the nightly teardown, the apply on merge); `fleet-checks.yml` runs what doesn't (the daily Fleet release check with Claude's review, and the health scan after an `up` or a change going live); `claude-review.yml` is the optional pull request review.
+- **CI:** `.github/workflows/terraform.yml` runs Terraform (lint, plan, the read-only Okta plan on `okta/` changes, apply, up and down, the nightly teardown, the apply on merge, which snapshots the database before a Fleet upgrade); `fleet-checks.yml` runs what doesn't (the daily Fleet release check, which opens an upgrade pull request with Claude's review, and the health scan after an `up` or a change going live); `claude-review.yml` is the optional pull request review.
 
 ## Fleet's own approach (prefer it)
 
