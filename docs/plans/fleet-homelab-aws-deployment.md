@@ -3042,6 +3042,7 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 - [x] **Step 2: The snapshot on merge** (`terraform.yml`'s apply on merge).
 - [x] **Step 3: Document it:** `docs/github-setup.md` step 11 and the secrets, `docs/upgrading-fleet.md`, the setup guide, the spec, the README, `AGENTS.md`, `/fleet-upgrade` and `/session-start`.
 - [ ] **Step 4: Test it:** create the app and its secrets, run `action=release`, and check the pull request for 4.94.0: its plan and lint checks run, and the body has the review. Merge it with the stack up, and check that the apply on merge takes the snapshot before applying.
+
 ---
 
 ### Task 42: Narrow the apply role's IAM to the stack's roles
