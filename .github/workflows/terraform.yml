@@ -525,8 +525,10 @@ jobs:
             printf '<!-- terraform-plan-okta -->\n### 🔐 Okta plan\n\n'
             if [ "$EXITCODE" = 1 ]; then
               printf '**The plan failed.** The job log has the error lines with names and URLs removed; run `terraform plan` in `okta/` locally for the whole error.\n'
-            elif [ ! -s "$changes" ]; then
+            elif [ "$EXITCODE" = 0 ]; then
               printf '**No changes.** Okta matches `okta/`.\n'
+            elif [ ! -s "$changes" ]; then
+              printf '**Changes found, but none can be listed safely here.** Run `terraform plan` in `okta/` locally to see them.\n'
             else
               printf '**%s change(s).** Only resources and actions are shown, never values. After merging, apply it locally: `cd okta && terraform apply`.\n\n' "$(wc -l < "$changes" | tr -d ' ')"
               if grep -qE '^(replace|delete)' "$changes"; then
