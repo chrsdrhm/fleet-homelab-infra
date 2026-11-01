@@ -495,13 +495,15 @@ jobs:
           set -e
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" = 1 ]; then
-            # Error headings only (the details can hold IDs and URLs). Run the plan
-            # locally to see the whole error.
-            grep -E '^(│ )?Error: ' "$RUNNER_TEMP/okta-plan.txt" | sed -E 's/^│ //; s/\b0[a-z0-9]{2}[A-Za-z0-9]{17}\b/<okta-id>/g' | head -5 || true
+            # Nothing from the error itself: provider errors can hold the org's URL. It's
+            # one local `terraform plan` in okta/ away.
+            echo "The Okta plan failed. Run terraform plan in okta/ locally to see why."
             exit 0
           fi
+          # Addresses are fixed names from okta/*.tf; anything else is left out.
           terraform show -json tfplan | jq -r '.resource_changes[]? | select(.change.actions != ["no-op"])
-            | "\(.change.actions | if . == ["delete","create"] or . == ["create","delete"] then "replace" else join("+") end)\t\(.address)"' > "$RUNNER_TEMP/okta-changes.tsv"
+            | "\(.change.actions | if . == ["delete","create"] or . == ["create","delete"] then "replace" else join("+") end)\t\(.address)"' \
+            | { grep -E '^[a-z+-]+'$'\t''[A-Za-z0-9_.]+$' || true; } > "$RUNNER_TEMP/okta-changes.tsv"
           cat "$RUNNER_TEMP/okta-changes.tsv"
 
       - name: Comment on the pull request
@@ -517,7 +519,7 @@ jobs:
           {
             printf '<!-- terraform-plan-okta -->\n### 🔐 Okta plan\n\n'
             if [ "$EXITCODE" = 1 ]; then
-              printf '**The plan failed.** The error headings are in the job log; run `terraform plan` in `okta/` locally for the details.\n'
+              printf '**The plan failed.** Run `terraform plan` in `okta/` locally to see why (the error isn'"'"'t logged: it can hold the org'"'"'s URL).\n'
             elif [ ! -s "$changes" ]; then
               printf '**No changes.** Okta matches `okta/`.\n'
             else
@@ -526,8 +528,7 @@ jobs:
                 printf '> [!CAUTION]\n> This plan replaces or deletes Okta resources. A replaced app gets a new metadata URL, which the GitOps repo'"'"'s secrets then need.\n\n'
               fi
               printf '| Action | Resource |\n|---|---|\n'
-              # Addresses are fixed names from okta/*.tf; anything else is left out.
-              grep -E '^[a-z+-]+'$'\t''[A-Za-z0-9_.]+$' "$changes" | awk -F'\t' '{ printf "| %s | `%s` |\n", $1, $2 }'
+              awk -F'\t' '{ printf "| %s | `%s` |\n", $1, $2 }' "$changes"
             fi
           } > "$RUNNER_TEMP/okta-comment.md"
           older=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
@@ -541,7 +542,7 @@ jobs:
               || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
           done <<< "$older"
           if [ "$EXITCODE" = 1 ]; then
-            echo "::error title=Okta plan failed::see the terraform plan step's log, and run the plan locally for details."
+            echo "::error title=Okta plan failed::run terraform plan in okta/ locally to see why."
             exit 1
           fi
 
