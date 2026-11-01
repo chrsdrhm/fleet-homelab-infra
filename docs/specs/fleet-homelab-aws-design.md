@@ -537,7 +537,7 @@ only read the repo and comment, and can be swapped for another reviewer or
 removed (see `docs/github-setup.md`).
 
 **Claude's review of a new Fleet release.** The daily release check runs in its
-own workflow (`fleet-checks.yml`, job `fleet-release`, 13:47 UTC), apart from the
+own workflow (`fleet-checks.yml`, job `fleet-release`, noon Chicago time), apart from the
 teardown, so a teardown neither delays nor skips it. When it opens or updates its issue, the same job sends Claude the
 release notes for every version in between, the diff of Fleet's `fleetctl new`
 GitOps template between the tags, and both repos' configuration files, in one

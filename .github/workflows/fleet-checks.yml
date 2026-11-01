@@ -16,10 +16,11 @@ name: Fleet checks
 run-name: "${{ github.event_name == 'schedule' && 'Fleet release check' || inputs.action == 'review' && format('Fleet release review: {0} to {1}', inputs.review_from, inputs.review_to) || inputs.after == 'up' && 'Health scan after up' || inputs.after == 'merge' && 'Health scan after apply on merge' || 'Health scan' }}"
 
 on:
-  # Daily. Not time-sensitive, so GitHub starting it late doesn't matter; it runs mid-
-  # morning in Chicago, apart from the nightly teardown.
+  # Daily at noon in Chicago (following daylight saving). Not time-sensitive, so GitHub
+  # starting it late doesn't matter.
   schedule:
-    - cron: "47 13 * * *"
+    - cron: "0 12 * * *"
+      timezone: America/Chicago
   workflow_dispatch:
     inputs:
       action:
