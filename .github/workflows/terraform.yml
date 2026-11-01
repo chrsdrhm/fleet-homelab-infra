@@ -495,9 +495,12 @@ jobs:
           set -e
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" = 1 ]; then
-            # Nothing from the error itself: provider errors can hold the org's URL. It's
-            # one local `terraform plan` in okta/ away.
-            echo "The Okta plan failed. Run terraform plan in okta/ locally to see why."
+            # Provider errors can hold the org's URL, so only the error lines are logged,
+            # with every URL, quoted string, dotted name (hostnames) and Okta ID removed.
+            echo "The Okta plan failed. Its error lines, with names and URLs removed:"
+            grep -A3 -E '^(│ )?Error: ' "$RUNNER_TEMP/okta-plan.txt" | sed -E 's/^│ ?//' | grep -vE '^(--)?$' \
+              | sed -E 's#[A-Za-z]+://[^ ]*#<url>#g; s/"[^"]*"/"…"/g; s/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+/<name>/g; s/\b0[a-z0-9]{2}[A-Za-z0-9]{17}\b/<okta-id>/g' \
+              | cut -c1-160 | head -12 || true
             exit 0
           fi
           # Addresses are fixed names from okta/*.tf; anything else is left out.
@@ -519,7 +522,7 @@ jobs:
           {
             printf '<!-- terraform-plan-okta -->\n### 🔐 Okta plan\n\n'
             if [ "$EXITCODE" = 1 ]; then
-              printf '**The plan failed.** Run `terraform plan` in `okta/` locally to see why (the error isn'"'"'t logged: it can hold the org'"'"'s URL).\n'
+              printf '**The plan failed.** The job log has the error lines with names and URLs removed; run `terraform plan` in `okta/` locally for the whole error.\n'
             elif [ ! -s "$changes" ]; then
               printf '**No changes.** Okta matches `okta/`.\n'
             else
@@ -542,7 +545,7 @@ jobs:
               || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
           done <<< "$older"
           if [ "$EXITCODE" = 1 ]; then
-            echo "::error title=Okta plan failed::run terraform plan in okta/ locally to see why."
+            echo "::error title=Okta plan failed::see the terraform plan step's log (names and URLs removed), or run terraform plan in okta/ locally."
             exit 1
           fi
 
