@@ -6,7 +6,7 @@
 
 **Architecture:** Terraform calls Fleet's own **root module** directly — one module call provisions the VPC, Aurora MySQL, Redis, an ALB, and an ECS Fargate service together, wiring their connection info and security groups automatically. This is a change from an earlier draft of this plan that called the nested `byo-vpc` module and hand-wrote a separate VPC — that split only existed to support NAT-off/public-subnet Fargate, a configuration this plan no longer uses (NAT is on, Fargate is private, which is the root module's own hardcoded default). Using the root module directly is simpler and closer to Fleet's own reference example. SES, MDM, and (planned) Firehose log delivery are added as Fleet's own addon modules; the WAF is a small custom Web ACL (Task 4), and monitoring moved into Grafana (Tasks 5 and 17). A separate `fleetctl new`-scaffolded repo drives Fleet's application config (SSO, teams, policies) via GitHub Actions GitOps. `up`/`down` scripts fully tear down and rebuild the stack each session, preserving actual Fleet data (not just infrastructure) via an Aurora snapshot and an externalized encryption key. The infra repo itself closes its own GitOps loop too (Tasks 15–16): `up`/`down` run on demand from a GitHub Actions workflow assuming an AWS role through OIDC (no long-lived AWS keys in GitHub), never on push, and every pull request gets a lint check and a `terraform plan` posted as a comment before merge — git is the source of truth for infra the same way it is for Fleet's own config, without forcing an apply every time something merges. An optional self-hosted Grafana on my Proxmox host (Task 17, outside AWS; its configuration and dashboards in `grafana/`) rounds this out with a dashboard and alerts over both CloudWatch infra metrics and Fleet's own asset data (hosts, policy compliance, vulnerabilities), reading CloudWatch through an IAM role rather than a stored key.
 
-**Tech Stack:** Terraform 1.14.8 (>= 1.12.0 required), AWS provider 6.x (>= 6.37.0), Cloudflare provider 5.x, Okta provider 7.x, `fleetdm/fleet-terraform` (root module + addons), Fleet and `fleetctl` 4.93 (the server version is in `fleet.Dockerfile`), GitHub Actions (OIDC-federated, no stored AWS credentials), Okta Workforce Identity (free trial converting to the Free Plan).
+**Tech Stack:** Terraform 1.17.1 (>= 1.12.0 required), AWS provider 6.x (>= 6.37.0), Cloudflare provider 5.x, Okta provider 7.x, `fleetdm/fleet-terraform` (root module + addons), Fleet and `fleetctl` 4.93 (the server version is in `fleet.Dockerfile`), GitHub Actions (OIDC-federated, no stored AWS credentials), Okta Workforce Identity (free trial converting to the Free Plan).
 
 **Spec:** `docs/specs/fleet-homelab-aws-design.md`
 
@@ -3053,6 +3053,18 @@ Added 2026-11-01 at my request. The apply on merge applied nothing while the sta
 
 - [x] **Step 1: Build it** (`scripts/stack-targets`, `scripts/down.sh`, the apply on merge in `terraform.yml`), and document it in the README, the setup guide, the spec and `docs/upgrading-fleet.md`.
 - [ ] **Step 2: Test it:** the next merge that changes a kept resource while the stack is down applies only that, and the next `down.sh` still destroys the same resources.
+
+---
+
+### Task 41: Keep Terraform current
+
+Added 2026-11-01 at my request. CI was on Terraform 1.14.8 with 1.17.1 out: Dependabot updates providers, modules and actions, but not Terraform itself, whose version was typed into two `setup-terraform` steps (Dependabot updates an action's version, never its inputs), with only a `required_version` minimum in the `.tf` files.
+
+**Built 2026-11-01:** 1.17.1, read against the 1.15 to 1.17 release notes: nothing breaking for this repo, and 1.17 drops trust in some compromised certificate authorities. The version now lives in `.github/terraform/Dockerfile`, a one-line `FROM hashicorp/terraform:<version>` that's never built: the shared setup action and the lint job read the tag from it, and Dependabot's `docker` updates (in that folder only, so it doesn't scan `fleet.Dockerfile`, whose image has too many tags) open a pull request for a newer release after the usual 7-day cooldown. The image has about 450 tags. Upgrade Terraform locally when that pull request merges (`brew upgrade hashicorp/tap/terraform`).
+
+- [x] **Step 1: Upgrade to 1.17.1** in CI and locally.
+- [x] **Step 2: Let Dependabot manage it** (`.github/terraform/Dockerfile`, read by both workflows; the `docker` entry in `dependabot.yml`).
+- [ ] **Step 3: Test it:** this pull request's lint, plan and apply on merge run on 1.17.1, read from the file, and Dependabot's next `docker` check finishes and finds it current.
 
 ---
 
