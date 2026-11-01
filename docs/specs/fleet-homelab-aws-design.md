@@ -625,11 +625,11 @@ the time by design, a red board usually means "torn down on purpose".
   `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
   (the daily Fleet release check with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down and a nightly check (started at 2:17am
+  merges, `apply` for on-demand up/down and a nightly check (started at 3am
   Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda
-  function and a GitHub App that can only start the check; GitHub's own
-  schedule, 09:17 UTC, is the backup; it acts until 7:59am Chicago time, and
-  only reports, in an issue, if it starts later) that tears the stack down if it was left up and keeps an
+  function and a GitHub App that can only start the check, with alarms emailed
+  when it fails or isn't called; it acts until 7:59am Chicago time, and only
+  reports, in an issue, if started later by hand) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that
