@@ -20,7 +20,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - 1 healthy target.
 - Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet.
 - 4xx: a few are normal (sign-in redirects, scanners that got past the WAF).
-- Response time: average under 0.1 s, maximum about 1 s (cold paths after boot). Just after an `up`, the window holds only a handful of requests, mostly cold, so an average up to about 0.2 s is normal.
+- Response time (the scan reports milliseconds): average under 100 ms, typically a few ms; maximum about 1,000 ms (cold paths after boot). Just after an `up`, the window holds only a handful of requests, mostly cold, so an average up to about 200 ms is normal. An average of 0 with requests in the window is a reading problem, not a fast server.
 - RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
 
 ## 4. Aurora
