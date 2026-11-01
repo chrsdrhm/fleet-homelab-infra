@@ -1,5 +1,5 @@
 // Starts the nightly check: dispatches terraform.yml with action=nightly on main (plan
-// Task 37). EventBridge Scheduler calls it at 2:17am Chicago time, because GitHub's own
+// Task 37). EventBridge Scheduler calls it at 3am Chicago time, because GitHub's own
 // schedule often starts hours late. It signs in as a GitHub App (Actions read and write,
 // installed on this repo only) whose client ID and private key are SSM parameters, set
 // by hand: neither is in Terraform state or the repo. No dependencies: the JWT is signed

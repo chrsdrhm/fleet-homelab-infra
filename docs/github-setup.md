@@ -87,14 +87,14 @@ gh label create allow-destroy --repo $OWNER/fleet-homelab-infra --color B60205 \
   --description "Accept a plan that destroys or replaces a resource that holds data"
 ```
 
-**Nightly teardown.** With CI set up, the Terraform workflow checks every night and runs `down` if the stack is still up. The AWS timer in step 10 starts it at 2:17am Chicago time; without the timer, or if it fails, GitHub's own schedule (09:17 UTC: 4:17am Chicago time, 3:17am in winter) does, as long as GitHub starts it before 8am in Chicago. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the check the next night brings it down as usual. Delete the variable when you're done:
+**Nightly teardown.** With CI set up, the Terraform workflow checks every night and runs `down` if the stack is still up. The AWS timer in step 10 starts it at 3am Chicago time; without the timer, there's no nightly check. To keep the stack up, set `AUTO_DOWN_SKIP_UNTIL` to the last day you want it up; the check the next night brings it down as usual. Delete the variable when you're done:
 
 ```bash
 gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homelab-infra   # up through Wednesday the 14th; down early on the 15th
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
-The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when the nightly check starts too late to tear down a stack that's up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
+The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when a nightly check started by hand after 8am finds the stack up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
 
 GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 
@@ -263,9 +263,9 @@ It signs in as a second Okta service app that can only read. The one you apply w
 - **Forks get no secrets,** so their pull requests skip the Okta plan. Dependabot's pull requests skip it too, unless you also set the four as Dependabot secrets.
 - **Only `okta.com` orgs:** the job uses the default `okta_base_url`.
 
-## 10. Optional: start the nightly check on time
+## 10. Start the nightly check
 
-GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack left up can stay up all day. `nightly.tf` adds a timer in AWS that starts the check at 2:17am Chicago time all year: an EventBridge Scheduler schedule calls a small Lambda function (`lambda/nightly/index.mjs`), which signs in as a GitHub App and starts `terraform.yml` with `action=nightly`. The workflow treats every run the app starts as the nightly check, whatever it asks for, so the app can't start an `up` or a `down`. GitHub's schedule stays as the backup. It all costs nothing at this volume (free tiers), and stays through teardowns.
+GitHub often starts scheduled runs hours late, past the 8am cutoff, so the nightly check doesn't use one. `nightly.tf` adds a timer in AWS that starts the check at 3am Chicago time all year: an EventBridge Scheduler schedule calls a small Lambda function (`lambda/nightly/index.mjs`), which signs in as a GitHub App and starts `terraform.yml` with `action=nightly`. The workflow treats every run the app starts as the nightly check, whatever it asks for, so the app can't start an `up` or a `down`. It all costs nothing at this volume (free tiers), and stays through teardowns.
 
 **Set it up:**
 1. **Apply the CI roles' new scope** locally (CI can't change its own roles), before the pull request that adds the timer merges: `terraform apply -target=aws_iam_policy.github_actions_apply -target=aws_iam_policy.github_actions_plan`.
@@ -289,7 +289,7 @@ GitHub often starts scheduled runs hours late, past the 8am cutoff, so a stack l
 **Security:**
 - **The app can only start the nightly check.** Its token is for this repo with Actions write only, the function revokes it when done, and the workflow runs anything the app starts as `nightly`.
 - **The key never leaves AWS:** an SSM SecureString that only the function's role can read, not in Terraform state, the repo or GitHub.
-- **A failed start emails you:** an alarm on the function's errors, and on the scheduler giving up. The backup schedule still runs.
+- **A failed or missed start emails you:** one alarm on the function's errors, and one when it hasn't been called in 26 hours (a missed 3am run alarms around 5am).
 
 ## 11. Optional: upgrade pull requests for new Fleet releases
 
@@ -317,6 +317,6 @@ The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.
 5. **Test it:** `gh workflow run fleet-checks.yml --repo $OWNER/fleet-homelab-infra -f action=release` runs the release check now. If `fleet.Dockerfile` is behind, it opens the pull request; if it's current, the run says so and opens nothing.
 
 **Security:**
-- **The app can't change `main`.** It writes only to its own branch; `main` takes changes only through a pull request with passing checks, and merging is yours.
+- **The app can't change `main`.** It writes only to its own `fleet-release-*` branches; `main` takes changes only through a pull request with passing checks, and merging is yours.
 - **Its token never meets the release notes:** it's made after Claude's review, and only the last step holds it. Claude's text goes only into the pull request's body, with `@mentions` broken.
 - **Claude's pull request review skips the app's pull requests** (it already carries the release review); comment `@claude` on it to have one.

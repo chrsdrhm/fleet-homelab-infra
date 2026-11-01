@@ -1470,6 +1470,8 @@ git add scripts/
 git commit -m "Add up/down cost-control scripts with Aurora snapshot restore"
 ```
 
+**Changed 2026-11-01:** `down.sh` treats only `DBClusterNotFoundFault` as "no database". Any other error checking for the cluster stops it before anything is destroyed. Before, any error read as "no cluster" and skipped the snapshot, and the module skips Aurora's final snapshot (`skip_final_snapshot` defaults to `true`), so a failed check during a teardown would have deleted the database with no snapshot.
+
 ---
 
 ### Task 15: Remote execution via GitHub Actions (OIDC) — no long-lived AWS keys in GitHub
@@ -2940,7 +2942,7 @@ Added at my request. If the 2am check tears the stack down, the stack was left u
 
 - [x] **Step 1: Choose the channel.** Simplest: the run opens a GitHub issue ("The nightly check tore down the stack", with the time and the run link); GitHub notifies the repository's owner by email and in the mobile app. Alternatives: an email through the budget's address or an SNS topic kept outside the stack. Prefer what needs no new secret.
 - [x] **Step 2: Build it** in the `apply` job: only for `schedule` runs that actually ran `down`, never for skipped nights; the issue needs `issues: write` on that job only. The next session's `/session-start` closes it.
-- [ ] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. (Still open: the helper is tested and the docs are done, but the nightly path itself first runs for real the next time the stack is left up at 2am.) *2026-10-19:* the stack was left up for it, but GitHub hadn't started the 07:17 UTC run by 13:55 UTC. Task 37 starts the check from an AWS timer instead.
+- [x] **Step 3: Test it** with a manual run that imitates the nightly path, then document it in the setup guide's teardown section. *2026-10-19:* the stack was left up for it, but GitHub hadn't started the 07:17 UTC run by 13:55 UTC. Task 37 starts the check from an AWS timer instead. *2026-11-01:* the nightly path ran for real, started by Task 37's timer at 2:17am, and tore the stack down.
 
 **Widened 2026-10-18, at my request:** GitHub started both scheduled checks of 2026-10-18 almost 5 hours late (7:03am and 7:36am Chicago), both outside the 2:00-5:59am window, so neither acted and the stack stayed up all night without a word. The two delays were within half an hour of each other, so a third schedule wouldn't have helped. Now:
 - **One schedule,** 07:17 UTC (2:17am Chicago in summer, 1:17am in winter), instead of two times with a daylight-saving check.
@@ -3000,15 +3002,17 @@ Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run st
 **Built 2026-10-31 (`nightly.tf`, `lambda/nightly/index.mjs`):** in the main root, kept through teardowns (`down.sh` doesn't target it). The function (Node.js 24, arm64, no dependencies) reads the app's client ID (String) and key (SecureString) from two SSM parameters set by hand, so neither is in state; its role reads only those two (decrypting only via SSM) and writes its own logs. It asks for an installation token limited to this repo and Actions write, dispatches, then revokes the token. The workflow forces `nightly` for any run whose `triggering_actor` is the `NIGHTLY_APP_ACTOR` variable. Failure notice: CloudWatch alarms on the function's `Errors` and Scheduler's `InvocationDroppedCount`, to an SNS topic emailing `budget_alert_email`. The GitHub schedule moved from 07:17 to 09:17 UTC, so it runs after the timer's check in both seasons and still lands in the window. `oidc.tf`: the apply role gets `lambda:*`, `scheduler:*` and `sns:*` on `fleet-homelab-*` resources only, and may pass roles to Lambda and Scheduler; the plan role gets their reads. `terraform test` pins the function's and schedule's permissions and the time.
 
 - [x] **Step 1: A `nightly` mode for a dispatched run.** Add `nightly` to the `action` input of `terraform.yml`, running the same "Decide what to run" logic as the schedule: the skip variable, the 8am cutoff, then down if up, and the snapshot and release checks. The release check and review are in the `fleet-release` job since 2026-10-28 (Task 38), and in their own workflow, `fleet-checks.yml`, with their own daily schedule since 2026-10-29, so the timer doesn't need to start them. A run started by the timer's app is always treated as `nightly`, whatever input it sends: the app can dispatch any workflow input, so the workflow, not the app, limits what it can do.
-- [ ] **Step 2: A GitHub App for the timer,** like the GitOps dispatch app (Task 15): Actions read and write only, installed on this repo only, nothing that expires. Its private key goes in an SSM Parameter Store `SecureString` (standard tier, free), never in Terraform state or the repo. Set by hand from the downloaded `.pem`, which is then deleted.
+- [x] **Step 2: A GitHub App for the timer,** like the GitOps dispatch app (Task 15): Actions read and write only, installed on this repo only, nothing that expires. Its private key goes in an SSM Parameter Store `SecureString` (standard tier, free), never in Terraform state or the repo. Set by hand from the downloaded `.pem`, which is then deleted.
 - [x] **Step 3: The timer:**
   - An EventBridge Scheduler schedule `cron(17 2 * * ? *)` in the `America/Chicago` time zone. Scheduler handles daylight saving itself, so it's 2:17am all year, unlike GitHub's UTC-only cron.
   - A small Lambda function (Node.js: it signs the app's JWT with the built-in `crypto`, so there are no dependencies to package) that reads the key, gets an installation token, and dispatches `terraform.yml` with `action=nightly` on `main`.
   - Its role may read only that one parameter and write its own logs. The scheduler's role may only invoke that function.
   - **Kept through teardowns** (outside `down.sh`'s targets): it has to fire while the stack is up, and a check against a stack that's down costs one short run. Decide whether it belongs in the main root or its own small root, and add the new services (Scheduler, Lambda, SSM) to the apply role's scope in `oidc.tf`.
 - [x] **Step 4: Failure notice.** If the function fails (a bad key, GitHub down), it must be seen: a failed invocation goes to a dead-letter queue or a CloudWatch alarm, or the function opens the "The nightly teardown didn't run" issue itself. The GitHub schedule's backup run also catches it in the morning.
-- [ ] **Step 5: Test it.** A one-off schedule a few minutes ahead (or a test invoke) starts a `nightly` run, which tears down a running stack; with the stack down it only reports. Check the run's actor is the app, and that the backup scheduled run later does nothing.
+- [x] **Step 5: Test it.** A one-off schedule a few minutes ahead (or a test invoke) starts a `nightly` run, which tears down a running stack; with the stack down it only reports. Check the run's actor is the app, and that the backup scheduled run later does nothing. *2026-10-31:* a test invoke with the skip variable set started a `nightly` run as the app, which skipped as expected. *2026-11-01:* the first scheduled run fired at 2:17am Chicago time (the night daylight saving ended), started as the app, and tore the stack down in about 19 minutes. GitHub started the backup run about 7 hours late, and it found the stack down. The function used 121 MB of its 128 MB, so its memory is now 256 MB.
 - [x] **Step 6: Document it:** the spec (CI and Cost: expected to stay within the free tiers), the README's nightly bullet, `docs/github-setup.md` (the app and the parameter), the setup guide, and `/session-start` (the check now runs at 2:17am Chicago time all year).
+
+**Changed 2026-11-01:** GitHub's backup schedule is removed. It started its run about 7 hours late the first night, past the 8am cutoff, so it could only report, never tear down. One new alarm replaces both it and the scheduler's dropped-call alarm: the function not called in 26 hours (a run's gap is 23 to 25 hours around daylight saving changes), which also catches a disabled or deleted schedule. The timer moves to 3am, `cron(0 3 * * ? *)`: :17 only spread load for GitHub, and 2:00 to 2:59am doesn't exist the night clocks spring forward, when Scheduler skips the run. GitHub setup step 10 is no longer optional: without the timer there's no nightly check.
 
 ---
 
@@ -3038,6 +3042,18 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 - [x] **Step 2: The snapshot on merge** (`terraform.yml`'s apply on merge).
 - [x] **Step 3: Document it:** `docs/github-setup.md` step 11 and the secrets, `docs/upgrading-fleet.md`, the setup guide, the spec, the README, `AGENTS.md`, `/fleet-upgrade` and `/session-start`.
 - [ ] **Step 4: Test it:** create the app and its secrets, run `action=release`, and check the pull request for 4.94.0: its plan and lint checks run, and the body has the review. Merge it with the stack up, and check that the apply on merge takes the snapshot before applying.
+---
+
+### Task 42: Narrow the apply role's IAM to the stack's roles
+
+Added 2026-11-01 from a code review: the apply role could create any `fleet*` or `terraform-*` role with any inline policy, pass it to Lambda or ECS (which it can also start), and so become an account admin in a few calls from any run on `main`. A permissions boundary required on `iam:CreateRole` is the usual fix, but Fleet's module creates its ECS execution role with no boundary input, so requiring one would break the next `up`.
+
+**Built 2026-11-01:** roles by exact name instead (`local.ci_managed_roles` in `oidc.tf`: `fleet-role`, `fleet-execution-role` and the nightly timer's two), each passable only to its own service (ECS tasks, Lambda, Scheduler). Managed policies keep `fleet*` and `terraform-*` (the MDM and SES addons' generated names); a policy grants nothing until attached, and only those four roles can have one attached. The unused Firehose and RDS-monitoring PassRole entries are gone; Task 12 adds Firehose's back. The residual, documented in the spec: CI can still widen Fleet's own two roles, which it must manage to deploy Fleet. A `terraform test` run pins the role list and the PassRole mapping.
+
+- [x] **Step 1: Narrow the roles and PassRole** (`oidc.tf`), with `apply_role_manages_only_the_stack_roles` in `security.tftest.hcl` (checked to fail with the old `role/fleet*` pattern).
+- [ ] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
+- [ ] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles).
+- [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
 
 ---
 

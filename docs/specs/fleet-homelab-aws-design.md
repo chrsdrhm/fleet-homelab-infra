@@ -503,10 +503,13 @@ ElastiCache, ECS + Application Auto Scaling, ELB, WAFv2, CloudWatch/Logs, SES,
 Route 53, ACM, Firehose, Budgets), with Secrets Manager limited to `fleet*`
 secrets, S3 limited to this project's buckets (`fleet-homelab-*` and the ECS
 module's `fleet-software-installers-*`), KMS use limited by `kms:ViaService`,
-and IAM *write* limited to role/policy names the stack creates (`fleet*`, plus
-`terraform-*` — the AWS provider's auto-generated name for the addons' unnamed
-Firehose/SES/MDM roles and policies). `iam:PassRole` is limited to the three
-consuming services. Explicit `Deny`s close the escalation paths a service-level
+and IAM *write* limited to the roles the stack creates, **by exact name**
+(`local.ci_managed_roles` in `oidc.tf`: Fleet's `fleet-role` and
+`fleet-execution-role`, and the nightly timer's function and scheduler roles), and to
+managed policies named `fleet*` or `terraform-*` (the AWS provider's generated name
+for the MDM and SES addons' policies). `iam:PassRole` passes each of those roles only
+to its own service: Fleet's to ECS tasks, the timer's to Lambda and Scheduler. A new
+role in the stack must be added to that list. Explicit `Deny`s close the escalation paths a service-level
 allow list leaves open: changing any of the CI roles or their policies (so changes to
 `oidc.tf` are applied locally by an admin, never by CI), `sts:AssumeRole`
 (same-account role trust needs no identity-policy allow), attaching a
@@ -517,11 +520,12 @@ review found the first draft — broad IAM write on `*` with only
 any role's trust policy and become admin; the above closes that.
 
 This is *scoped*, not formally least-privilege: within each service, actions
-are still broad (`rds:*`, `ecs:*`), and one residual remains — a compromised
-apply token can still create a new `fleet*`/`terraform-*` role and run code as
-it in an ECS task it also defines. Closing that needs a permissions-boundary
-condition on every role it creates, and Fleet's modules expose no
-`permissions_boundary` input. It can also read the `fleet*` secrets and the
+are still broad (`rds:*`, `ecs:*`), and one residual remains. A compromised
+apply token can't create a new role, but it can still widen Fleet's own task or
+execution role (CI has to manage their policies to deploy Fleet) and run code as
+it in an ECS task it defines. Closing that needs a permissions boundary required
+on every role CI creates, and Fleet's module creates its execution role with no
+`permissions_boundary` input (asking Fleet for one is on the list, plan Task 42 Step 4). It can also read the `fleet*` secrets and the
 state. The mitigation that fits is the trust policy — only a manual dispatch on
 `main` of this single-owner repo can assume the role — with an optional
 stronger gate (a GitHub Environment with a required reviewer) not built here.
@@ -625,11 +629,11 @@ the time by design, a red board usually means "torn down on purpose".
   `up`/`down` operational scripts, and two GitHub Actions workflows: `fleet-checks.yml`
   (the daily Fleet release check, which opens an upgrade pull request with Claude's review, and the health scan) and
   `terraform.yml` ( `lint` and `plan` on pull requests, `apply-on-merge` on
-  merges, `apply` for on-demand up/down and a nightly check (started at 2:17am
+  merges, `apply` for on-demand up/down and a nightly check (started at 3am
   Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda
-  function and a GitHub App that can only start the check; GitHub's own
-  schedule, 09:17 UTC, is the backup; it acts until 7:59am Chicago time, and
-  only reports, in an issue, if it starts later) that tears the stack down if it was left up and keeps an
+  function and a GitHub App that can only start the check, with alarms emailed
+  when it fails or isn't called; it acts until 7:59am Chicago time, and only
+  reports, in an issue, if started later by hand) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that
