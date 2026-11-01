@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Asks Claude to review the Fleet releases after <from>, up to and including <to>,
-# against this setup (plan Task 38), and prints the review as Markdown. The nightly run
-# adds it to the "A newer Fleet release is available" issue; /fleet-upgrade's step 2
+# against this setup (plan Task 38), and prints the review as Markdown. The daily release
+# check puts it in the upgrade pull request's body (scripts/release-pr.sh); /fleet-upgrade's step 2
 # does the same review by hand, and sorts what it finds the same way.
 #
 #   release-review.sh <from> <to> <gitops-dir> [--context-only]
@@ -178,7 +178,7 @@ if [ "$(jq -r .stop_reason <<< "$response")" = max_tokens ]; then
   review+=$'\n\n_The review hit its length limit and may be cut short._'
 fi
 
-# The review goes into a public issue and comes from untrusted release notes, sanitized
+# The review goes into a public pull request and comes from untrusted release notes, sanitized
 # like health-review.sh's: break @mentions so it can't notify anyone, escape all HTML (so
 # it can't hide text or fake the job's "release-review" marker, which would skip a later
 # review) and every square bracket (so no link, image or link definition can form), and

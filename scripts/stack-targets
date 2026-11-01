@@ -1,0 +1,11 @@
+# The resources down.sh destroys: the expensive part of the stack. Everything else in
+# Terraform survives a teardown (Route 53, ACM, secrets, buckets, SES, the budget, the
+# nightly timer), and the apply on merge applies changes to it even while the stack is
+# down (.github/workflows/terraform.yml). One Terraform address per line; a module
+# covers everything in it.
+aws_route53_record.fleet_alb
+aws_cloudwatch_log_group.container_insights
+module.migrations
+aws_wafv2_web_acl_association.fleet_homelab
+aws_wafv2_web_acl.fleet_homelab
+module.fleet
