@@ -3029,13 +3029,13 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 
 ### Task 41: Keep Terraform current
 
-Added 2026-11-01 at my request. CI was on Terraform 1.14.8 with 1.17.1 out: Dependabot updates providers, modules and actions, but not Terraform itself, whose version is an input to `setup-terraform` and a `required_version` minimum.
+Added 2026-11-01 at my request. CI was on Terraform 1.14.8 with 1.17.1 out: Dependabot updates providers, modules and actions, but not Terraform itself, whose version was typed into two `setup-terraform` steps (Dependabot updates an action's version, never its inputs), with only a `required_version` minimum in the `.tf` files.
 
-**Built 2026-11-01:** both pins (the shared setup action, and the lint job, which sets up Terraform itself) moved to 1.17.1, read against the 1.15 to 1.17 release notes: no breaking changes for this repo, and 1.17 drops trust in some compromised certificate authorities. A daily `terraform-version` job in `fleet-checks.yml` keeps an issue, "A newer Terraform is available", open while HashiCorp's latest release is newer than the setup action's pin, warns if the two pins differ, and closes the issue once they catch up. Upgrade Terraform locally at the same time.
+**Built 2026-11-01:** 1.17.1, read against the 1.15 to 1.17 release notes: nothing breaking for this repo, and 1.17 drops trust in some compromised certificate authorities. The version now lives in `.github/terraform/Dockerfile`, a one-line `FROM hashicorp/terraform:<version>` that's never built: the shared setup action and the lint job read the tag from it, and Dependabot's `docker` updates (in that folder only, so it doesn't scan `fleet.Dockerfile`, whose image has too many tags) open a pull request for a newer release after the usual 7-day cooldown. The image has about 450 tags. Upgrade Terraform locally when that pull request merges (`brew upgrade hashicorp/tap/terraform`).
 
 - [x] **Step 1: Upgrade to 1.17.1** in CI and locally.
-- [x] **Step 2: The daily check** (`terraform-version` in `fleet-checks.yml`).
-- [ ] **Step 3: Test it:** this pull request's plan and lint run on 1.17.1, and the first scheduled run finds Terraform current and opens nothing.
+- [x] **Step 2: Let Dependabot manage it** (`.github/terraform/Dockerfile`, read by both workflows; the `docker` entry in `dependabot.yml`).
+- [ ] **Step 3: Test it:** this pull request's lint, plan and apply on merge run on 1.17.1, read from the file, and Dependabot's next `docker` check finishes and finds it current.
 
 ---
 

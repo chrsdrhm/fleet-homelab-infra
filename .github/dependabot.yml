@@ -11,6 +11,14 @@ updates:
     # and pulled before it reaches this repo.
     cooldown:
       default-days: 7
+  # The Terraform version CI uses: the tag in .github/terraform/Dockerfile, which the
+  # workflows read. Its own folder, so fleet.Dockerfile (too many tags) isn't scanned.
+  - package-ecosystem: docker
+    directory: /.github/terraform
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
   - package-ecosystem: terraform
     directories:
       - /

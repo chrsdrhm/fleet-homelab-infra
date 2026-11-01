@@ -93,10 +93,22 @@ jobs:
           persist-credentials: false
           fetch-depth: 0 # the private-values check diffs against the base branch
 
+      # The version is the tag in .github/terraform/Dockerfile, which Dependabot updates.
+      - name: Read the Terraform version
+        id: terraform-version
+        shell: bash
+        run: |
+          version=$(sed -n 's|^FROM hashicorp/terraform:\([0-9.]*\)$|\1|p' "$GITHUB_WORKSPACE/.github/terraform/Dockerfile")
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Terraform version::Couldn't read it from .github/terraform/Dockerfile."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: "1.17.1"
+          terraform_version: ${{ steps.terraform-version.outputs.version }} # from .github/terraform/Dockerfile (step above)
           terraform_wrapper: false
 
       # Everything else lives in checks/ (see checks/README.md): the same script runs

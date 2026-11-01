@@ -455,8 +455,11 @@ read-only by default, third-party actions are pinned to commit SHAs, and
 `main` is protected by a ruleset with no bypass, not even for the owner:
 every change, docs included, goes through a pull request whose
 `terraform-lint` and `terraform-plan` checks pass (the GitOps repo likewise
-requires its `fleet-gitops` check). Dependabot keeps actions and providers
-current, and its pull requests get a plan too. Nothing personal or secret is committed:
+requires its `fleet-gitops` check). Dependabot keeps actions, providers, modules and
+the Terraform version current (the last through `.github/terraform/Dockerfile`, a
+one-line `FROM hashicorp/terraform:<version>` the workflows read, since a version
+passed to `setup-terraform` isn't something Dependabot can update), and its pull
+requests get a plan too. Nothing personal or secret is committed:
 the commit author is the GitHub noreply address, and the budget-alert email,
 license key and Cloudflare token live only in gitignored `terraform.tfvars`
 and GitHub secrets. The AWS trust policy is the second lock: the apply role
