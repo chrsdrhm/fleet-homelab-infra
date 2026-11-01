@@ -51,13 +51,16 @@ else
 fi
 
 # Terraform loads terraform.tfvars itself (locally); CI passes TF_VAR_* env instead.
-terraform destroy -input=false -auto-approve \
-  -target=aws_route53_record.fleet_alb \
-  -target=aws_cloudwatch_log_group.container_insights \
-  -target=module.migrations \
-  -target=aws_wafv2_web_acl_association.fleet_homelab \
-  -target=aws_wafv2_web_acl.fleet_homelab \
-  -target=module.fleet
+# What to destroy is listed in scripts/stack-targets, which the apply on merge also reads.
+TARGETS=()
+while read -r address; do
+  TARGETS+=("-target=$address")
+done < <(grep -v -e '^#' -e '^$' scripts/stack-targets)
+if [ "${#TARGETS[@]}" = 0 ]; then
+  echo "scripts/stack-targets lists nothing to destroy." >&2
+  exit 1
+fi
+terraform destroy -input=false -auto-approve "${TARGETS[@]}"
 
 # ECS Container Insights keeps writing while the cluster shuts down, so AWS re-creates
 # this log group (untagged) right after Terraform deletes it. Left behind, it makes the

@@ -40,7 +40,7 @@ Before merging, make sure the plan is against the stack as it is now. If the sta
 ## 4. Merge, and check it
 
 - **Stack up:** the merge applies it, after the snapshot. Watch the **Terraform apply on merge** run in the Actions tab.
-- **Stack down:** nothing happens until the next `up`, which restores the latest snapshot and migrates it.
+- **Stack down:** Fleet isn't upgraded until the next `up`, which restores the latest snapshot and migrates it.
 
 Then check:
 - The server reports the new version. In a separate terminal, with your Fleet API token: `curl -s -H "Authorization: Bearer $TOKEN" https://<fleet_subdomain>/api/v1/fleet/version | jq .version`

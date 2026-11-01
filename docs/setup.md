@@ -139,7 +139,7 @@ With it, every pull request is checked before it can merge, and the results land
 - **Terraform plan:** exactly what will change in AWS, with secrets masked, and a failed check if the change would destroy data.
 - **Claude review (optional):** a ✅ / ⚠️ / ❌ verdict against Fleet's approach and AWS and endpoint security baselines; comment `@claude` to review again after a fix.
 - **Claude on the running stack (optional):** after every `up` and every change that goes live, a read-only health scan that Claude compares with what's normal, and a Claude review of each new Fleet release against this setup. Both use the Claude API (cents a month, billed separately from a Claude subscription), signing in with workload identity federation, with no API key ([GitHub setup steps 7 and 8](github-setup.md#7-optional-claude-reviews-new-fleet-releases)).
-- **Changes go live on merge** while the stack is up (while it's down, the next `up` applies them), and **`up` and `down` run from GitHub**, without your terminal.
+- **Changes go live on merge** while the stack is up (while it's down, only changes to what a teardown keeps, such as DNS, the budget and the nightly timer, go live; the next `up` applies the rest), and **`up` and `down` run from GitHub**, without your terminal.
 
 See it on closed example pull requests: in infra, [a change with its plan and review](https://github.com/chrsdrhm/fleet-homelab-infra/pull/47) (including an `@claude` re-review after a fix) and [a lint failure](https://github.com/chrsdrhm/fleet-homelab-infra/pull/44); in GitOps, [a new policy with its review](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/27) and [a lint failure on a private value](https://github.com/chrsdrhm/fleet-homelab-gitops/pull/30).
 

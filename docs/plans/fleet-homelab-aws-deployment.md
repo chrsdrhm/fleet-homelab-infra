@@ -3045,6 +3045,17 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 
 ---
 
+### Task 40: Apply what a teardown keeps, even while the stack is down
+
+Added 2026-11-01 at my request. The apply on merge applied nothing while the stack was down, including changes to resources a teardown keeps, so the nightly timer's 2026-11-01 changes waited for the next `up`.
+
+**Built 2026-11-01:** `down.sh`'s targets moved to `scripts/stack-targets`, which `down.sh` and the apply on merge both read. With the stack down, the apply on merge plans `main`, then plans again targeting only the changed resources not covered by that list. It applies nothing if the targeted plan would still change a stack resource (a dependency), and the data-loss guard runs as before. No health scan, and no pre-upgrade snapshot (Task 39), since Fleet and its database aren't running.
+
+- [x] **Step 1: Build it** (`scripts/stack-targets`, `scripts/down.sh`, the apply on merge in `terraform.yml`), and document it in the README, the setup guide, the spec and `docs/upgrading-fleet.md`.
+- [ ] **Step 2: Test it:** the next merge that changes a kept resource while the stack is down applies only that, and the next `down.sh` still destroys the same resources.
+
+---
+
 ### Task 42: Narrow the apply role's IAM to the stack's roles
 
 Added 2026-11-01 from a code review: the apply role could create any `fleet*` or `terraform-*` role with any inline policy, pass it to Lambda or ECS (which it can also start), and so become an account admin in a few calls from any run on `main`. A permissions boundary required on `iam:CreateRole` is the usual fix, but Fleet's module creates its ECS execution role with no boundary input, so requiring one would break the next `up`.

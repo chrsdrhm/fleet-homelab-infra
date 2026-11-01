@@ -21,8 +21,9 @@
 #           the nightly run lists kept snapshots older than 14 days in another
 #           (scripts/notify-issue.sh).
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
-#           plan and apply main, so a change goes live on merge; if it's down, nothing
-#           happens (the next up applies main). The data-loss guard runs again here.
+#           plan and apply main, so a change goes live on merge; if it's down, only what
+#           survives a teardown is applied (not scripts/stack-targets), and the next up
+#           applies the rest. The data-loss guard runs again here.
 #           A change to fleet.Dockerfile (a Fleet upgrade) snapshots the database first.
 #           When it changed something, it starts a health scan (fleet-checks.yml).
 # AWS access is keyless (OIDC). The apply role in oidc.tf only trusts runs on main,
@@ -846,7 +847,8 @@ jobs:
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
 
       # down.sh destroys module.fleet, so its absence from the state means the stack is
-      # down. Applying then would build the whole stack, so this waits for the next up.
+      # down. Applying everything then would build the whole stack, so only what survives
+      # a teardown is applied (the plan below); the rest waits for the next up.
       - name: Check whether the stack is up
         id: stack
         run: |
@@ -857,16 +859,19 @@ jobs:
             echo "up=true" >> "$GITHUB_OUTPUT"
           else
             echo "up=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Stack is down::Nothing applied. The next up applies main, including this change."
           fi
 
-      # The same data-loss guard as the pull request's check: a plan that destroys or
-      # replaces a resource holding data stops here unless the merged pull request had
-      # the allow-destroy label.
+      # With the stack down, a second plan targets only the changed resources that survive
+      # a teardown (everything but scripts/stack-targets, what down.sh destroys: the
+      # nightly timer and its alarms, the budget, DNS, secrets, buckets), so they don't
+      # wait for the next up; if it would still touch the stack (a dependency), nothing
+      # is applied. Then the same data-loss guard as the pull request's check: a plan
+      # that destroys or replaces a resource holding data stops here unless the merged
+      # pull request had the allow-destroy label.
       - name: Plan
         id: plan
-        if: steps.stack.outputs.up == 'true'
         env:
+          UP: ${{ steps.stack.outputs.up }}
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
           TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
@@ -888,6 +893,39 @@ jobs:
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=No changes::main matches what's deployed."
             exit 0
+          fi
+          # The changed resources by whether down.sh destroys them ("stack") or not ("kept").
+          changed() {
+            terraform show -json tfplan | jq -r --arg want "$1" --rawfile targets scripts/stack-targets '
+              ($targets | split("\n") | map(select(length > 0 and (startswith("#") | not)))) as $stack
+              | .resource_changes[]?
+              | select(.change.actions != ["no-op"] and .change.actions != ["read"])
+              | .address as $a
+              | ([$stack[] | . as $t | $a == $t or ($a | startswith($t + ".")) or ($a | startswith($t + "["))] | any) as $in_stack
+              | select(($want == "stack") == $in_stack)
+              | $a'
+          }
+          if [ "$UP" != true ]; then
+            mapfile -t kept < <(changed kept)
+            if [ "${#kept[@]}" = 0 ]; then
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Stack is down::Nothing outside the stack changed, so nothing was applied. The next up applies main, including this change."
+              exit 0
+            fi
+            targets=()
+            for address in "${kept[@]}"; do targets+=("-target=$address"); done
+            set +e
+            terraform plan -input=false -detailed-exitcode -out=tfplan "${targets[@]}"
+            code=$?
+            set -e
+            [ "$code" != 1 ] || exit 1
+            if [ "$code" = 0 ] || [ -n "$(changed stack)" ]; then
+              changed stack
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Stack is down::Applying what survives a teardown would also change the stack, so nothing was applied. The next up applies main."
+              exit 0
+            fi
+            echo "::notice title=Stack is down::Applying only what survives a teardown: ${kept[*]}. The next up applies the rest."
           fi
           # If the stack went down between the check above and this plan, the plan would
           # build it all: creating the ECS cluster or the database means exactly that.
@@ -919,7 +957,7 @@ jobs:
       # rollback has a restore point. Kept until deleted (down.sh prunes only teardown
       # snapshots); the nightly "Kept snapshots" issue lists it after 14 days.
       - name: Snapshot before a Fleet upgrade
-        if: steps.plan.outputs.changes == 'true'
+        if: steps.plan.outputs.changes == 'true' && steps.stack.outputs.up == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.before }}
@@ -955,7 +993,7 @@ jobs:
       # A change that went live (a Fleet upgrade, say) gets the same health scan as an
       # up, once ECS has finished rolling it out. Best effort, like the up's.
       - name: Start the health scan
-        if: steps.plan.outputs.changes == 'true'
+        if: steps.plan.outputs.changes == 'true' && steps.stack.outputs.up == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
