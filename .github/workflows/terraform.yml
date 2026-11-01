@@ -601,6 +601,12 @@ jobs:
             echo "action=$ACTION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Compared as text, so only a real YYYY-MM-DD date counts: anything else (a typo,
+          # "tomorrow") would compare as later than every date and skip every night.
+          if [ -n "$SKIP_UNTIL" ] && [[ ! "$SKIP_UNTIL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::warning title=Skip variable ignored::AUTO_DOWN_SKIP_UNTIL isn't a date like 2026-11-05, so the check runs as usual. Fix or delete it."
+            SKIP_UNTIL=""
+          fi
           today=$(TZ=America/Chicago date +%F)
           if [ -n "$SKIP_UNTIL" ] && [[ ! "$today" > "$SKIP_UNTIL" ]]; then
             echo "::notice title=Nightly teardown skipped::AUTO_DOWN_SKIP_UNTIL is $SKIP_UNTIL, so the stack stays up tonight."
