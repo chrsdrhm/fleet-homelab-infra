@@ -14,11 +14,12 @@
 #           them. okta/ is still applied locally.
 #  - apply: started by hand (up or down with the apply role), and nightly, when it
 #           tears the stack down if it was left up. The nightly check is started at
-#           2:17am Chicago time by an AWS timer (nightly.tf: a GitHub App dispatching
-#           action=nightly), with GitHub's own schedule as a later backup (or, if GitHub started it after
-#           7:59am, opens an issue saying it's still up). A failed down (either kind)
-#           opens an issue that the next successful down closes, and the nightly run
-#           lists kept snapshots older than 14 days in another (scripts/notify-issue.sh).
+#           3am Chicago time by an AWS timer (nightly.tf: a GitHub App dispatching
+#           action=nightly), which emails if it didn't run. A nightly check started by
+#           hand after 7:59am only opens an issue saying the stack is still up. A failed
+#           down (either kind) opens an issue that the next successful down closes, and
+#           the nightly run lists kept snapshots older than 14 days in another
+#           (scripts/notify-issue.sh).
 #  - apply-on-merge: on every push to main (a merged pull request): if the stack is up,
 #           plan and apply main, so a change goes live on merge; if it's down, nothing
 #           happens (the next up applies main). The data-loss guard runs again here.
@@ -29,7 +30,7 @@
 # the deployment come from secrets, which GitHub masks in these public logs. Forks get
 # no secrets, so their plan is skipped; Dependabot PRs use Dependabot secrets.
 name: Terraform
-run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || (github.event_name == 'schedule' || inputs.action == 'nightly' || (vars.NIGHTLY_APP_ACTOR != '' && github.triggering_actor == vars.NIGHTLY_APP_ACTOR)) && 'Terraform nightly check (down if up)' || format('Terraform {0}', inputs.action) }}"
+run-name: "${{ github.event_name == 'pull_request' && format('Terraform plan: {0}', github.event.pull_request.title) || github.event_name == 'push' && 'Terraform apply on merge' || (inputs.action == 'nightly' || (vars.NIGHTLY_APP_ACTOR != '' && github.triggering_actor == vars.NIGHTLY_APP_ACTOR)) && 'Terraform nightly check (down if up)' || format('Terraform {0}', inputs.action) }}"
 
 on:
   pull_request:
@@ -39,13 +40,6 @@ on:
     branches: [main]
     # Docs-only merges change nothing in AWS.
     paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
-  # The backup for the AWS timer (nightly.tf), which starts the nightly check at 2:17am
-  # Chicago time: if the timer failed, this tears the stack down, or reports it up if it
-  # starts after 7:59am. Cron is UTC and doesn't follow daylight saving: 09:17 UTC is
-  # 4:17am in Chicago in summer (CDT) and 3:17am in winter. :17, not :00: GitHub delays
-  # scheduled runs most at the top of the hour.
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
     inputs:
       action:
@@ -230,12 +224,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 80); do
-            busy=0
-            for event in workflow_dispatch schedule; do
-              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
-              busy=$((busy + n))
-            done
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30
@@ -563,7 +553,7 @@ jobs:
 
   apply:
     name: terraform-apply
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 90
     permissions:
@@ -615,11 +605,10 @@ jobs:
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # GitHub can start a scheduled run hours late (once at 11:34am, once at 7:03am);
-          # the timer's run is on time.
+          # The timer's run is on time; a nightly check started by hand in the day only reports.
           hour=$(TZ=America/Chicago date +%-H)
           if [ "$hour" -gt 7 ]; then
-            echo "::notice title=Nightly check ran late::GitHub started it at $(TZ=America/Chicago date +%H:%M) in Chicago, after the teardown window, so it only reports."
+            echo "::notice title=Nightly check ran late::It started at $(TZ=America/Chicago date +%H:%M) in Chicago, after the teardown window, so it only reports."
             echo "action=late" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -639,7 +628,7 @@ jobs:
         env:
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
 
-      # Scheduled only: down.sh destroys module.fleet, so its absence from the state
+      # Nightly only: down.sh destroys module.fleet, so its absence from the state
       # means the stack is already down and there's nothing to do. Captured first, so an
       # error fails the run instead of reading as "down".
       - name: Is the stack up?
@@ -662,7 +651,7 @@ jobs:
           fi
 
       # A late check leaves the stack up, so say so: it bills until someone runs down.
-      # The issue closes once a teardown succeeds, or a scheduled check finds it down.
+      # The issue closes once a teardown succeeds, or a nightly check finds it down.
       - name: Report a stack left up
         if: steps.mode.outputs.action == 'late' && steps.nightly.outputs.up == 'true'
         env:
@@ -672,7 +661,7 @@ jobs:
         run: |
           when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p')
           # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
-          printf '@%s The nightly check started late (%s Chicago time), after the teardown window, and the AWS timer'"'"'s check (2:17am) didn'"'"'t tear the stack down, so it is still up and billing (about $0.25 an hour). Run `down` if you are not using it, or `/session-end`. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
+          printf '@%s The nightly check started late (%s Chicago time), after the teardown window, and the AWS timer'"'"'s check (3am) didn'"'"'t tear the stack down, so it is still up and billing (about $0.25 an hour). Run `down` if you are not using it, or `/session-end`. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
             "$OWNER" "$when" "$RUN_URL" > left-up.md
           ./scripts/notify-issue.sh report "The nightly teardown didn't run" left-up.md
 
@@ -745,7 +734,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the schedule
+          when=$(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') # Chicago time, like the timer
           if [ "$MODE" = nightly ]; then what="The nightly check found the stack up, and its teardown failed"; else what="A manual teardown failed"; fi
           # shellcheck disable=SC2016 # the backticks are Markdown, for the issue body
           printf '@%s %s (%s Chicago time). The stack may still be partly up and billing: check the run, fix the cause, and run `down` again. This issue closes itself when a teardown succeeds.\n\nRun: %s\n' \
@@ -839,12 +828,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 80); do
-            busy=0
-            for event in workflow_dispatch schedule; do
-              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event "$event" --limit 20 \
-                --json status --jq 'map(select(.status != "completed")) | length')
-              busy=$((busy + n))
-            done
+            busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform.yml --event workflow_dispatch --limit 20 \
+              --json status --jq 'map(select(.status != "completed")) | length')
             [ "$busy" = 0 ] && exit 0
             echo "Waiting for a manual up or down to finish…"
             sleep 30

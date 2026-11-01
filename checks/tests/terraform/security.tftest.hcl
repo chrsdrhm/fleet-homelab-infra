@@ -193,8 +193,8 @@ run "nightly_timer_is_narrow" {
     error_message = "The nightly schedule's role may only invoke the function."
   }
   assert {
-    condition     = aws_scheduler_schedule.nightly.schedule_expression == "cron(17 2 * * ? *)" && aws_scheduler_schedule.nightly.schedule_expression_timezone == "America/Chicago"
-    error_message = "The nightly check must start at 2:17am Chicago time."
+    condition     = aws_scheduler_schedule.nightly.schedule_expression == "cron(0 3 * * ? *)" && aws_scheduler_schedule.nightly.schedule_expression_timezone == "America/Chicago"
+    error_message = "The nightly check must start at 3am Chicago time (2am is skipped when clocks spring forward)."
   }
   assert {
     condition = alltrue([
