@@ -3027,6 +3027,19 @@ Added 2026-10-20, at my request. My Claude subscription includes $100 of API cre
 
 ---
 
+### Task 42: Narrow the apply role's IAM to the stack's roles
+
+Added 2026-11-01 from a code review: the apply role could create any `fleet*` or `terraform-*` role with any inline policy, pass it to Lambda or ECS (which it can also start), and so become an account admin in a few calls from any run on `main`. A permissions boundary required on `iam:CreateRole` is the usual fix, but Fleet's module creates its ECS execution role with no boundary input, so requiring one would break the next `up`.
+
+**Built 2026-11-01:** roles by exact name instead (`local.ci_managed_roles` in `oidc.tf`: `fleet-role`, `fleet-execution-role` and the nightly timer's two), each passable only to its own service (ECS tasks, Lambda, Scheduler). Managed policies keep `fleet*` and `terraform-*` (the MDM and SES addons' generated names); a policy grants nothing until attached, and only those four roles can have one attached. The unused Firehose and RDS-monitoring PassRole entries are gone; Task 12 adds Firehose's back. The residual, documented in the spec: CI can still widen Fleet's own two roles, which it must manage to deploy Fleet. A `terraform test` run pins the role list and the PassRole mapping.
+
+- [x] **Step 1: Narrow the roles and PassRole** (`oidc.tf`), with `apply_role_manages_only_the_stack_roles` in `security.tftest.hcl` (checked to fail with the old `role/fleet*` pattern).
+- [ ] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
+- [ ] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles).
+- [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
+
+---
+
 ## Spec coverage check
 
 - Identity/SSO (Okta + break-glass + JIT provisioning + group-based role mapping; replaced Entra on 2026-10-03): Task 3 Step 8 (break-glass created via `fleetctl setup`), Tasks 10, 11 (SSO/JIT/roles), Task 9 (break-glass MFA, after SSO is verified). ✓
