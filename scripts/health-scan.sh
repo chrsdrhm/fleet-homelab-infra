@@ -53,13 +53,15 @@ bullets() { sed 's/^/  - /'; }
 
 # One CloudWatch statistic over the whole window: metric <namespace> <name> <stat>
 # <dimensions...>. Sum adds the datapoints, Maximum and Minimum take the extreme,
-# Average averages them. Prints "none" when there's no data.
+# Average averages them. Prints "none" when there's no data. Rounded to two decimals,
+# after multiplying by $scale if set (scale=1000 metric ... for seconds as milliseconds:
+# a few milliseconds would otherwise round to 0).
 metric() {
   local ns="$1" name="$2" stat="$3"; shift 3
   aws cloudwatch get-metric-statistics --namespace "$ns" --metric-name "$name" \
     --start-time "$start_iso" --end-time "$end_iso" --period "$period" --statistics "$stat" \
     --dimensions "$@" --query "Datapoints[].$stat" --output json 2>/dev/null \
-    | jq -r --arg stat "$stat" 'if length == 0 then "none"
+    | jq -r --arg stat "$stat" --argjson scale "${scale:-1}" 'map(. * $scale) | if length == 0 then "none"
         elif $stat == "Sum" then add
         elif $stat == "Maximum" then max
         elif $stat == "Minimum" then min
@@ -142,7 +144,7 @@ if lb=$(aws elbv2 describe-load-balancers --names fleet-homelab --query 'LoadBal
   for m in RequestCount HTTPCode_Target_2XX_Count HTTPCode_Target_4XX_Count HTTPCode_Target_5XX_Count HTTPCode_ELB_5XX_Count; do
     echo "- $m (sum): $(metric AWS/ApplicationELB "$m" Sum "$lbdim")"
   done
-  echo "- TargetResponseTime, seconds: average $(metric AWS/ApplicationELB TargetResponseTime Average "$lbdim"), maximum $(metric AWS/ApplicationELB TargetResponseTime Maximum "$lbdim")"
+  echo "- TargetResponseTime, milliseconds: average $(scale=1000 metric AWS/ApplicationELB TargetResponseTime Average "$lbdim"), maximum $(scale=1000 metric AWS/ApplicationELB TargetResponseTime Maximum "$lbdim")"
 else
   fail "the load balancer"
 fi
