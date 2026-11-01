@@ -10,6 +10,10 @@ inputs:
   role-arn:
     description: IAM role to assume through OIDC.
     required: true
+  working-directory:
+    description: The Terraform root to init (okta for the Okta plan).
+    required: false
+    default: "."
 
 runs:
   using: composite
@@ -35,4 +39,6 @@ runs:
 
     - name: terraform init
       shell: bash
-      run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+      env:
+        DIR: ${{ inputs.working-directory }}
+      run: terraform -chdir="$DIR" init -input=false -backend-config="bucket=$TF_STATE_BUCKET"

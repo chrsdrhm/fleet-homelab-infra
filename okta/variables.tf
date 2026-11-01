@@ -27,16 +27,20 @@ variable "okta_private_key_id" {
 variable "okta_private_key_path" {
   description = "Path to the service app's private key file. Keep the file outside this repo."
   type        = string
+  default     = null
+}
+
+# CI's read-only plan passes its key here (TF_VAR_okta_private_key, from a secret), so
+# nothing is written to disk. Locally, use okta_private_key_path.
+variable "okta_private_key" {
+  description = "The service app's private key itself (PEM), instead of a path."
+  type        = string
+  default     = null
+  sensitive   = true
 }
 
 variable "okta_scopes" {
   description = "Okta API scopes the service app has been granted and Terraform requests."
   type        = list(string)
   default     = ["okta.apps.manage", "okta.groups.manage"]
-}
-
-variable "okta_app_logo_path" {
-  description = "Optional path to the PNG both Fleet apps show as their icon in Okta. Keep the file outside this repo."
-  type        = string
-  default     = null
 }

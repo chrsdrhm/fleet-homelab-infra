@@ -2984,9 +2984,11 @@ Added at my request. `down.sh` prunes only `fleet-homelab-teardown-*` snapshots 
 
 Added at my request. `okta/` is the only Terraform applied from a laptop with no pull request plan or review. Give it a plan on pull requests, with the same plan comment and Claude review as the main stack, and keep applying it locally.
 
-- [ ] **Step 1: Decide on the credentials.** The provider signs in as an OAuth service app with a private key. CI would need a second service app with read-only scopes (`okta.apps.read`, `okta.groups.read`) and its key as a GitHub secret, never the apply app's. Weigh that against a public repo's CI holding any Okta credential.
-- [ ] **Step 2: If yes, add a plan job** for `okta/` to `terraform.yml`, triggered by changes under `okta/`, with masking for Okta's identifying values in the comment.
-- [ ] **Step 3: Document** it in `docs/github-setup.md` and the setup guide's Okta step.
+**Built 2026-10-31:** a second, read-only Okta service app (`okta.apps.read`, `okta.groups.read`, Read-Only Administrator), its key as the `OKTA_PLAN_PRIVATE_KEY` secret, passed as `TF_VAR_okta_private_key` (no file); job `terraform-plan-okta`, gated on `okta/` changes, not required. The plan's output never reaches the log or comment: only resource addresses and actions (`terraform show -json`), since Okta IDs aren't masked. The apps' logo (Fleet's public logo) moved into the repo as `okta/fleet-logo.png`, so CI and a local apply use the same file. Applying stays local.
+
+- [x] **Step 1: Decide on the credentials.** The provider signs in as an OAuth service app with a private key. CI would need a second service app with read-only scopes (`okta.apps.read`, `okta.groups.read`) and its key as a GitHub secret, never the apply app's. Weigh that against a public repo's CI holding any Okta credential.
+- [x] **Step 2: If yes, add a plan job** for `okta/` to `terraform.yml`, triggered by changes under `okta/`, with masking for Okta's identifying values in the comment.
+- [x] **Step 3: Document** it in `docs/github-setup.md` and the setup guide's Okta step.
 
 ---
 

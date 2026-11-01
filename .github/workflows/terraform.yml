@@ -8,6 +8,10 @@
 #           Each plan is a new comment; earlier ones are hidden as outdated.
 #           A plan that destroys or replaces a resource holding data fails the check unless
 #           the pull request has the `allow-destroy` label (checks/data-loss-guard.sh).
+#  - okta-plan: on pull requests that change okta/, a read-only plan of the Okta
+#           Terraform (its own read-only Okta service app), and a PR comment listing only
+#           what changes, never values: Okta IDs aren't secrets, so GitHub wouldn't mask
+#           them. okta/ is still applied locally.
 #  - apply: started by hand (up or down with the apply role), and nightly, when it
 #           tears the stack down if it was left up (or, if GitHub started it after
 #           7:59am, opens an issue saying it's still up). A failed down (either kind)
@@ -420,6 +424,138 @@ jobs:
       - name: Remove the generated files
         if: always()
         run: rm -f plan.txt comment.md tfplan data-loss.txt
+
+  okta-plan:
+    name: terraform-plan-okta
+    needs: lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: terraform-plan-okta-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      # Runs only when okta/ changes, and only with the secrets (not on forks, nor on
+      # Dependabot PRs unless the Okta secrets are also Dependabot secrets).
+      - name: Check whether okta/ changed
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          ROLE: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          OKTA_KEY: ${{ secrets.OKTA_PLAN_PRIVATE_KEY }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' | grep -q '^okta/'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing under okta/ changed; no Okta plan needed."
+          elif [ -z "$ROLE" ] || [ -z "$OKTA_KEY" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Okta plan skipped::This pull request runs without the Okta plan secrets (for example, from a fork, or before setup step 9), so no Okta plan can be made."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the repository
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        if: steps.gate.outputs.run == 'true'
+        uses: ./.github/actions/terraform-setup
+        with:
+          role-arn: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          working-directory: okta
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+
+      # The plan's own output stays in a file, never the log: it holds Okta IDs and URLs.
+      # Only resource addresses and actions are printed, and posted. -lock=false: the plan
+      # role can't write the lock file.
+      - name: terraform plan
+        id: plan
+        if: steps.gate.outputs.run == 'true'
+        working-directory: okta
+        env:
+          TF_VAR_fleet_subdomain: ${{ secrets.FLEET_SUBDOMAIN }}
+          TF_VAR_okta_org_name: ${{ secrets.OKTA_ORG_NAME }}
+          TF_VAR_okta_client_id: ${{ secrets.OKTA_PLAN_CLIENT_ID }}
+          TF_VAR_okta_private_key_id: ${{ secrets.OKTA_PLAN_PRIVATE_KEY_ID }}
+          TF_VAR_okta_private_key: ${{ secrets.OKTA_PLAN_PRIVATE_KEY }}
+          TF_VAR_okta_scopes: '["okta.apps.read","okta.groups.read"]'
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -detailed-exitcode -out=tfplan > "$RUNNER_TEMP/okta-plan.txt" 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = 1 ]; then
+            # Provider errors can hold the org's URL, so only each error's one-line summary
+            # is logged, with every URL, quoted string, dotted name (hostnames) and word
+            # containing a digit (IDs, the org number) removed. The org name is also a
+            # secret, which GitHub masks.
+            echo "The Okta plan failed. Its error summaries, with names, URLs and IDs removed:"
+            sed -nE 's/^(│ )?Error: /Error: /p' "$RUNNER_TEMP/okta-plan.txt" \
+              | sed -E 's#[A-Za-z]+://[^ ]*#<url>#g; s/"[^"]*"/"…"/g; s/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+/<name>/g; s/[A-Za-z_-]*[0-9][A-Za-z0-9_-]*/<id>/g' \
+              | cut -c1-160 | sort -u | head -5 || true
+            exit 0
+          fi
+          # Addresses are fixed names from okta/*.tf; anything else is left out.
+          terraform show -json tfplan | jq -r '.resource_changes[]? | select(.change.actions != ["no-op"])
+            | "\(.change.actions | if . == ["delete","create"] or . == ["create","delete"] then "replace" else join("+") end)\t\(.address)"' \
+            | { grep -E '^[a-z+-]+'$'\t''[A-Za-z0-9_.]+$' || true; } > "$RUNNER_TEMP/okta-changes.tsv"
+          cat "$RUNNER_TEMP/okta-changes.tsv"
+
+      - name: Comment on the pull request
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        run: |
+          changes="$RUNNER_TEMP/okta-changes.tsv"
+          # The backticks below are Markdown code spans, not shell.
+          # shellcheck disable=SC2016
+          {
+            printf '<!-- terraform-plan-okta -->\n### 🔐 Okta plan\n\n'
+            if [ "$EXITCODE" = 1 ]; then
+              printf '**The plan failed.** The job log has the error lines with names and URLs removed; run `terraform plan` in `okta/` locally for the whole error.\n'
+            elif [ "$EXITCODE" = 0 ]; then
+              printf '**No changes.** Okta matches `okta/`.\n'
+            elif [ ! -s "$changes" ]; then
+              printf '**Changes found, but none can be listed safely here.** Run `terraform plan` in `okta/` locally to see them.\n'
+            else
+              printf '**%s change(s).** Only resources and actions are shown, never values. After merging, apply it locally: `cd okta && terraform apply`.\n\n' "$(wc -l < "$changes" | tr -d ' ')"
+              if grep -qE '^(replace|delete)' "$changes"; then
+                printf '> [!CAUTION]\n> This plan replaces or deletes Okta resources. A replaced app gets a new metadata URL, which the GitOps repo'"'"'s secrets then need.\n\n'
+              fi
+              printf '| Action | Resource |\n|---|---|\n'
+              awk -F'\t' '{ printf "| %s | `%s` |\n", $1, $2 }' "$changes"
+            fi
+          } > "$RUNNER_TEMP/okta-comment.md"
+          older=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- terraform-plan-okta -->"))) | "\(.id) \(.node_id)"')
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/okta-comment.md"
+          while read -r id node; do
+            [ -n "$id" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql -f id="$node" \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null \
+              || gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
+          done <<< "$older"
+          if [ "$EXITCODE" = 1 ]; then
+            echo "::error title=Okta plan failed::see the terraform plan step's log (names and URLs removed), or run terraform plan in okta/ locally."
+            exit 1
+          fi
+
+      - name: Remove the generated files
+        if: always()
+        run: rm -f okta/tfplan "$RUNNER_TEMP"/okta-*
 
   apply:
     name: terraform-apply

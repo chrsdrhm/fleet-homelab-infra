@@ -16,7 +16,8 @@ locals {
 
   # The icon both apps show on the Okta dashboard, from a file kept outside the repo
   # (Fleet's brand asset). Unset, the apps keep whatever icon they have.
-  app_logo = var.okta_app_logo_path == null ? null : pathexpand(var.okta_app_logo_path)
+  # Fleet's own public logo, in the repo so CI's plan and a local apply use the same file.
+  app_logo = "${path.module}/fleet-logo.png"
 
   # Admin wins if someone is in both groups, so the assertion carries exactly one value
   # (Fleet silently takes the LAST of several). Anyone in neither group gets the
