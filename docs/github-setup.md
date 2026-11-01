@@ -27,6 +27,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 | `CLAUDE_CODE_OAUTH_TOKEN` | Optional, for Claude reviews (step 6) | |
 | `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` | Optional, for Claude's review of new Fleet releases (step 7) and of the health scan (step 8); IDs, not credentials | |
 | `ANTHROPIC_WORKSPACE_ID` | Optional, only if the federation rule in step 7 covers more than one workspace | |
+| `OKTA_ORG_NAME`, `OKTA_PLAN_CLIENT_ID`, `OKTA_PLAN_PRIVATE_KEY_ID`, `OKTA_PLAN_PRIVATE_KEY` | Optional, for the Okta plan on pull requests (step 9): your `okta_org_name`, and the read-only service app's client ID, key ID and private key | |
 
 **`fleet-homelab-gitops`:**
 
@@ -234,3 +235,29 @@ After a successful `up` (from CI or from your terminal, where `up.sh` starts it 
 - **The report is public,** in the run's summary, so the scan masks hostnames, the account ID, ARNs, email and IP addresses, UUIDs and token-shaped strings, cuts log message lines short, and otherwise prints only figures and counts.
 - **Claude gets no tools.** The report holds log messages, which anyone reaching Fleet can influence, so it's one request, and only Claude's text is posted, with `@mentions`, links, images, URLs and HTML broken. Only the first line counts as the verdict, so a verdict-shaped log line can't close the issue.
 - **Cost:** about 10,000 tokens a scan, a few cents, once per `up`.
+
+## 9. Optional: an Okta plan on pull requests
+
+A pull request that changes `okta/` gets a second plan, `terraform-plan-okta`, and a comment listing which Okta resources would change and how. It never shows values: Okta's IDs and URLs aren't secrets, so GitHub wouldn't mask them, and the plan's own output stays out of the public log too. You still apply `okta/` from your terminal after merging. The check isn't required, and it skips pull requests that don't touch `okta/`.
+
+It signs in as a second Okta service app that can only read. The one you apply with (setup guide step 6) never goes to GitHub: a pull request can change the workflow, so any credential a pull request's job can use has to be harmless.
+
+**Set it up:**
+1. **Create the app** in the Okta admin console: Applications → Create App Integration → **API Services** (Classic experience), named for example "Terraform plan (read-only)".
+2. **Give it a key:** on its General tab, Client Credentials → Edit → **Public key / Private key** → Add key → Generate new key. Save the private key (Okta shows it once), and note the key ID.
+3. **Okta API Scopes:** grant only `okta.apps.read` and `okta.groups.read`.
+4. **Admin roles:** assign **Read-Only Administrator**.
+5. **Store the four secrets** in a separate terminal (`gh secret set` prompts for each value; the key goes in from its file):
+   ```bash
+   gh secret set OKTA_ORG_NAME --repo $OWNER/fleet-homelab-infra
+   gh secret set OKTA_PLAN_CLIENT_ID --repo $OWNER/fleet-homelab-infra
+   gh secret set OKTA_PLAN_PRIVATE_KEY_ID --repo $OWNER/fleet-homelab-infra
+   gh secret set OKTA_PLAN_PRIVATE_KEY --repo $OWNER/fleet-homelab-infra < path/to/the-key.pem
+   ```
+   Then delete the key file: only CI needs it, and Okta can generate a new one.
+6. **Test it** with a pull request that changes something under `okta/`.
+
+**Security:**
+- **The key can only read** apps and groups, including who is in each group. It can't change who signs in to Fleet.
+- **Forks get no secrets,** so their pull requests skip the Okta plan. Dependabot's pull requests skip it too, unless you also set the four as Dependabot secrets.
+- **Only `okta.com` orgs:** the job uses the default `okta_base_url`.

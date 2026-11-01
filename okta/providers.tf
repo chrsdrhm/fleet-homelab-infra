@@ -16,11 +16,13 @@ terraform {
 #
 # Applied locally, never from CI: this identity can change who may sign in to Fleet, so
 # it stays out of the AWS pipeline's reach (and Okta has no keyless federation for it).
+# Pull requests get a plan from a second, read-only service app instead (okta_private_key
+# and read scopes, from secrets; see the okta-plan job in terraform.yml).
 provider "okta" {
   org_name       = var.okta_org_name
   base_url       = var.okta_base_url
   client_id      = var.okta_client_id
   private_key_id = var.okta_private_key_id
-  private_key    = pathexpand(var.okta_private_key_path)
+  private_key    = coalesce(var.okta_private_key, try(pathexpand(var.okta_private_key_path), null))
   scopes         = var.okta_scopes
 }

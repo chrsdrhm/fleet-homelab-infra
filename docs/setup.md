@@ -105,7 +105,8 @@ Then click the link in the email AWS sends.
    cd okta && cp example.tfvars terraform.tfvars   # fill it in
    terraform init -backend-config=backend.hcl && terraform apply -var-file=terraform.tfvars
    ```
-4. Add yourself to the **Fleet Admins** group in the Okta console. To sign in while enrolling a device, also add yourself (or whoever owns the device) to **Fleet Device Users**.
+4. Optional: a read-only Okta plan on pull requests that change `okta/` ([GitHub setup step 9](github-setup.md#9-optional-an-okta-plan-on-pull-requests)). You still apply `okta/` from your terminal.
+5. Add yourself to the **Fleet Admins** group in the Okta console. To sign in while enrolling a device, also add yourself (or whoever owns the device) to **Fleet Device Users**.
 
 Fleet picks up the Okta settings from the GitOps repo (step 7).
 
