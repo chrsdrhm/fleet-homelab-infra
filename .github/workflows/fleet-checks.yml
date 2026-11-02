@@ -49,6 +49,18 @@ on:
           - hand
           - up
           - merge
+      changed_at:
+        description: "For scan only: when the up or apply it follows finished, in UTC, like 2026-11-01T22:18:00Z (set by terraform.yml and up.sh)"
+        required: false
+        type: string
+      upgrade_from:
+        description: "For scan only: the Fleet version an apply on merge upgraded from, like 4.93.2 (set by terraform.yml)"
+        required: false
+        type: string
+      upgrade_to:
+        description: "For scan only: the Fleet version it upgraded to, like 4.94.0 (set by terraform.yml)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -267,7 +279,12 @@ jobs:
           mask-aws-account-id: true
 
       # The scan masks identifying values itself; this covers anything it misses in the
-      # log. Its window covers the up (about half an hour); by hand, the last day.
+      # log. Its window covers the up (about half an hour); by hand, the last day. The
+      # "Run:" line tells the review what the scan follows and when that finished (an
+      # upgrade's versions too), so the change's own events (a restore, the migrations'
+      # output and downtime) are judged as the change, not as trouble. The inputs are
+      # checked against their formats first: anyone who can start this workflow sets them,
+      # and they reach Claude's prompt.
       - name: Scan
         id: scan
         if: steps.aws.outcome == 'success'
@@ -277,14 +294,23 @@ jobs:
           FLEET_URL: https://${{ secrets.FLEET_SUBDOMAIN }}
           FLEET_CI_HEADER: ${{ secrets.WAF_CI_HEADER_VALUE }}
           AFTER: ${{ inputs.after }}
+          CHANGED_AT: ${{ inputs.changed_at }}
+          UPGRADE_FROM: ${{ inputs.upgrade_from }}
+          UPGRADE_TO: ${{ inputs.upgrade_to }}
         run: |
           echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
           if [ "$AFTER" = up ]; then
             hours=2 when="in CI, just after an up"
+          elif [ "$AFTER" = merge ] && [[ "$UPGRADE_FROM" =~ $semver ]] && [[ "$UPGRADE_TO" =~ $semver ]]; then
+            hours=2 when="in CI, just after an apply on merge that upgraded Fleet from $UPGRADE_FROM to $UPGRADE_TO (the migrations add-on stopped Fleet, ran fleet prepare db and started the new version)"
           elif [ "$AFTER" = merge ]; then
-            hours=2 when="in CI, just after an apply on merge (a change went live, such as a Fleet upgrade)"
+            hours=2 when="in CI, just after an apply on merge (a change went live, not a Fleet upgrade)"
           else
             hours=24 when="in CI, started by hand"
+          fi
+          if [ "$AFTER" != hand ] && [[ "$CHANGED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            when="$when; it finished at $CHANGED_AT, so events and log lines before then belong to it"
           fi
           { echo "Run: $when."; echo; ./scripts/health-scan.sh "$hours"; } > "$RUNNER_TEMP/scan.md"
           {

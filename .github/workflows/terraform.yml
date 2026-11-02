@@ -724,7 +724,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run fleet-checks.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after=up
+        run: |
+          gh workflow run fleet-checks.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after=up \
+            -f changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Down
         id: down
@@ -1009,15 +1011,26 @@ jobs:
         run: ./scripts/tf-apply.sh tfplan
 
       # A change that went live (a Fleet upgrade, say) gets the same health scan as an
-      # up, once ECS has finished rolling it out. Best effort, like the up's.
+      # up, once ECS has finished rolling it out. Best effort, like the up's. It tells the
+      # scan when the rollout finished and, for an upgrade, the versions, so the review
+      # reads the change's own events as the change.
       - name: Start the health scan
         if: steps.plan.outputs.changes == 'true' && steps.stack.outputs.up == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
         run: |
           aws ecs wait services-stable --cluster fleet-homelab --services fleet
-          gh workflow run fleet-checks.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after=merge
+          version() { sed -n 's|^FROM fleetdm/fleet:v||p'; }
+          to=$(version < fleet.Dockerfile)
+          from=$(gh api "repos/$GITHUB_REPOSITORY/contents/fleet.Dockerfile?ref=$BEFORE" --jq .content | base64 -d | version || true)
+          upgrade=()
+          if [ -n "$from" ] && [ "$from" != "$to" ]; then
+            upgrade=(-f upgrade_from="$from" -f upgrade_to="$to")
+          fi
+          gh workflow run fleet-checks.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after=merge \
+            -f changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${upgrade[@]}"
 
       - name: Remove the generated files
         if: always()

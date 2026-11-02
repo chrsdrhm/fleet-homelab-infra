@@ -91,7 +91,8 @@ fi
 # apply job starts it, since GH_TOKEN there can only reach the GitOps repo. Best effort,
 # like the GitOps run above; NO_SCAN=1 skips it.
 if [ "$H" = "200" ] && [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${NO_SCAN:-}" ]; then
-  if command -v gh >/dev/null 2>&1 && gh workflow run fleet-checks.yml --repo "$owner/fleet-homelab-infra" --ref main -f action=scan -f after=up >/dev/null 2>&1; then
+  if command -v gh >/dev/null 2>&1 && gh workflow run fleet-checks.yml --repo "$owner/fleet-homelab-infra" --ref main -f action=scan -f after=up \
+      -f changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null 2>&1; then
     echo "Started a health scan (follow it with: gh run list --workflow fleet-checks.yml --limit 1)."
   else
     echo "Could not start a health scan. Start it by hand:" >&2
