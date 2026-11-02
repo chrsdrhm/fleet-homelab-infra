@@ -10,7 +10,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Stopped tasks, within about an hour of an `up` or upgrade: "Essential container in task exited" (exit 0) and "Scaling activity initiated by deployment". Both are the migrations add-on restarting Fleet. A non-zero exit code, `OutOfMemory` or a task that keeps restarting is not normal.
 
 ## 2. Fleet app logs
-- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON).
+- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON). During an upgrade, dozens more in the minute the migrations run: `fleet prepare db` prints a banner ("Missing migrations…") and one plain line per migration.
 - `error`: only `unlock failed`, a few dozen at a time, all within minutes of Fleet stopping (a restart, the migrations add-on during `up`, or an upgrade): a cron job loses its database lock as the old task shuts down.
 - `error` `invalid role: unassigned`: only if someone signed in through Okta without a role group (the intended refusal).
 - `warn`: none, or deprecation notices for API paths that `fleetctl` calls.
@@ -18,7 +18,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 ## 3. Load balancer
 - 1 healthy target.
-- Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet.
+- Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet. During an upgrade, a few more while the migrations add-on has Fleet stopped (the planned downtime, a few minutes before the new target registers).
 - 4xx: a few are normal (sign-in redirects, scanners that got past the WAF).
 - Response time (the scan reports milliseconds): average under 100 ms, typically a few ms; maximum about 1,000 ms (cold paths after boot). Just after an `up`, the window holds only a handful of requests, mostly cold, so an average up to about 200 ms is normal. An average of 0 with requests in the window is a reading problem, not a fast server.
 - RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
