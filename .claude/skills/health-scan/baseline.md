@@ -4,6 +4,8 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 **Right after an `up` or an upgrade,** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build. **A scan after an apply on merge** looks back two hours, so within about two hours of an `up` its window can start partway through the `up`: then it shows only the later restore events. Redis is created a few minutes before Aurora is restored, so Aurora's restore events with no Redis events, or the other way round, is the window's start, not a missing check. The run list shows when the `up` ran.
 
+**At low volume, counts that should match only roughly agree.** With under about 100 requests in the window (most of the time in a homelab), the load balancer's and the WAF's request counts, and RequestCount against Target 2XX, can differ by a few dozen: the services count on different schedules and cut off differently at the window's edges. That's not a finding unless errors (4xx, 5xx, blocked spikes) come with it.
+
 ## 1. ECS service
 - Running 1 of 1, rollout `COMPLETED`, one deployment.
 - Events: "has reached a steady state", "registered 1 targets", "has started 1 tasks", and draining during a deployment.
@@ -40,7 +42,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Engine CPU under 1%. Evictions: 0.
 
 ## 7. WAF
-- Allowed is about the load balancer's request count.
+- Allowed is about the load balancer's request count (at low volume, within a few dozen; see the note at the top).
 - Blocked: anything from a handful to several hundred, growing with how long the stack was up in the window (foreign scanners find a new load balancer within hours, and the US-only rule blocks them). Not a finding on its own; only if allowed requests, 4xx or 5xx rise with it. Just after an `up`, the load balancer has only been taking traffic for minutes, so allowed and blocked can both read `none`.
 
 ## 8. SES

@@ -57,6 +57,9 @@ clean result. Then one line listing the sections that matched.
 Rules:
 - Only report what the report shows. Don't guess causes; say what to look at next, as a
   read-only command or console page when there is one.
+- Judge figures the way the baseline does, by size as well as direction: at low volume,
+  a small absolute difference between counts that should roughly match is noise, not a
+  finding, unless errors or other findings come with it.
 - No preamble and no closing summary. Keep it short.
 - Never repeat an email address, hostname, IP address, ID or secret, even a masked one.
 
