@@ -77,9 +77,10 @@ if ! head -n 1 <<< "$review" | grep -qE '^\*\*Verdict:\*\* (✅|⚠️|❌)'; th
 fi
 
 # The findings go into a public issue and summary, and the report they come from holds
-# log messages: break @mentions so they can't notify anyone, escape all HTML and every
-# square bracket (so no link, image or link definition can form), and break // and www.
-# (so no bare URL autolinks), so none of it can hide text, load or point anywhere.
-sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/</\&lt;/g; s/>/\&gt;/g; s/\[/\\[/g; s/\]/\\]/g; s#//#/\xe2\x80\x8b/#g; s/www\./www\xe2\x80\x8b./g' <<< "$review"
+# log messages: break @mentions so they can't notify anyone, every < (so no HTML tag or
+# comment can form), every ] followed by ( [ or : (so no link, image or link definition
+# can form), and // and www. (so no bare URL autolinks), so none of it can hide text,
+# load or point anywhere. Each break is a zero-width space, so code still reads normally.
+sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/</<\xe2\x80\x8b/g; s/\]([[(:])/]\xe2\x80\x8b\1/g; s#//#/\xe2\x80\x8b/#g; s/www\./www\xe2\x80\x8b./g' <<< "$review"
 echo
 echo "_Compared with \`.claude/skills/health-scan/baseline.md\` by \`$model\`, with no tools. \`/health-scan\` looks closer._"

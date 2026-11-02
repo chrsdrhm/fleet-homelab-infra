@@ -191,10 +191,11 @@ if [ "$(jq -r .stop_reason <<< "$response")" = max_tokens ]; then
 fi
 
 # The review goes into a public pull request and comes from untrusted release notes, sanitized
-# like health-review.sh's: break @mentions so it can't notify anyone, escape all HTML (so
-# it can't hide text or fake the job's "release-review" marker, which would skip a later
-# review) and every square bracket (so no link, image or link definition can form), and
-# break // and www. (so no bare URL autolinks).
-sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/</\&lt;/g; s/>/\&gt;/g; s/\[/\\[/g; s/\]/\\]/g; s#//#/\xe2\x80\x8b/#g; s/www\./www\xe2\x80\x8b./g' <<< "$review"
+# like health-review.sh's: break @mentions so it can't notify anyone, every < (so no HTML
+# can hide text or fake the job's "release-review" marker, which would skip a later
+# review), every ] followed by ( [ or : (so no link, image or link definition can form),
+# and // and www. (so no bare URL autolinks). Each break is a zero-width space, so code
+# still reads normally.
+sed -E 's/@([A-Za-z0-9])/@\xe2\x80\x8b\1/g; s/</<\xe2\x80\x8b/g; s/\]([[(:])/]\xe2\x80\x8b\1/g; s#//#/\xe2\x80\x8b/#g; s/www\./www\xe2\x80\x8b./g' <<< "$review"
 echo
 echo "_Reviewed by \`$model\` from the release notes, Fleet's GitOps template and this setup's files, with no tools. Check anything marked before upgrading; \`/fleet-upgrade\` does the full review._"
