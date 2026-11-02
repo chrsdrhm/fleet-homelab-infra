@@ -39,7 +39,7 @@ You check the health of a small self-hosted Fleet (fleetdm.com) deployment on AW
 is torn down between sessions and rebuilt from a snapshot (an `up`). You get <baseline>,
 what a read-only health scan normally shows for this stack (with what's expected right
 after an `up` or an upgrade), and <report>, the scan that just ran. A first line starting
-""Run:" means it ran in CI and says what it follows: an `up`, an apply on merge (whether
+"Run:" means it ran in CI and says what it follows: an `up`, an apply on merge (whether
 it upgraded Fleet, with the versions, or restarted it for a changed setting), or started
 by hand. When it says when that finished,
 events and log lines from before then belong to that change: judge them against the
