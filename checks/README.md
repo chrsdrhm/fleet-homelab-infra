@@ -8,6 +8,7 @@ Every lint check, test and guard for this repo lives here, so it's all in one pl
 | Terraform format and validation | `run.sh` | Every PR | `terraform fmt -check` and `terraform validate` for both roots. |
 | Terraform tests | `tests/terraform/security.tftest.hcl` | Every PR | Plans the whole configuration against mocked providers (no AWS) and asserts the CI roles' trust and the apply role's denies, the read-only plan and scan roles, the nightly timer's permissions and time, the WAF rules, the public bucket's scope, the budget and the DNS delegation. |
 | Checker self-test | `tests/test_private_values.py` | Every PR | Tests the private-values checker with phony values. |
+| Sanitizer test | `tests/test_sanitize_markdown.py` | Every PR | Feeds `scripts/sanitize-markdown.sh` hostile Markdown (links, images, HTML, comments, autolinks, mentions) and checks nothing comes out live and the text reads the same. Claude's reviews pass through it before going anywhere public. |
 | shellcheck | `run.sh` | Every PR | Lints the shell scripts and hooks. |
 | actionlint | `run.sh` | Every PR | Lints the workflow files, including the shell in `run:` blocks. |
 | zizmor | `run.sh`, `zizmor.yml` | Every PR | Security audit of the workflows. Official image, pinned by digest. |
