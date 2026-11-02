@@ -61,6 +61,11 @@ on:
         description: "For scan only: the Fleet version it upgraded to, like 4.94.0 (set by terraform.yml)"
         required: false
         type: string
+      fleet_restarted:
+        description: "For scan only: the apply replaced Fleet's task definition, so Fleet was stopped and started again (set by terraform.yml)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -297,6 +302,7 @@ jobs:
           CHANGED_AT: ${{ inputs.changed_at }}
           UPGRADE_FROM: ${{ inputs.upgrade_from }}
           UPGRADE_TO: ${{ inputs.upgrade_to }}
+          RESTARTED: ${{ inputs.fleet_restarted }}
         run: |
           echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
           semver='^[0-9]+\.[0-9]+\.[0-9]+$'
@@ -304,8 +310,10 @@ jobs:
             hours=2 when="in CI, just after an up"
           elif [ "$AFTER" = merge ] && [[ "$UPGRADE_FROM" =~ $semver ]] && [[ "$UPGRADE_TO" =~ $semver ]]; then
             hours=2 when="in CI, just after an apply on merge that upgraded Fleet from $UPGRADE_FROM to $UPGRADE_TO (the migrations add-on stopped Fleet, ran fleet prepare db and started the new version)"
+          elif [ "$AFTER" = merge ] && [ "$RESTARTED" = true ]; then
+            hours=2 when="in CI, just after an apply on merge that changed Fleet's task definition (a setting, not the version): the migrations add-on stopped Fleet, ran fleet prepare db and started it again"
           elif [ "$AFTER" = merge ]; then
-            hours=2 when="in CI, just after an apply on merge (a change went live, not a Fleet upgrade)"
+            hours=2 when="in CI, just after an apply on merge (a change went live; Fleet wasn't restarted)"
           else
             hours=24 when="in CI, started by hand"
           fi

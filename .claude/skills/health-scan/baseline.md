@@ -2,17 +2,17 @@
 
 What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's first run (2026-10-05, three days of use) and the Task 30 runs (2026-10-29 and 2026-10-30, just after an `up`). Anything outside this is worth a look. When something new turns out to be normal, add it here in a pull request, with the date.
 
-**Right after an `up` or an upgrade,** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build. **A scan after an apply on merge** looks back two hours, so within about two hours of an `up` its window can start partway through the `up`: then it shows only the later restore events. Redis is created a few minutes before Aurora is restored, so Aurora's restore events with no Redis events, or the other way round, is the window's start, not a missing check. The run list shows when the `up` ran.
+**Right after an `up`, an upgrade or any apply that restarts Fleet (a changed Fleet setting),** several things are expected that wouldn't be later: the migrations add-on scales Fleet to 0 and back, Aurora is newly restored, and the window holds only the build. **A scan after an apply on merge** looks back two hours, so within about two hours of an `up` its window can start partway through the `up`: then it shows only the later restore events. Redis is created a few minutes before Aurora is restored, so Aurora's restore events with no Redis events, or the other way round, is the window's start, not a missing check. The run list shows when the `up` ran.
 
 **At low volume, counts that should match only roughly agree.** With under about 100 requests in the window (most of the time in a homelab), the load balancer's and the WAF's request counts, and RequestCount against Target 2XX, can differ by a few dozen: the services count on different schedules and cut off differently at the window's edges. That's not a finding unless errors (4xx, 5xx, blocked spikes) come with it.
 
 ## 1. ECS service
 - Running 1 of 1, rollout `COMPLETED`, one deployment.
 - Events: "has reached a steady state", "registered 1 targets", "has started 1 tasks", and draining during a deployment.
-- Stopped tasks, within about an hour of an `up` or upgrade: "Essential container in task exited" (exit 0) and "Scaling activity initiated by deployment". Both are the migrations add-on restarting Fleet. A non-zero exit code, `OutOfMemory` or a task that keeps restarting is not normal.
+- Stopped tasks, within about an hour of an `up`, an upgrade or an apply that restarts Fleet (a changed Fleet setting): "Essential container in task exited" (exit 0) and "Scaling activity initiated by deployment". Both are the migrations add-on restarting Fleet. A non-zero exit code, `OutOfMemory` or a task that keeps restarting is not normal.
 
 ## 2. Fleet app logs
-- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON). During an upgrade, dozens more in the minute the migrations run: `fleet prepare db` prints a banner ("Missing migrations…") and one plain line per migration.
+- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON). When an apply restarts Fleet (an upgrade, or a changed Fleet setting: any new task definition), more in the minute the migrations add-on runs `fleet prepare db`: a banner and, for an upgrade, one plain line per migration, so dozens.
 - `error`: only `unlock failed`, a few dozen at a time, all within minutes of Fleet stopping (a restart, the migrations add-on during `up`, or an upgrade): a cron job loses its database lock as the old task shuts down.
 - `error` `invalid role: unassigned`: only if someone signed in through Okta without a role group (the intended refusal).
 - `warn`: none, or deprecation notices for API paths that `fleetctl` calls.
@@ -20,7 +20,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 
 ## 3. Load balancer
 - 1 healthy target.
-- Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet. During an upgrade, a few more while the migrations add-on has Fleet stopped (the planned downtime, a few minutes before the new target registers).
+- Target 5xx: 0. Load balancer 5xx: 0, or a few in the minute a rebuild's target wasn't up yet. When an apply restarts Fleet (an upgrade, or a changed Fleet setting), any number while the migrations add-on has Fleet stopped: the planned downtime, a few minutes before the new target registers. Only 5xx after that, or a stop much longer than about 10 minutes, is a finding.
 - 4xx: a few are normal (sign-in redirects, scanners that got past the WAF).
 - Response time (the scan reports milliseconds): average under 100 ms, typically a few ms; maximum about 1,000 ms (cold paths after boot). Just after an `up`, the window holds only a handful of requests, mostly cold, so an average up to about 200 ms is normal. An average of 0 with requests in the window is a reading problem, not a fast server.
 - RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
