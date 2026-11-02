@@ -96,6 +96,11 @@ module "fleet" {
         FLEET_LOGGING_JSON         = "true"
         FLEET_MYSQL_MAX_OPEN_CONNS = "10"
         FLEET_REDIS_MAX_OPEN_CONNS = "50"
+        # Every fleetd enrollment into a fleet that requires end user authentication
+        # must complete the Okta sign-in (plan Task 20). Fleet's default (true) lets a
+        # crafted request with the enroll secret skip it. Installers built with
+        # --bypass-end-user-auth (for example for Autopilot) are refused while false.
+        FLEET_MDM_ALLOW_ORBIT_END_USER_AUTH_BYPASS = "false"
       },
       module.ses.fleet_extra_environment_variables
     )
