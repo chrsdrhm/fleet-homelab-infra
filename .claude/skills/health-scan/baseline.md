@@ -32,7 +32,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Freeable memory: minimum about 1.2 GB. Connections: up to about 20.
 
 ## 5. Fargate task
-- CPU: average a few percent; a spike up to 100% at boot is normal.
+- CPU: average a few percent; a spike up to 100% at boot is normal, and so is one for a minute or two about once an hour: Fleet's hourly jobs (`vulnerabilities`, `cleanups_then_aggregation`, `maintained_apps` and others) run together, timed from Fleet's start, and briefly use the whole half vCPU. Only a peak that lasts, or one with errors or slow responses alongside it, is a finding.
 - Memory: maximum under 50%.
 
 ## 6. Redis
