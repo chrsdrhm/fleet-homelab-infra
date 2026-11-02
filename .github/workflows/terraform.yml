@@ -1029,8 +1029,14 @@ jobs:
           if [ -n "$from" ] && [ "$from" != "$to" ]; then
             upgrade=(-f upgrade_from="$from" -f upgrade_to="$to")
           fi
+          # A new task definition (an upgrade, or a changed Fleet setting) makes the
+          # migrations add-on stop Fleet and start it again: minutes of planned downtime.
+          restarted=false
+          if terraform show -json tfplan | jq -e '[.resource_changes[]? | select(.type == "aws_ecs_task_definition" and (.change.actions | index("create")))] | length > 0' > /dev/null; then
+            restarted=true
+          fi
           gh workflow run fleet-checks.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=scan -f after=merge \
-            -f changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${upgrade[@]}"
+            -f changed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -f fleet_restarted="$restarted" "${upgrade[@]}"
 
       - name: Remove the generated files
         if: always()
