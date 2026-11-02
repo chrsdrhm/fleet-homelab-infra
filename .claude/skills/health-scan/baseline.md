@@ -50,7 +50,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Sends: a few a day at most, with no bounces or complaints.
 
 ## 9. Certificate and DNS
-- Certificate `ISSUED`, renewal `ELIGIBLE`, expiring April 2027 (ACM renews it). Flag it if expiry is under 30 days away.
+- Certificate `ISSUED`, renewal `ELIGIBLE` (ACM renews it on its own, well before it expires). Flag it if expiry is under 30 days away, or if renewal isn't `ELIGIBLE`.
 - The Fleet host resolves to at least one address (the load balancer has three), and the zone has its name servers (2 on Cloudflare).
 
 ## 10. Budget
