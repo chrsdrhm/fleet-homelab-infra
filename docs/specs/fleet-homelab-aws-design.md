@@ -93,7 +93,11 @@ AWS cost, since this is for personal homelab learning, not production scale.
   two IdP apps if both are used; roles and JIT apply only to the admin side.
   Fleet gets it through GitOps (`org_settings.mdm.end_user_authentication`),
   and the Workstations fleet requires it
-  (`controls.setup_experience.enable_end_user_authentication`).
+  (`controls.setup_experience.enable_end_user_authentication`). The server
+  enforces it for every fleetd enrollment
+  (`FLEET_MDM_ALLOW_ORBIT_END_USER_AUTH_BYPASS=false` in `fleet.tf`), so an enroll
+  secret alone can't enroll a host without the sign-in, and installers built with
+  `--bypass-end-user-auth` are refused.
 - **Break-glass account**: one Fleet global admin created via
   `fleetctl setup` — Fleet's first-run bootstrap, immediately after the first
   deploy (a fresh Fleet has no users, and `fleetctl user create` needs an
