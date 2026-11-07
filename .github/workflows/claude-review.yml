@@ -232,6 +232,12 @@ jobs:
             summary=$(sed -nE '/^(✅|⚠️|❌)/,$p' <<< "$summary")
           fi
           [ -n "$summary" ] || unfinished "The review ended without a summary (see the review step's log)."
+          # The review read text anyone can write (comments on a public pull request), so its
+          # summary is sanitized like Claude's other public text. The sanitizer comes from
+          # main, not the checkout, which is the pull request's own code.
+          gh api "repos/$GITHUB_REPOSITORY/contents/scripts/sanitize-markdown.sh?ref=main" --jq .content \
+            | base64 -d > "$RUNNER_TEMP/sanitize-markdown.sh"
+          summary=$(bash "$RUNNER_TEMP/sanitize-markdown.sh" <<< "$summary")
           usage=$(printf '%s\n' "<details><summary>📊 Usage summary</summary>" "" "${rows[@]}" "" "</details>")
           post "$marker"$'\n### 🤖 Claude review\n\n'"$summary"$'\n\n'"$usage"
 

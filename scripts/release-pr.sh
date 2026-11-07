@@ -11,10 +11,16 @@
 #   release-pr.sh close "<comment>"                     close every open one
 #   release-pr.sh show  [version]                       print the open ones' bodies (only
 #                                                       that version's, if given)
+#   release-pr.sh declined <version>                    print the number of that version's
+#                                                       pull request if it was closed
+#                                                       without merging (declined)
+#
+# Closing a pull request deletes its branch, unless someone other than a bot pushed to it:
+# then the branch is kept, so that work isn't lost.
 #
 # open and close need GH_TOKEN from the release GitHub App (Contents and Pull requests
 # write): a pull request opened with the workflow's own token wouldn't start the plan and
-# lint checks. show only reads. Needs GITHUB_REPOSITORY. Only pull requests from this
+# lint checks. show and declined only read. Needs GITHUB_REPOSITORY. Only pull requests from this
 # repository's own fleet-release-* branches count: anyone can open one from a fork's branch
 # of the same name, and this must never touch theirs.
 set -euo pipefail
@@ -28,6 +34,20 @@ open_prs() {
   gh pr list --repo "$repo" --state open --limit 100 --json number,headRefName,isCrossRepository \
     | jq -r '.[] | select((.isCrossRepository | not) and (.headRefName | test("^fleet-release-[0-9]+\\.[0-9]+\\.[0-9]+$")))
       | "\(.number) \(.headRefName)"'
+}
+
+# Closes a release pull request with a comment. Its branch is deleted only if every commit
+# on it (merges from main aside) is a bot's: the app's version change, never a person's.
+close_pr() {
+  local number="$1" branch="$2" comment="$3" people
+  people=$(gh api "repos/$repo/compare/main...$branch" \
+    --jq '[.commits[] | select((.parents | length) == 1) | .author.login // "" | select(endswith("[bot]") | not)] | length')
+  if [ "$people" = 0 ]; then
+    gh pr close "$number" --repo "$repo" --comment "$comment" --delete-branch > /dev/null
+  else
+    gh pr close "$number" --repo "$repo" --comment "$comment Its branch, \`$branch\`, is kept: it has commits beyond the version change." > /dev/null
+  fi
+  echo "Closed pull request #$number ($branch)."
 }
 
 case "$mode" in
@@ -69,17 +89,14 @@ case "$mode" in
     # Any other release's pull request is superseded.
     open_prs | while read -r other other_branch; do
       if [ "$other" != "$number" ]; then
-        gh pr close "$other" --repo "$repo" --delete-branch \
-          --comment "Superseded by #$number: Fleet $version is out." > /dev/null
-        echo "Closed pull request #$other ($other_branch)."
+        close_pr "$other" "$other_branch" "Superseded by #$number: Fleet $version is out."
       fi
     done
     ;;
   close)
     comment="${2:?comment}"
     open_prs | while read -r number branch; do
-      gh pr close "$number" --repo "$repo" --comment "$comment" --delete-branch > /dev/null
-      echo "Closed pull request #$number ($branch)."
+      close_pr "$number" "$branch" "$comment"
     done
     ;;
   show)
@@ -89,6 +106,12 @@ case "$mode" in
         gh pr view "$number" --repo "$repo" --json body --jq .body
       fi
     done
+    ;;
+  declined)
+    version="${2:?version}"
+    gh pr list --repo "$repo" --state closed --head "fleet-release-$version" --limit 20 \
+      --json number,mergedAt,isCrossRepository \
+      --jq '[.[] | select((.isCrossRepository | not) and .mergedAt == null)] | first | .number // empty'
     ;;
   *)
     echo "Unknown mode: $mode" >&2
