@@ -3046,6 +3046,8 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 - [x] **Step 3: Document it:** `docs/github-setup.md` step 11 and the secrets, `docs/upgrading-fleet.md`, the setup guide, the spec, the README, `AGENTS.md`, `/fleet-upgrade` and `/session-start`.
 - [x] **Step 4: Test it:** create the app and its secrets, run `action=release`, and check the pull request for 4.94.0: its plan and lint checks run, and the body has the review. Merge it with the stack up, and check that the apply on merge takes the snapshot before applying. *Done 2026-11-01:* `action=release` opened #127, "Upgrade Fleet to 4.94.0", as the release app on `fleet-release-4.94.0` (a signed commit changing only `fleet.Dockerfile`), with Claude's review in the body; its plan and lint checks ran, and Claude's pull request review skipped it as intended. Merged with the stack up: the apply on merge took `fleet-homelab-pre-upgrade-20261101220539` before applying, the migrations ran, and the service rolled out 4.94.0.
 
+**Changed 2026-11-07:** Fleet's releases are read through GraphQL (`scripts/fleet-releases.sh`, used by the release check and `release-review.sh`), not the REST releases list, which can leave out a new release for more than a day after it's published.
+
 ---
 
 ### Task 40: Apply what a teardown keeps, even while the stack is down

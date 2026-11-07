@@ -118,11 +118,8 @@ jobs:
         run: |
           current=$(sed -n 's|^FROM fleetdm/fleet:v||p' fleet.Dockerfile)
           # Captured first, so an API error fails the step instead of reading as "none".
-          releases=$(gh api 'repos/fleetdm/fleet/releases?per_page=100')
-          latest=$(jq -r '.[]
-            | select((.draft or .prerelease) | not)
-            | select(.tag_name | test("^fleet-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
-            | .tag_name | ltrimstr("fleet-v")' <<< "$releases" | sort -V | tail -n 1)
+          releases=$(./scripts/fleet-releases.sh)
+          latest=$(sort -V <<< "$releases" | tail -n 1)
           if [ -z "$current" ] || [ -z "$latest" ]; then
             echo "::error title=Fleet release check::Couldn't read the current version ('$current') or the newest release ('$latest')."
             exit 1
