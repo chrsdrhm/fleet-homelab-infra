@@ -88,6 +88,10 @@ jobs:
   fleet-release:
     name: fleet-release
     if: github.event_name == 'schedule' || inputs.action == 'release' || inputs.action == 'review'
+    # One at a time: two at once would both open the upgrade pull request.
+    concurrency:
+      group: fleet-release
+      cancel-in-progress: false
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 20
     permissions:
@@ -108,7 +112,8 @@ jobs:
       # it's a homelab, and nothing upgrades until it's merged. Claude's review is in the
       # pull request's body with a marker naming the versions; while the marker matches,
       # the pull request is left alone, so each upgrade is reviewed once. A failed review
-      # leaves no marker, so the next day tries again.
+      # leaves no marker, so the next day tries again. Closing the pull request without merging
+      # declines that release: it isn't reopened, and a newer release gets a new one.
       - name: Check for a newer Fleet release
         id: release
         if: github.event_name == 'schedule' || inputs.action == 'release'
@@ -128,13 +133,19 @@ jobs:
             echo "::warning title=No release app::Fleet's newest release is $latest and fleet.Dockerfile is on $current. Set up the release GitHub App (docs/github-setup.md, step 11) to get an upgrade pull request."
             exit 0
           fi
+          # Read before the tests below, where a failed read would count as "none".
+          open_any=$(./scripts/release-pr.sh show)
+          open_latest=$(./scripts/release-pr.sh show "$latest")
+          declined=$(./scripts/release-pr.sh declined "$latest")
           if [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)" = "$current" ]; then
             echo "fleet.Dockerfile is on $current, the newest release."
             # An upgrade pull request still open is out of date (main got there another way).
-            if [ -n "$(./scripts/release-pr.sh show)" ]; then
+            if [ -n "$open_any" ]; then
               echo "close=$current" >> "$GITHUB_OUTPUT"
             fi
-          elif ./scripts/release-pr.sh show "$latest" | grep -qF "<!-- release-review: $current..$latest -->"; then
+          elif [ -n "$declined" ]; then
+            echo "::notice title=Upgrade declined::Pull request #$declined, upgrading to $latest, was closed without merging, so it isn't reopened. A newer release gets a new one; to take this one, reopen #$declined."
+          elif grep -qF "<!-- release-review: $current..$latest -->" <<< "$open_latest"; then
             echo "The upgrade pull request already has a review of $current to $latest."
           else
             echo "review_from=$current" >> "$GITHUB_OUTPUT"
@@ -230,6 +241,13 @@ jobs:
           if [ "$OUTCOME" != success ] || [ ! -s "$RUNNER_TEMP/review.md" ]; then
             reviewed=false
             echo "::warning title=Release review failed::Claude's review of $FROM to $TO didn't complete; the next daily run tries again."
+            # Keep an open pull request's earlier review rather than replace it with nothing.
+            if [ "$ACTION" != review ]; then
+              existing=$(./scripts/release-pr.sh show "$TO")
+              if [ -n "$existing" ]; then
+                exit 0
+              fi
+            fi
           fi
           if [ "$ACTION" = review ]; then
             if [ "$reviewed" = true ]; then
@@ -254,6 +272,10 @@ jobs:
 
   health-scan:
     name: health-scan
+    # One at a time: two scans would both write to the same issue.
+    concurrency:
+      group: health-scan
+      cancel-in-progress: false
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'scan'
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 20

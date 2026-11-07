@@ -157,8 +157,9 @@ data "aws_iam_policy_document" "github_actions_apply" {
   # Roles by exact name, not a pattern: the stack's roles (local.ci_managed_roles) and no
   # others, so a run on main can't create a new role with a broad policy and hand it to a
   # service it can start. A new role in the stack has to be added there, or its apply fails
-  # with AccessDenied. Fleet's module creates its two ECS roles without a permissions
-  # boundary option, so a boundary can't be required here (plan Task 42).
+  # with AccessDenied. It can still widen these roles' own policies, which a permissions
+  # boundary would stop, but Fleet's module creates its two ECS roles without a boundary
+  # option, so one can't be required here (plan Task 42).
   statement {
     sid    = "IamManageStackRoles"
     effect = "Allow"

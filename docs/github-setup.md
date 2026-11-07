@@ -304,8 +304,9 @@ The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.
 
 **What it does over time:**
 - **Once per upgrade:** while the pull request already has a review of the same two versions, it's left alone. A failed review is retried the next day.
-- **A newer release before you merge:** a new pull request for it, with a new review, and the older one is closed (with a link to the new one) and its branch deleted, commits pushed to it included.
-- **`fleet.Dockerfile` caught up another way:** the pull request is closed and its branch deleted.
+- **A newer release before you merge:** a new pull request for it, with a new review, and the older one is closed (with a link to the new one). Its branch is deleted, unless you pushed to it; then it's kept.
+- **`fleet.Dockerfile` caught up another way:** the pull request is closed, and its branch deleted on the same terms.
+- **To skip a release,** close its pull request without merging: the check doesn't reopen it, and the next release gets a new one. Reopen it to take the release after all.
 - **To complete the upgrade, merge the pull request.** With the stack up, the apply on merge snapshots the database first (`fleet-homelab-pre-upgrade-*`), then applies; with it down, the next `up` upgrades. See [upgrading Fleet](upgrading-fleet.md).
 
 **Set it up:**
