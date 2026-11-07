@@ -12,7 +12,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - Stopped tasks, within about an hour of an `up`, an upgrade or an apply that restarts Fleet (a changed Fleet setting): "Essential container in task exited" (exit 0) and "Scaling activity initiated by deployment". Both are the migrations add-on restarting Fleet. A non-zero exit code, `OutOfMemory` or a task that keeps restarting is not normal.
 
 ## 2. Fleet app logs
-- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON). When an apply restarts Fleet (an upgrade, or a changed Fleet setting: any new task definition), more in the minute the migrations add-on runs `fleet prepare db`: a banner and, for an upgrade, one plain line per migration, so dozens.
+- Levels: almost all `info`. A handful of lines with a blank level (startup output that isn't JSON). When an apply restarts Fleet (an upgrade, or a changed Fleet setting: any new task definition), more in the minute the migrations add-on runs `fleet prepare db`: a banner and, for an upgrade, one plain line per migration, so dozens. A release with no new migrations (most patch releases) prints only "Migrations already completed. Nothing to do.", so a line or two: also normal.
 - `error`: only `unlock failed`, a few dozen at a time, all within minutes of Fleet stopping (a restart, the migrations add-on during `up`, or an upgrade): a cron job loses its database lock as the old task shuts down.
 - `error` `invalid role: unassigned`: only if someone signed in through Okta without a role group (the intended refusal).
 - `warn`: none, or deprecation notices for API paths that `fleetctl` calls.
@@ -26,7 +26,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
 
 ## 4. Aurora
-- Status `available`, engine `8.0.mysql_aurora.3.13.0`.
+- Status `available`, engine the one `fleet.tf` pins (`engine_version`).
 - Events after an `up`: cluster created from snapshot, instance created, restarted and shut down (crash recovery during the restore), topology updated. A window reaching back into a teardown also shows the instance and cluster deleted. Otherwise: none.
 - Pending maintenance: 0.
 - CPU: average 10–15%, maximum about 60% (the restore and migrations). Just after an `up`, when the window is mostly the restore and migrations, an average up to about 25% is normal.
