@@ -32,20 +32,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 context="$work/context.md"
 
-# Every server release in between, patch releases included. The repo also publishes
-# agent releases, so keep only fleet-vX.Y.Z tags, and read pages until one is at or
-# below <from> (or five pages, about two years of releases).
-: > "$work/versions"
-for page in 1 2 3 4 5; do
-  gh api "repos/fleetdm/fleet/releases?per_page=100&page=$page" \
-    --jq '.[] | select((.draft or .prerelease) | not) | .tag_name
-      | select(test("^fleet-v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("fleet-v")' > "$work/page"
-  cat "$work/page" >> "$work/versions"
-  oldest=$(sort -V "$work/page" | head -n 1)
-  if [ ! -s "$work/page" ] || ! newer "$oldest" "$from"; then
-    break
-  fi
-done
+# Every server release in between, patch releases included.
+./scripts/fleet-releases.sh "$from" > "$work/versions"
 versions=$(sort -V -u "$work/versions" | while read -r v; do
   if newer "$v" "$from" && ! newer "$v" "$to"; then echo "$v"; fi
 done)
