@@ -1,6 +1,6 @@
 # GitHub setup
 
-The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label, an optional GitHub App, and the optional Claude reviews and checks (steps 6–8). It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
+The GitHub side of both repos: secrets and variables, repository settings, branch rules, a label, three GitHub Apps (the GitOps run, the nightly timer and the upgrade pull requests), and the optional Claude reviews and checks (steps 5–11). It's part of the [setup guide](setup.md) (steps 7 and 8). Run the commands from anywhere the GitHub CLI is signed in. Set `OWNER` first:
 
 ```bash
 OWNER=$(gh api user --jq .login)
@@ -48,7 +48,7 @@ Do the steps in this order. The branch rules require checks that must have run a
 |---|---|---|
 | `AUTO_DOWN_SKIP_UNTIL` | `fleet-homelab-infra` | The last day the stack stays up; the nightly teardown skips until then (see **Nightly teardown** below). |
 | `NIGHTLY_APP_ACTOR` | `fleet-homelab-infra` | The nightly timer app's `<app-slug>[bot]` name: every run it starts is treated as the nightly check (step 10). |
-| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and `claude-opus-5-5` for new releases and the health scan (steps 7 and 8). |
+| `CLAUDE_REVIEW_MODEL` | either | Pins the Claude reviews' model; without it, your plan's default for pull requests (step 6) and the default in `scripts/claude-message.sh` for new releases and the health scan (steps 7 and 8). |
 
 ## 2. Repository settings
 
@@ -95,9 +95,8 @@ gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homel
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
-The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when a nightly check started by hand after 8am finds the stack up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
+The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when a nightly check that starts after 7:59am Chicago time (by hand, or a late timer run) finds the stack up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
 
-GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on.
 
 ## 3. Run the checks once
 
@@ -291,7 +290,7 @@ GitHub often starts scheduled runs hours late, past the 8am cutoff, so the night
    Then delete the key file.
 6. **Tell the workflow which app it is:** `gh variable set NIGHTLY_APP_ACTOR --body '<app-slug>[bot]' --repo $OWNER/fleet-homelab-infra`, where the slug is the app's name as it appears in its URL (`github.com/apps/<app-slug>`).
 7. **Confirm the alert email:** AWS emails `budget_alert_email` a subscription confirmation for the timer's failure alerts. Click it.
-8. **Test it:** `aws lambda invoke --function-name fleet-homelab-nightly /dev/null` starts a "Terraform nightly check (down if up)" run, started by the app. It tears down a running stack, so set `AUTO_DOWN_SKIP_UNTIL` to today first to test without a teardown.
+8. **Test it:** `aws lambda invoke --function-name fleet-homelab-nightly /dev/null` starts a "Terraform nightly check (down if up)" run, started by the app. Between midnight and 7:59am Chicago time it tears down a running stack; later in the day it only reports, and opens "The nightly teardown didn't run" if the stack is up. To test without either, set `AUTO_DOWN_SKIP_UNTIL` to today first.
 
 **Security:**
 - **The app can only start the nightly check.** Its token is for this repo with Actions write only, the function revokes it when done, and the workflow runs anything the app starts as `nightly`.
@@ -323,6 +322,8 @@ The daily release check (`fleet-release` in `fleet-checks.yml`) compares `fleet.
    gh secret set RELEASE_APP_PRIVATE_KEY --repo $OWNER/fleet-homelab-infra < path/to/the-key.pem
    ```
 5. **Test it:** `gh workflow run fleet-checks.yml --repo $OWNER/fleet-homelab-infra -f action=release` runs the release check now. If `fleet.Dockerfile` is behind, it opens the pull request; if it's current, the run says so and opens nothing.
+
+GitHub turns off scheduled workflows in a public repo after 60 days without activity; it emails you first, and any push turns them back on. That affects only the daily release check: the nightly check is started from AWS.
 
 **Security:**
 - **The app can't change `main`.** It writes only to its own `fleet-release-*` branches; `main` takes changes only through a pull request with passing checks, and merging is yours.

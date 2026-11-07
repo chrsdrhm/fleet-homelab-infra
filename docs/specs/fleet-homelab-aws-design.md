@@ -175,7 +175,7 @@ Non-goals above.
 | Component | Decision |
 |---|---|
 | VPC | 3 AZs (module requirement for subnet groups; us-east-1a, 1f and 1c, chosen when Aurora was `db.t4g.medium`, orderable only in 1c and 1f; see the plan's Task 3); public, private, database, and elasticache subnets. **NAT Gateway restored** (single gateway, module default) — Fargate now runs in a private subnet with egress via NAT, not a public subnet. |
-| Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45, at or above Fleet's minimum of 8.0.44), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
+| Database | **Aurora MySQL** via the root module's built-in `rds_config`, engine 3.13.0 (MySQL 8.0.45; checked against Fleet's minimum on each upgrade), `db.t3.medium` (`db.t4g.medium` until repeated capacity failures; see the plan's Task 3), single instance (`replicas = 1` — the total instance count in the root module, so one writer and no reader; see Non-goals), 7-day backup retention |
 | Cache | ElastiCache Redis, `cache.t4g.small`, `cluster_size = 1` (no failover) |
 | Compute | ECS Fargate, `cpu = 512`, `mem = 4096` (4GB required for vulnerability scanning, which stays **on**), `autoscaling.min_capacity = 1`, `max_capacity = 2`. Task now in a **private subnet**, NAT for egress, security group still only allows inbound from the ALB's security group. |
 | Image | `fleetdm/fleet`, pinned to a release tag in `fleet.Dockerfile`; the daily release check (`fleet-checks.yml`) opens a pull request that upgrades to a newer release within a day of it (the `quay.io` mirror is the fallback if Docker Hub rate limits ever bite) |
@@ -250,10 +250,10 @@ GitHub.
   (Windows/macOS/Linux); one fleet is sufficient at this scale. The scaffold's second
   `personal-mobile-devices` fleet is deleted. Note `default.yml` containing
   `org_settings` makes the workflow delete any Fleet not defined in the repo.
-- GitHub Actions workflow (from the `fleetctl new` scaffold, kept in step with
-  Fleet's current template): push to `main` → apply; pull request → dry-run
+- GitHub Actions workflow (from the `fleetctl new` scaffold; the release
+  review diffs Fleet's template on each upgrade): push to `main` → apply; pull request → dry-run
   only, run with `pull_request_target` so the workflow comes from `main` and the
-  pull request's YAML is only read; nightly cron → drift correction. `fleetctl`
+  pull request's YAML is only read; a manual run → drift correction (no schedule). `fleetctl`
   is the server's exact release, downloaded from GitHub and checksum-verified. Fleet's
   `/fleet-gitops` Claude skill is in the repo, limited to dry runs.
   Every run first checks Fleet's `/healthz`; when the stack is torn down it
@@ -603,8 +603,8 @@ secrets) to get an installation token limited to that repo and Actions write,
 revoked when the job ends. Chosen over a fine-grained personal access token,
 which expires and is tied to a user; the app's key does not expire and can do
 nothing beyond starting workflows in one repo. The step is best effort: if it
-fails, the rebuild still succeeds with a warning, and the nightly GitOps run
-catches up.
+fails, the rebuild still succeeds with a warning, and the next push, `up` or
+manual GitOps run catches up.
 
 ## Dashboard (Grafana) — optional, planned
 
@@ -654,7 +654,7 @@ the time by design, a red board usually means "torn down on purpose".
   Chicago time by an AWS timer, `nightly.tf`: EventBridge Scheduler, a Lambda
   function and a GitHub App that can only start the check, with alarms emailed
   when it fails or isn't called; it acts until 7:59am Chicago time, and only
-  reports, in an issue, if started later by hand) that tears the stack down if it was left up and keeps an
+  reports, in an issue, if it starts later: by hand, or a late timer run) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
   that the next successful one closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that
