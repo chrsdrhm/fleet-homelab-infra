@@ -3048,6 +3048,8 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 
 **Changed 2026-11-07:** Fleet's releases are read through GraphQL (`scripts/fleet-releases.sh`, used by the release check and `release-review.sh`), not the REST releases list, which can leave out a new release for more than a day after it's published.
 
+**Changed 2026-11-07, from a code review:** an upgrade pull request closed without merging declines its release (the check doesn't reopen it; a newer release gets a new one). Closing one keeps its branch if a person pushed to it. A failed review leaves an open pull request's earlier review in place. The release check and the health scan each run one at a time. The apply on merge's retry (`tf-apply.sh`) keeps the Plan step's targets, so with the stack down it can't build the whole stack. The Claude pull request review's summary is sanitized like Claude's other public text.
+
 ---
 
 ### Task 40: Apply what a teardown keeps, even while the stack is down
