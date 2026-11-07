@@ -13,9 +13,9 @@
 **Status as of 2026-11-07:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks), 21 (health scan runbook), 25 (Fleet upgrades, the runbook, `/fleet-upgrade`, release and module alerts), 30 (health-scan skill, run after every `up` and every change that goes live), 33 (the teardown notices), 35 (kept-snapshot reminder), 36 (CI for `okta/`), 37 (the nightly check started by an AWS timer, at 3am Chicago time), 38 (Claude's review of each new Fleet release), 39 (an upgrade pull request for each release), 40 (applying kept resources with the stack down; Step 2, its test, waits for such a merge), 41 (Terraform's version kept current by Dependabot) and 42 (the apply role's IAM narrowed to the stack's roles; Step 4, a permissions boundary, waits on Fleet's module).
 - **Open, needing a device:** 20 (enroll devices, Windows first: Okta sign-in at enrollment, all four Windows paths, local accounts, Entra federated with Okta; Part A, the Okta end-user app, comes first), then 27 (Intune to Fleet migration), 28 (a PSADT app), 29 (Fleet's MCP server), 31 and 32 (packaging and Intune policy skills).
-- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 34 (expiry and rotation watch). Changes still in open pull requests are recorded in their tasks once merged.
+- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet). Changes still in open pull requests are recorded in their tasks once merged.
 - **Optional, not planned:** Task 8 Part B (Apple push certificate), needed only to enroll a Mac.
-- **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra).
+- **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra), Task 34 (an expiry watch, not needed: nothing expires soon or silently).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
 
 
@@ -2973,9 +2973,19 @@ Added at my request. Several things here expire or age silently. A monthly sched
 | `FLEET_API_TOKEN`, `CLOUDFLARE_API_TOKEN` | The secret's last update date; Cloudflare's token-verify API also returns `expires_on` | Rotation by age |
 | Fleet's Entra MDM app client secret | Its end date in Entra | Once Task 20 Part C exists |
 
-- [ ] **Step 1: Write the workflow** (monthly, plus manual), reading only dates: never print a value, and keep the issue free of identifying details.
-- [ ] **Step 2: Test it** with a short threshold, then set 30 days.
-- [ ] **Step 3: Contribute** what Fleet lacks (each draft shown to me first): for example a comment on #9376 or #49842, or an issue for Windows MDM certificate expiry.
+**Retired 2026-11-07, not built:** checked one by one, nothing here needs a watch. Each item either lasts years or fails loudly at a session, when I'm there to fix it:
+- **The Fleet Premium license** expires 2028-09-16 (its `exp` claim), and Fleet shows a banner beforehand.
+- **The Windows MDM certificate** was made with `-days 3652` (Task 8), so it lasts to about 2036. Reading it from CI would also expose its private key.
+- **Okta's app signing certificates** last about 10 years.
+- **The Cloudflare token** (account-owned; checked at `accounts/<id>/tokens/verify`) has no expiry.
+- **The GitOps repo's `FLEET_API_TOKEN`** (an API-only user) never expires.
+- **`CLAUDE_CODE_OAUTH_TOKEN`** lasts a year, and when it expires the pull request review fails with a notice on the pull request.
+
+Watching Okta's last admin sign-in would need CI to read Okta's system log, which is full of identifying data, and the monthly sign-in reminder already covers it. Revisit if the stack ever runs unattended.
+
+- [x] **Step 1: Write the workflow** *Not built (see above).*
+- [x] **Step 2: Test it** *Not needed.*
+- [x] **Step 3: Contribute** what Fleet lacks *Not pursued: Fleet's banners cover the license, and the Windows certificate's ten-year life makes an expiry warning low value.*
 
 ### Task 35: A reminder for kept snapshots
 
