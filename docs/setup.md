@@ -13,7 +13,7 @@ The first build takes about 30 minutes. While it's up, the stack costs about $0.
   - GitHub
   - optional: an Okta org for single sign-on (step 6); Claude for the optional reviews and checks in CI (a Claude subscription for pull request reviews, a Claude Console organization for the release review and health scan)
 - **Tools:**
-  - [Terraform](https://developer.hashicorp.com/terraform/install) 1.12 or newer (ideally the version CI uses, in `.github/terraform/Dockerfile`; upgrade yours when Dependabot bumps it)
+  - [Terraform](https://developer.hashicorp.com/terraform/install) at or above the minimum in `providers.tf` (ideally the version CI uses, in `.github/terraform/Dockerfile`; upgrade yours when Dependabot bumps it)
   - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
   - [GitHub CLI](https://cli.github.com/)
   - git, curl, jq, python3, dig (for the health scan)
@@ -175,7 +175,7 @@ It's the easier way day to day:
 With [Claude Code](https://claude.com/claude-code), `/session-start` and `/session-end` (in `.claude/skills/`) do the routine around these: check sign-ins, open pull requests and runs in progress, run `up` or `down`, check the result, and handle the nightly teardown and leftover snapshots. They ask before setting the teardown variable or deleting anything, and `/session-end` asks before tearing down.
 
 **Changing the nightly teardown.** The AWS timer ([GitHub setup step 10](github-setup.md#10-start-the-nightly-check)) starts it at 3am Chicago time (`nightly.tf`):
-- **Another time:** change the timer's `schedule_expression` (it follows daylight saving; avoid 2:00 to 2:59am, which is skipped the night clocks spring forward). The "Decide what to run" step in `.github/workflows/terraform.yml` tears down only if the check starts between midnight and 7:59am in `America/Chicago`; a nightly check started later, by hand, leaves the stack up and opens an issue, "The nightly teardown didn't run", which closes once a teardown succeeds or a later check finds the stack down. Change the time zone and hours in that step too.
+- **Another time:** change the timer's `schedule_expression` (it follows daylight saving; avoid 2:00 to 2:59am, which is skipped the night clocks spring forward). The "Decide what to run" step in `.github/workflows/terraform.yml` tears down only if the check starts between midnight and 7:59am in `America/Chicago`; a nightly check that starts later (by hand, or a late timer run) leaves the stack up and opens an issue, "The nightly teardown didn't run", which closes once a teardown succeeds or a later check finds the stack down. Change the time zone and hours in that step too.
 - **Off for a night:** set the `AUTO_DOWN_SKIP_UNTIL` repository variable ([GitHub setup](github-setup.md)).
 - **Off for good:** delete the timer (`nightly.tf`).
 

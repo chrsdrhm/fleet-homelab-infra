@@ -26,7 +26,7 @@ What `scripts/health-scan.sh` normally shows for this stack, from plan Task 21's
 - RequestCount and Target 2XX: about the same. With only a handful of requests (just after an `up`), they can differ by a few; only a large gap, or 5xx alongside it, is a finding.
 
 ## 4. Aurora
-- Status `available`, engine `8.0.mysql_aurora.3.13.0`.
+- Status `available`, engine the one `fleet.tf` pins (`engine_version`).
 - Events after an `up`: cluster created from snapshot, instance created, restarted and shut down (crash recovery during the restore), topology updated. A window reaching back into a teardown also shows the instance and cluster deleted. Otherwise: none.
 - Pending maintenance: 0.
 - CPU: average 10–15%, maximum about 60% (the restore and migrations). Just after an `up`, when the window is mostly the restore and migrations, an average up to about 25% is normal.

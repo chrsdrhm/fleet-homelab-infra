@@ -2,7 +2,7 @@
 name: fleet-upgrade
 description: Upgrade the self-hosted Fleet server - review the releases in between against this setup, review (or open) the upgrade pull request, make sure there's a pre-upgrade snapshot, and check the result after the merge. Run it only when the person asks.
 disable-model-invocation: true
-allowed-tools: Bash(gh release list *), Bash(gh release view *), Bash(gh api repos/fleetdm/fleet/git/trees/*), Bash(gh api repos/fleetdm/fleet/contents/*), Bash(gh api repos/fleetdm/fleet-terraform/tags), Bash(gh pr list), Bash(gh pr list *), Bash(gh pr view *), Bash(gh pr checks *), Bash(gh pr diff *), Bash(gh run list *), Bash(gh run view *), Bash(gh run watch *), Bash(aws sts get-caller-identity --query *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(aws ecs describe-services --cluster fleet-homelab --services fleet --query *), Bash(aws ecs describe-task-definition --task-definition fleet --query *), Bash(aws logs describe-log-groups --log-group-name-prefix terraform- --query *), Bash(aws logs start-query *), Bash(aws logs get-query-results *), Bash(git status), Bash(git diff *), Bash(TZ=America/Chicago date)
+allowed-tools: Bash(gh release list *), Bash(GH_TOKEN=$(gh auth token) scripts/fleet-releases.sh *), Bash(gh release view *), Bash(gh api repos/fleetdm/fleet/git/trees/*), Bash(gh api repos/fleetdm/fleet/contents/*), Bash(gh api repos/fleetdm/fleet-terraform/tags), Bash(gh pr list), Bash(gh pr list *), Bash(gh pr view *), Bash(gh pr checks *), Bash(gh pr diff *), Bash(gh run list *), Bash(gh run view *), Bash(gh run watch *), Bash(aws sts get-caller-identity --query *), Bash(aws rds describe-db-clusters --db-cluster-identifier fleet-homelab --query *), Bash(aws ecs describe-services --cluster fleet-homelab --services fleet --query *), Bash(aws ecs describe-task-definition --task-definition fleet --query *), Bash(aws logs describe-log-groups --log-group-name-prefix terraform- --query *), Bash(aws logs start-query *), Bash(aws logs get-query-results *), Bash(git status), Bash(git diff *), Bash(TZ=America/Chicago date)
 ---
 
 # Upgrade Fleet
@@ -16,7 +16,7 @@ Invoking the skill asks for a review and a plan. **Each step that changes someth
 ## 1. Versions
 
 - **Current:** the `FROM fleetdm/fleet:vX.Y.Z` line in `fleet.Dockerfile` (`fleet.tf` reads it). If the stack is up, also check what's running: `aws ecs describe-task-definition --task-definition fleet --query 'taskDefinition.containerDefinitions[0].image' --output text`.
-- **Target:** what the person names, or the newest release: `gh release list --repo fleetdm/fleet --limit 30`, keeping only `fleet-v*` tags (the repo also publishes agent releases). If the release check's "Upgrade Fleet to …" pull request is open (`gh pr list --search 'Upgrade Fleet to in:title'`), it names one.
+- **Target:** what the person names, or the newest release: `GH_TOKEN=$(gh auth token) scripts/fleet-releases.sh | sort -V | tail -n 1`, the same list the release check reads (server releases only; the repo also publishes agent releases). If the release check's "Upgrade Fleet to …" pull request is open (`gh pr list --search 'Upgrade Fleet to in:title'`), it names one.
 - **Every release in between, patch releases included:** both the target's line and any patches on the current line (for example 4.92.1 to 4.92.3 when going from 4.92.0 to 4.93.0).
 - **The image exists:** `fleetdm/fleet:v<target>` on Docker Hub (`https://hub.docker.com/v2/repositories/fleetdm/fleet/tags/v<target>`).
 
@@ -81,7 +81,7 @@ Then tell the person it's ready to merge, and what happens: the apply on merge s
 
 ## 7. If a check fails
 
-Say what failed, and set out the runbook's **Rolling back** section: revert the upgrade pull request, `down`, then rebuild from the pre-upgrade snapshot with `rds_snapshot_identifier`. Anything recorded since the snapshot is lost with it (including MDM enrollments and escrowed keys). Run none of it without a yes, and consider first whether a fix forward (a patch release) is the better answer.
+Say what failed, and set out the runbook's **Rolling back** section: `down` first (reverting while the stack is up would roll the old version onto the migrated database), then revert the upgrade pull request, then rebuild from the pre-upgrade snapshot with `rds_snapshot_identifier`. Anything recorded since the snapshot is lost with it (including MDM enrollments and escrowed keys). Run none of it without a yes, and consider first whether a fix forward (a patch release) is the better answer.
 
 ## 8. Wrap up
 
