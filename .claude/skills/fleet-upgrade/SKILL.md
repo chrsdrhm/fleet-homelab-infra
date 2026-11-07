@@ -77,7 +77,7 @@ Then tell the person it's ready to merge, and what happens: the apply on merge s
   - `fields @timestamp, @message | filter @message like /Missing migrations/ or @message like /\[20\d\d-\d\d-\d\d\]/ | sort @timestamp asc` lists the migrations `fleet prepare db` ran.
   - `filter level in ["error","warn"] or @message like /(?i)panic|fatal/ | stats count(*), min(@timestamp), max(@timestamp) by level, msg` sums up errors. `unlock failed` with `context canceled` while the old task shuts down is expected (plan Task 21's baseline); anything else needs a look.
   - The apply on merge then starts "Health scan after apply on merge" (`gh run list --workflow fleet-checks.yml --limit 1`): watch it and report its verdict. For a closer look, run `/health-scan` over the hours since the merge.
-- **The version, through GitOps:** start a GitOps run (`gh workflow run workflow.yml --repo <owner>/fleet-homelab-gitops --ref main`, on a yes), watch it, and check its log says `Installing fleetctl v<target>` with the checksum `OK`: the workflow reads the server's version to choose `fleetctl`, so this confirms the server reports the target, without handling an API token here.
+- **The version, through GitOps:** start a GitOps run (`gh workflow run workflow.yml --repo <owner>/fleet-homelab-gitops --ref main`, on a yes), watch it, and check its log says `Installing fleetctl v<target>`, the checksum `OK` and `Build provenance verified` (Fleet's release workflow built that `fleetctl`): the workflow reads the server's version to choose `fleetctl`, so this confirms the server reports the target, without handling an API token here.
 
 ## 7. If a check fails
 
