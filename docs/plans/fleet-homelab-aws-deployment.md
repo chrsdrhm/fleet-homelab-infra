@@ -3015,7 +3015,7 @@ Added 2026-10-19 at my request. GitHub doesn't guarantee when a scheduled run st
 - [x] **Step 5: Test it.** A one-off schedule a few minutes ahead (or a test invoke) starts a `nightly` run, which tears down a running stack; with the stack down it only reports. Check the run's actor is the app, and that the backup scheduled run later does nothing. *2026-10-31:* a test invoke with the skip variable set started a `nightly` run as the app, which skipped as expected. *2026-11-01:* the first scheduled run fired at 2:17am Chicago time (the night daylight saving ended), started as the app, and tore the stack down in about 19 minutes. GitHub started the backup run about 7 hours late, and it found the stack down. The function used 121 MB of its 128 MB, so its memory is now 256 MB.
 - [x] **Step 6: Document it:** the spec (CI and Cost: expected to stay within the free tiers), the README's nightly bullet, `docs/github-setup.md` (the app and the parameter), the setup guide, and `/session-start` (the check now runs at 2:17am Chicago time all year).
 
-**Changed 2026-11-01:** GitHub's backup schedule is removed. It started its run about 7 hours late the first night, past the 8am cutoff, so it could only report, never tear down. One new alarm replaces both it and the scheduler's dropped-call alarm: the function not called in 26 hours (a run's gap is 23 to 25 hours around daylight saving changes), which also catches a disabled or deleted schedule. The timer moves to 3am, `cron(0 3 * * ? *)`: :17 only spread load for GitHub, and 2:00 to 2:59am doesn't exist the night clocks spring forward, when Scheduler skips the run. GitHub setup step 10 is no longer optional: without the timer there's no nightly check.
+**Changed 2026-11-01:** GitHub's backup schedule is removed. It started its run about 7 hours late the first night, past the 8am cutoff, so it could only report, never tear down. One new alarm replaces both it and the scheduler's dropped-call alarm: the function not called in 26 hours (a run's gap is 23 to 25 hours around daylight saving changes), which also catches a disabled or deleted schedule. The timer moves to 3am, `cron(0 3 * * ? *)`: :17 only spread load for GitHub, and 2:00 to 2:59am doesn't exist the night clocks spring forward, when Scheduler skips the run. GitHub setup step 10 is no longer optional: without the timer there's no nightly check. *Tested 2026-11-02:* the 3am run started as the app and tore the stack down, and both alarms stayed OK.
 
 ---
 
@@ -3067,7 +3067,7 @@ Added 2026-11-01 at my request. CI was on Terraform 1.14.8 with 1.17.1 out: Depe
 
 - [x] **Step 1: Upgrade to 1.17.1** in CI and locally.
 - [x] **Step 2: Let Dependabot manage it** (`.github/terraform/Dockerfile`, read by both workflows; the `docker` entry in `dependabot.yml`).
-- [ ] **Step 3: Test it:** this pull request's lint, plan and apply on merge run on 1.17.1, read from the file, and Dependabot's next `docker` check finishes and finds it current.
+- [x] **Step 3: Test it:** this pull request's lint, plan and apply on merge run on 1.17.1, read from the file, and Dependabot's next `docker` check finishes and finds it current. *Done 2026-11-07:* CI's runs read 1.17.1 from the file, and Dependabot's `docker` check in `/.github/terraform` finished with no pull request.
 
 ---
 
@@ -3078,8 +3078,8 @@ Added 2026-11-01 from a code review: the apply role could create any `fleet*` or
 **Built 2026-11-01:** roles by exact name instead (`local.ci_managed_roles` in `oidc.tf`: `fleet-role`, `fleet-execution-role` and the nightly timer's two), each passable only to its own service (ECS tasks, Lambda, Scheduler). Managed policies keep `fleet*` and `terraform-*` (the MDM and SES addons' generated names); a policy grants nothing until attached, and only those four roles can have one attached. The unused Firehose and RDS-monitoring PassRole entries are gone; Task 12 adds Firehose's back. The residual, documented in the spec: CI can still widen Fleet's own two roles, which it must manage to deploy Fleet. A `terraform test` run pins the role list and the PassRole mapping.
 
 - [x] **Step 1: Narrow the roles and PassRole** (`oidc.tf`), with `apply_role_manages_only_the_stack_roles` in `security.tftest.hcl` (checked to fail with the old `role/fleet*` pattern).
-- [ ] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
-- [ ] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles).
+- [x] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
+- [x] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles). *Done:* the nightly `down` on 2026-11-02 and an `up` on 2026-11-04 succeeded.
 - [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
 
 ---
