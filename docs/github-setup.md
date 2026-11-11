@@ -95,7 +95,7 @@ gh variable set AUTO_DOWN_SKIP_UNTIL --body 2026-10-14 --repo $OWNER/fleet-homel
 gh variable delete AUTO_DOWN_SKIP_UNTIL --repo $OWNER/fleet-homelab-infra
 ```
 
-The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when a nightly check that starts after 7:59am Chicago time (by hand, or a late timer run) finds the stack up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
+The Terraform workflow also opens issues: one when a teardown fails (closed by the next one that succeeds), one when a nightly check fails before it can tear the stack down (closed by a later check that finds it down or tears it down), one when a nightly check that starts after 7:59am Chicago time (by hand, or a late timer run) finds the stack up, and one listing kept snapshots older than 14 days (see the setup guide's [Day to day](setup.md#9-day-to-day)). A newer Fleet release gets a pull request instead (step 11). Leave **Issues** turned on in the repo's settings for them.
 
 
 ## 3. Run the checks once
