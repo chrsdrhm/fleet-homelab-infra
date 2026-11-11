@@ -13,7 +13,7 @@
 **Status as of 2026-11-07:**
 - **Built and verified:** Tasks 1, 2, 3 (except Step 8b), 4, 6, 7, 8 Part A (Windows MDM certificate), 9, 10 (Okta SSO), 11 (GitOps repo), 13 (budget), 14 (up/down scripts), 15 (CI through OIDC; Step 5, the fork test, is open), 16 (PR plan checks), 21 (health scan runbook), 25 (Fleet upgrades, the runbook, `/fleet-upgrade`, release and module alerts), 30 (health-scan skill, run after every `up` and every change that goes live), 33 (the teardown notices), 35 (kept-snapshot reminder), 36 (CI for `okta/`), 37 (the nightly check started by an AWS timer, at 3am Chicago time), 38 (Claude's review of each new Fleet release), 39 (an upgrade pull request for each release), 40 (applying kept resources with the stack down; Step 2, its test, waits for such a merge), 41 (Terraform's version kept current by Dependabot) and 42 (the apply role's IAM narrowed to the stack's roles; Step 4, a permissions boundary, waits on Fleet's module).
 - **Open, needing a device:** 20 (enroll devices, Windows first: Okta sign-in at enrollment, all four Windows paths, local accounts, Entra federated with Okta; Part A, the Okta end-user app, comes first), then 27 (Intune to Fleet migration), 28 (a PSADT app), 29 (Fleet's MCP server), 31 and 32 (packaging and Intune policy skills).
-- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet). Changes still in open pull requests are recorded in their tasks once merged.
+- **Open, other:** Task 3 Step 8b (read-only `fleetctl` tour), 12 (osquery logs, not started), 15 Step 5 (fork test), 17 (Grafana, optional, self-hosted on Proxmox), 19 (activities webhook, written, not built), 22 (architecture diagram), 23 (Fargate and image deep dive), 24 (hands-on inside Aurora and Redis), 26 (GitOps dry-run comment; not to be built yet), 43 (Okta moves to an Integrator Free Plan org after the trial ended; single sign-on is off until then). Changes still in open pull requests are recorded in their tasks once merged.
 - **Optional, not planned:** Task 8 Part B (Apple push certificate), needed only to enroll a Mac.
 - **Superseded or retired:** Task 5 (folded into Task 17), Task 18 (retired with Entra), Task 34 (an expiry watch, not needed: nothing expires soon or silently).
 - **Running state:** the stack is torn down with `scripts/down.sh` and rebuilt with `scripts/up.sh`, locally or from the `Terraform` workflow (`up` or `down`). A rebuild restores the newest teardown snapshot and then starts a GitOps run. `okta/` is applied locally.
@@ -3097,6 +3097,23 @@ Added 2026-11-01 from a code review: the apply role could create any `fleet*` or
 - [x] **Step 2: Apply it locally** before merging: `terraform apply -target=aws_iam_policy.github_actions_apply` (CI can't change its own role).
 - [x] **Step 3: Test it:** the next `down` and `up` from CI succeed (they delete and recreate Fleet's two roles). *Done:* the nightly `down` on 2026-11-02 and an `up` on 2026-11-04 succeeded.
 - [ ] **Step 4: Later, ask Fleet** for a `permissions_boundary` input on the module's ECS roles, then require a boundary here (at my request: revisit, not now; draft shown first).
+
+---
+
+### Task 43: Move Okta to an Integrator Free Plan org
+
+Added 2026-11-11 at my request. The Okta Workforce trial ended on day 30 without becoming a Free Plan: Okta's current trial terms ("Additional Free Trial Terms for Okta Platform Free Trial", linked from okta.com/agreements) end access to the products when the 30 days are up, so the admin console closed, and only Okta's sales team can extend it. The Task 10 decision assumed an automatic Free Plan, from an earlier version of those terms. A new trial isn't possible: Okta's sign-up refuses an email domain that already has an org.
+
+**Disconnected 2026-11-11:** Fleet's single sign-on and end-user authentication are off (GitOps repo #49 and #50), the Okta-created Fleet accounts are deleted (only the break-glass account is left), the two metadata secrets are deleted, and `terraform destroy` in `okta/` removed the two SAML apps, their group assignments and the three groups. The org's two API service apps remain; they can't be removed without the admin console, and stop working with the org. The org itself, and the email domain tied to it, can only be released by Okta.
+
+**Next:** an Okta Integrator Free Plan org (developer.okta.com/signup): free, up to 10 users, SAML apps and the API, and it doesn't expire (it's deactivated after 180 days without use). Its terms describe it as for developing and testing integrations; a homelab for learning Fleet fits that. Sign up with the domain's email if Okta allows it; if not, sign up with another address and create the domain-email user inside the org.
+
+- [ ] **Step 1: Sign up** for the Integrator org, and check it allows custom SAML apps and an API service app with `okta.apps.manage` and `okta.groups.manage`.
+- [ ] **Step 2: Rebuild `okta/`** in the new org: a new API service app and key, `okta/terraform.tfvars` pointed at the new org, `terraform apply` from my machine. The Terraform code carries over unchanged.
+- [ ] **Step 3: Reconnect Fleet:** the two metadata secrets in the GitOps repo, then a pull request that turns single sign-on and end-user authentication back on (reverting #49 and #50). Fleet Admins membership is set by hand in the new org's console.
+- [ ] **Step 4: CI's read-only Okta plan:** a new read-only service app in the new org, and its secrets replaced in this repo.
+- [ ] **Step 5: The private-values check:** add an `integrator-<number>` org-name pattern next to `trial-<number>` (`checks/private-values/check.py` and its test), and refresh the hashes of the new org's values.
+- [ ] **Step 6: Update the docs:** replace the trial org with the Integrator Free Plan in the README, the setup guide, the spec and `okta/` (`example.tfvars`, the variable descriptions), and add a warning to the setup guide: an Okta trial lasts 30 days, and when it ends you lose access to the admin console and, in time, to Okta's products; it doesn't become a free plan. Mark Task 10's org-type decision as superseded by this task.
 
 ---
 
