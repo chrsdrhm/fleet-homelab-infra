@@ -98,7 +98,8 @@ Then click the link in the email AWS sends.
 
 ## 6. Optional: Okta single sign-on
 
-1. Create an [Okta free trial](https://www.okta.com/free-trial/) org. It becomes a free plan after 30 days; sign in monthly to keep it active.
+1. Create an [Okta Integrator Free Plan](https://developer.okta.com/signup/) org. It's free for up to 10 users and has no end date, but Okta deactivates it after 180 days without use, so sign in at least every few months.
+   > **Warning:** don't use an Okta free trial. A trial lasts 30 days and doesn't turn into a free plan: when it ends, you lose access to the admin console, and later to sign-in itself. Okta also refuses a second org for an email domain that already has one, so a trial can tie up your domain after it ends.
 2. Create an **API Services** app for Terraform: Applications → Create App Integration → Classic experience.
    - Use a key pair, and save the private key outside the repo.
    - Grant it `okta.apps.manage` and `okta.groups.manage`, and the Super Administrator role.

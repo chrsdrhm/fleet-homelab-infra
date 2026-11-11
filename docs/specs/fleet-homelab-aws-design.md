@@ -41,16 +41,17 @@ AWS cost, since this is for personal homelab learning, not production scale.
   policy holds them). Okta refuses unassigned users, super
   admins included (verified in the build, plan Task 10 Step 5). Fleet's SSO is
   generic SAML, so nothing in the AWS infrastructure changed.
-- **The Okta org: a Workforce Identity free trial that becomes a Free Plan.**
-  Signed up at okta.com/free-trial (work email, name, phone and country); the
-  org gets a generated `trial-<number>.okta.com` address. The trial runs 30
-  days with everything on, then converts automatically to a Free Plan: up to
-  10 users, single sign-on, Universal Directory and MFA, no support, and Okta
-  may end an org after 45 days of inactivity, so an admin signs in at least
-  monthly (a calendar reminder). Cost: $0. Rejected: the Integrator Free plan,
-  whose terms exclude production use, and paid Starter ($1,500 annual minimum).
-  If Okta ever ends the org, the SSO setup is Terraform and rebuilds in a new
-  org quickly.
+- **The Okta org: an Integrator Free Plan org.** Signed up at
+  developer.okta.com/signup; the org gets a generated
+  `integrator-<number>.okta.com` address. Up to 10 users, custom SAML apps and
+  the management API, no support and no end date; Okta deactivates an org
+  after 180 days without use, so an admin signs in at least every few months.
+  Its terms describe it as for developing and testing integrations, which a
+  homelab for learning Fleet fits. Cost: $0. Rejected: a Workforce Identity
+  free trial, which ends after 30 days and closes the admin console rather
+  than becoming a free plan (the first org was one; plan Task 43), and paid
+  Starter ($1,500 annual minimum). If Okta ends the org, the SSO setup is
+  Terraform and rebuilds in a new org quickly.
 - **Terraform's access to Okta** is an OAuth 2.0 **API Services** app (in this
   org's console it is under Create App Integration → **Classic experience**),
   using client credentials with a key pair: the provider signs a short-lived
@@ -336,7 +337,7 @@ Route 53 zone ($0.50), two secrets (the Fleet server key and the MDM secret,
 $0.40 each), the two newest Aurora teardown snapshots (storage for a small
 database, cents), and the S3 buckets (state, software installers, IdP logo;
 cents). Free: the ACM certificate, the SES identity and the budget. Okta's
-Free Plan and GitHub Actions on public repos cost nothing.
+Integrator Free Plan and GitHub Actions on public repos cost nothing.
 A pre-upgrade snapshot (`fleet-homelab-pre-upgrade-*`, `docs/upgrading-fleet.md`)
 costs the same as a teardown snapshot (cents a month) until it's deleted by hand:
 `down.sh` doesn't prune it.

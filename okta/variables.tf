@@ -4,7 +4,7 @@ variable "fleet_subdomain" {
 }
 
 variable "okta_org_name" {
-  description = "Okta org name, the part before .okta.com (for example trial-1234567)."
+  description = "Okta org name, the part before .okta.com (for example integrator-1234567)."
   type        = string
 }
 

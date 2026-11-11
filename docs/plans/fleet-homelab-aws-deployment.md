@@ -987,6 +987,8 @@ Everything Entra-side was destroyed on 2026-10-03 (all nine Terraform resources,
 5. **Fleet side:** the public metadata URL (`terraform output -raw metadata_url`) and the logo URL go into Fleet's SSO settings, by hand once and then through the GitOps repo's secrets.
 6. **Upkeep:** sign in monthly; after the trial ends (early November 2026) confirm the org shows the Free Plan and Fleet sign-in still works.
 
+**Superseded 2026-11-11 by Task 43:** the org is now an Integrator Free Plan org. The trial didn't convert to a Free Plan; Okta's current trial terms end access after 30 days. The decision below is kept as it was made.
+
 **Org type: decided 2026-10-03 — the Okta Workforce Identity free trial, which converts to a Free Plan.** Options researched:
 - **Integrator Free Plan: rejected.** Okta's own support page says it is "not intended for production deployment" and the developer terms limit use to developing and testing an integration; real SSO for Fleet is outside that. (It would work technically; the risk is Okta ending the org without recourse.)
 - **Paid Starter: rejected.** $6/user/month with a $1,500 annual minimum, billed annually (about $125/month), against a $12–15/month budget.
@@ -2649,7 +2651,7 @@ Added after Task 19, at my request. **Not the same thing as Task 10/11's SSO.** 
 
 **Part B: Windows, with Okta and local accounts** (the first device)
 - [ ] **Step B1: Path 1, Fleet's agent (MSI) on a machine with only local Windows accounts**, not joined to Entra: build `fleetd` with the enroll secret (Fleet's UI, or `fleetctl package --type=msi`), install it, and sign in with Okta in the browser window Fleet opens. Check that setup doesn't continue until the sign-in, that the host shows the Okta user's name and email, and that Fleet turns on Windows MDM.
-- [ ] **Step B2: Okta at the Windows sign-in screen too (optional):** Okta Device Access's Desktop MFA for Windows puts Okta MFA on local Windows accounts. Check whether the Okta Free Plan includes it before planning on it.
+- [ ] **Step B2: Okta at the Windows sign-in screen too (optional):** Okta Device Access's Desktop MFA for Windows puts Okta MFA on local Windows accounts. Check whether the Okta org's plan includes it before planning on it.
 
 **Part C: the Microsoft paths**
 - [ ] **Step C1: Path 2, manual MDM** (Settings → Access work or school → Enroll only in device management) with Fleet's MDM URL. Record what the user sees, and that Fleet skips its own sign-in here because the user already authenticated.
@@ -3108,12 +3110,14 @@ Added 2026-11-11 at my request. The Okta Workforce trial ended on day 30 without
 
 **Next:** an Okta Integrator Free Plan org (developer.okta.com/signup): free, up to 10 users, SAML apps and the API, and it doesn't expire (it's deactivated after 180 days without use). Its terms describe it as for developing and testing integrations; a homelab for learning Fleet fits that. Sign up with the domain's email if Okta allows it; if not, sign up with another address and create the domain-email user inside the org.
 
-- [ ] **Step 1: Sign up** for the Integrator org, and check it allows custom SAML apps and an API service app with `okta.apps.manage` and `okta.groups.manage`.
-- [ ] **Step 2: Rebuild `okta/`** in the new org: a new API service app and key, `okta/terraform.tfvars` pointed at the new org, `terraform apply` from my machine. The Terraform code carries over unchanged.
+- [x] **Step 1: Sign up** for the Integrator org, and check it allows custom SAML apps and an API service app with `okta.apps.manage` and `okta.groups.manage`.
+- [x] **Step 2: Rebuild `okta/`** in the new org: a new API service app and key, `okta/terraform.tfvars` pointed at the new org, `terraform apply` from my machine. The Terraform code carries over unchanged.
 - [ ] **Step 3: Reconnect Fleet:** the two metadata secrets in the GitOps repo, then a pull request that turns single sign-on and end-user authentication back on (reverting #49 and #50). Fleet Admins membership is set by hand in the new org's console.
 - [ ] **Step 4: CI's read-only Okta plan:** a new read-only service app in the new org, and its secrets replaced in this repo.
 - [ ] **Step 5: The private-values check:** add an `integrator-<number>` org-name pattern next to `trial-<number>` (`checks/private-values/check.py` and its test), and refresh the hashes of the new org's values.
-- [ ] **Step 6: Update the docs:** replace the trial org with the Integrator Free Plan in the README, the setup guide, the spec and `okta/` (`example.tfvars`, the variable descriptions), and add a warning to the setup guide: an Okta trial lasts 30 days, and when it ends you lose access to the admin console and, in time, to Okta's products; it doesn't become a free plan. Mark Task 10's org-type decision as superseded by this task.
+- [x] **Step 6: Update the docs:** replace the trial org with the Integrator Free Plan in the README, the setup guide, the spec and `okta/` (`example.tfvars`, the variable descriptions), and add a warning to the setup guide: an Okta trial lasts 30 days, and when it ends you lose access to the admin console and, in time, to Okta's products; it doesn't become a free plan. Mark Task 10's org-type decision as superseded by this task.
+
+**Built 2026-11-11:** the Integrator org has custom SAML apps and API Services apps, and `okta/` applied in it unchanged (7 resources). GitOps #51 passes the Okta secrets to `fleetctl` again and #52 reverts #49 and #50. **Rule:** a GitOps change that adds a `$VARIABLE` goes in two pull requests, the workflow's `env` first, because a pull request's dry run uses the workflow from `main`. The private-values check matches `integrator-<number>` org names, and `.gitignore` ignores `*.pem` and `*.key`. Still open: Step 3's sign-in test, Step 4, and the hash refresh (`check.py --from-tfvars`, then `sync-hashes.sh`, run by me).
 
 ---
 

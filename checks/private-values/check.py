@@ -58,12 +58,18 @@ PATTERNS = [
         re.compile(r"(?<![0-9A-Za-z])(?<!/job/)(?<!/runs/)[0-9]{12}(?![0-9A-Za-z])"),
         {"123456789012", "000000000000"},
     ),
-    ("Okta org name", re.compile(r"\btrial-[0-9]{5,}\b"), {"trial-0000000", "trial-1234567"}),
+    (
+        "Okta org name",
+        # A trial org is trial-<number>; an Integrator Free Plan org is integrator-<number>.
+        re.compile(r"\b(?:trial|integrator)-[0-9]{5,}\b"),
+        {"trial-0000000", "trial-1234567", "integrator-0000000", "integrator-1234567"},
+    ),
     (
         "Okta org URL",
         re.compile(r"\b[a-z0-9-]+\.okta(?:preview|-emea)?\.com\b", re.IGNORECASE),
         {"developer.okta.com", "help.okta.com", "support.okta.com", "saml-doc.okta.com",
-         "www.okta.com", "login.okta.com", "example.okta.com", "trial-0000000.okta.com"},
+         "www.okta.com", "login.okta.com", "example.okta.com", "trial-0000000.okta.com",
+         "integrator-0000000.okta.com"},
     ),
     ("Okta app or client ID", re.compile(r"\b0oa[0-9A-Za-z]{17}\b"), {"0oaXXXXXXXXXXXXXXXXX"}),
     (
