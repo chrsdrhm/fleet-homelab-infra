@@ -656,7 +656,8 @@ the time by design, a red board usually means "torn down on purpose".
   when it fails or isn't called; it acts until 7:59am Chicago time, and only
   reports, in an issue, if it starts later: by hand, or a late timer run) that tears the stack down if it was left up and keeps an
   issue listing kept snapshots older than 14 days; a failed `down` of either kind opens an issue
-  that the next successful one closes, through `scripts/notify-issue.sh`) with
+  that the next successful one closes, and a nightly check that fails before its teardown opens
+  one that a later check finding the stack down closes, through `scripts/notify-issue.sh`) with
   a shared setup action, that
   drives them remotely.
 - **`fleet-homelab-gitops`** — `fleetctl new` scaffold, pushed to its own

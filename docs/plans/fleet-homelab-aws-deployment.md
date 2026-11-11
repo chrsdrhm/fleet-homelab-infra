@@ -2953,6 +2953,8 @@ Added at my request. If the 2am check tears the stack down, the stack was left u
 - **Later than that, it reports:** the run still signs in to AWS, and if the stack is up it opens (or comments on) "The nightly teardown didn't run", with the run link. A successful `down`, or a scheduled check that finds the stack down, closes it. `AUTO_DOWN_SKIP_UNTIL` is checked first, so a skipped night stays quiet.
 - The kept-snapshot and release checks run on late nights too.
 
+**Changed 2026-11-11:** a nightly check that fails before its teardown opens "The nightly check failed" (the stack may still be up), and a later check that finds the stack down, or tears it down, closes it. Without it such a failure was silent: GitHub emails a run's failure to whoever started it, here the timer's app. The shared setup action also tries `terraform init` up to three times, a minute apart, since provider downloads fail now and then (a 504 from github.com).
+
 ### Task 34: An expiry and rotation watch
 
 Added at my request. Several things here expire or age silently. A monthly scheduled workflow checks them and opens an issue 30 days ahead.

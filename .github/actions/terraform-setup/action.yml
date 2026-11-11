@@ -49,8 +49,21 @@ runs:
         terraform_version: ${{ steps.terraform-version.outputs.version }} # from .github/terraform/Dockerfile (step above)
         terraform_wrapper: false
 
+    # Up to three tries, a minute apart: downloading providers and modules from the
+    # registry and GitHub fails now and then (a 504 from github.com, say), and a failed
+    # init fails the whole run, the nightly teardown included.
     - name: terraform init
       shell: bash
       env:
         DIR: ${{ inputs.working-directory }}
-      run: terraform -chdir="$DIR" init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+      run: |
+        for try in 1 2 3; do
+          if terraform -chdir="$DIR" init -input=false -backend-config="bucket=$TF_STATE_BUCKET"; then
+            exit 0
+          fi
+          if [ "$try" -lt 3 ]; then
+            echo "::warning title=terraform init failed::Try $try of 3 failed; trying again in a minute."
+            sleep 60
+          fi
+        done
+        exit 1
