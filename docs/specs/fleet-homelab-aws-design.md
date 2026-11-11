@@ -46,8 +46,10 @@ AWS cost, since this is for personal homelab learning, not production scale.
   `integrator-<number>.okta.com` address. Up to 10 users, custom SAML apps and
   the management API, no support and no end date; Okta deactivates an org
   after 180 days without use, so an admin signs in at least every few months.
-  Its terms describe it as for developing and testing integrations, which a
-  homelab for learning Fleet fits. Cost: $0. Rejected: a Workforce Identity
+  Its terms describe it as for developing and testing integrations, not
+  production use. A homelab for learning Fleet is closer to the former, but
+  that's a judgment call: Okta can end the org without recourse, and the
+  break-glass account still signs in to Fleet if it does. Cost: $0. Rejected: a Workforce Identity
   free trial, which ends after 30 days and closes the admin console rather
   than becoming a free plan (the first org was one; plan Task 43), and paid
   Starter ($1,500 annual minimum). If Okta ends the org, the SSO setup is
