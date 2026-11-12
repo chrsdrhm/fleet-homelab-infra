@@ -23,6 +23,7 @@ spec.loader.exec_module(cpv)
 # Phony values, split so the literals never appear whole in this file.
 ACCOUNT = "9876" + "54321098"
 OKTA_ORG = "trial-" + "4242424"
+OKTA_INTEGRATOR_ORG = "integrator-" + "4242424"
 OKTA_HOST = "acme-corp.ok" + "ta.com"
 OKTA_ID = "0oa" + "Ab3dEf5hIj7kLm9nO"
 EMAIL = "jane.doe@" + "gmail.com"
@@ -63,7 +64,11 @@ class Patterns(unittest.TestCase):
         self.flagged(f"org {OKTA_ORG}", "Okta org name")
         self.flagged(f"https://{OKTA_HOST}/app/x", "Okta org URL")
         self.flagged(f"client {OKTA_ID}", "Okta app or client ID")
+        self.flagged(f"org {OKTA_INTEGRATOR_ORG}", "Okta org name")
+        self.flagged(f"https://{OKTA_INTEGRATOR_ORG}.ok" + "ta.com/app/x", "Okta org name")
         self.clean('okta_org_name = "trial-0000000"')
+        self.clean('okta_org_name = "integrator-0000000"')
+        self.clean("https://integrator-0000000.okta.com/app/x")
         self.clean("see https://developer.okta.com/docs")
         self.clean('okta_client_id = "0oaXXXXXXXXXXXXXXXXX"')
 

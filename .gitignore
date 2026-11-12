@@ -16,5 +16,9 @@ tfaz*
 # Terraform state bucket name (embeds the AWS account ID); see backend.example.hcl
 backend.hcl
 
+# Private keys (the Okta service apps' keys live outside the repo, in ~/.okta)
+*.pem
+*.key
+
 __pycache__/
 .check-tools/
