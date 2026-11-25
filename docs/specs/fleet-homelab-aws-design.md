@@ -572,7 +572,10 @@ request with no tools. Claude sorts what it finds into Breaking, Must change,
 Deprecated (still works), New and relevant, and Check before merging (what the files
 can't show), with a ✅ / ⚠️ / ❌ verdict (⚠️ only when the repos need an edit), and
 the job puts it in the pull request's body, once per upgrade (a marker in the body records
-which versions were reviewed). The pull request is opened by a GitHub App (Contents and
+which versions were reviewed). The review has a line for each release in between and
+each of its "Changes that may require action" items, and a pull request that supersedes
+older ones carries their reviews, folded, since a fresh review of a longer range can
+leave out what they found. The pull request is opened by a GitHub App (Contents and
 Pull requests write, this repo only), so its checks run; the app's token is made after
 the review, in the last step only. To complete the upgrade, the owner merges that pull request: with the stack up, the apply
 on merge snapshots Aurora (`fleet-homelab-pre-upgrade-*`) before applying a change to

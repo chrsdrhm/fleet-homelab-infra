@@ -268,6 +268,23 @@ jobs:
               printf "\n_Claude's review didn't complete; the next daily run tries again._\n"
             fi
           } > "$RUNNER_TEMP/release.md"
+          # The reviews of older releases' pull requests that never merged (superseded or
+          # declined): the review above reads every release in between, but can leave out
+          # what an older one found. Folded, and left out if the body would pass GitHub's
+          # size limit (65,536 characters), with the pull requests listed instead.
+          ./scripts/release-pr.sh earlier "$FROM" "$TO" > "$RUNNER_TEMP/earlier.md"
+          if [ -s "$RUNNER_TEMP/earlier.md" ]; then
+            size=$(( $(wc -c < "$RUNNER_TEMP/release.md") + $(wc -c < "$RUNNER_TEMP/earlier.md") ))
+            {
+              printf '\n## Earlier reviews\n\n'
+              printf 'Reviews from the pull requests for releases in between, closed without merging. Read them too: the review above can leave out what they found.\n\n'
+              if [ "$size" -lt 60000 ]; then
+                cat "$RUNNER_TEMP/earlier.md"
+              else
+                ./scripts/release-pr.sh earlier "$FROM" "$TO" --links
+              fi
+            } >> "$RUNNER_TEMP/release.md"
+          fi
           ./scripts/release-pr.sh open "$TO" "Upgrade Fleet to $TO" "$RUNNER_TEMP/release.md"
 
   health-scan:

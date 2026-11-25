@@ -2900,6 +2900,8 @@ Added at my request: package a Windows app with PSAppDeployToolkit (PSADT) and d
 
 Added at my request. Fleet ships an experimental MCP server ([`cmd/fleet-mcp`](https://github.com/fleetdm/fleet/tree/main/cmd/fleet-mcp), Fleet's [article](https://fleetdm.com/guides/fleet-mcp) of 2026-04-29) that lets an AI client list hosts, read policies, software and vulnerabilities from Fleet's stored inventory, and run live osquery (`prepare_live_query`, then `run_live_query`). It takes `FLEET_BASE_URL`, `FLEET_API_KEY` and an `MCP_AUTH_TOKEN` (at least 32 characters, required even over stdio), and runs over stdio or SSE.
 
+**Changed 2026-11-25, at my request (keep it on the list):** Fleet 4.95.0 builds an MCP server into Fleet Premium, at `/api/v1/fleet/mcp`, on by default and turned off with `org_settings.server_settings.mcp_disabled` in the GitOps repo's `default.yml`. AI tools connect with an API-only user's token and get only the tools that user's API endpoints allow, so it gives a token nothing the REST API doesn't already. Try the built-in server first, once the server runs 4.95.0 or later; the standalone `fleet-mcp` below is the fallback. Step 1 then means connecting Claude Code to the built-in server with an observer API-only user's token, and Step 3 means choosing between keeping it on behind the ALB and WAF (as now) and `mcp_disabled: true` with the standalone server run locally.
+
 - [ ] **Step 1: Build and run it locally over stdio** for Claude Code, from the Fleet tag that matches the server. Use an API-only user with the **observer** role, so it can read and run live queries but change nothing; the token goes in the local MCP configuration, never in a repo.
 - [ ] **Step 2: Try it** on the devices from Tasks 20, 27 and 28: "is BitLocker on?", "did the PSADT app install?", "which hosts fail the firewall policy?". Note what's useful and what's missing.
 - [ ] **Step 3: Decide on running it in AWS** (SSE behind the ALB) or keeping it local. Local is simpler and exposes nothing new; record the reason.
@@ -3063,6 +3065,8 @@ Added 2026-11-01 at my request. The release check opened an issue, and the upgra
 **Changed 2026-11-07:** Fleet's releases are read through GraphQL (`scripts/fleet-releases.sh`, used by the release check and `release-review.sh`), not the REST releases list, which can leave out a new release for more than a day after it's published.
 
 **Changed 2026-11-07, from a code review:** an upgrade pull request closed without merging declines its release (the check doesn't reopen it; a newer release gets a new one). Closing one keeps its branch if a person pushed to it. A failed review leaves an open pull request's earlier review in place. The release check and the health scan each run one at a time. The apply on merge's retry (`tf-apply.sh`) keeps the Plan step's targets, so with the stack down it can't build the whole stack. The Claude pull request review's summary is sanitized like Claude's other public text.
+
+**Changed 2026-11-25:** a pull request that supersedes older ones carries their reviews, folded under **Earlier reviews** (`release-pr.sh earlier`, read from GitHub each time the body is built, so a body rebuilt after a failed review keeps them; listed by link instead if the body would pass GitHub's size limit). The review prompt asks for a line per release in between and per "Changes that may require action" item, applying or not. **Rule:** a fresh review of a longer range is not a superset of the older reviews, so an upgrade reads all of them; `/fleet-upgrade` step 2 does.
 
 ---
 

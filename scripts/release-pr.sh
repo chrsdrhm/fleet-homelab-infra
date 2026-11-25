@@ -14,6 +14,19 @@
 #   release-pr.sh declined <version>                    print the number of that version's
 #                                                       pull request if it was closed
 #                                                       without merging (declined)
+#   release-pr.sh earlier <from> <to> [--links]         print the reviews of the release
+#                                                       pull requests after <from> and
+#                                                       before <to> that never merged, as
+#                                                       Markdown for the new one's body
+#                                                       (--links: only a line per pull
+#                                                       request, for a body too long)
+#
+# A newer release closes the older pull request, and its review is of the older range
+# only. The new review reads every release in between, but it's a fresh, one-shot review
+# that can leave out what the older one found, so the new pull request carries the older
+# reviews (earlier), each folded, under its own. They're read from GitHub each time, so a
+# body rebuilt later (after a failed review) still has them. checks/tests/test_release_pr.py
+# runs this mode against a stubbed gh.
 #
 # Closing a pull request deletes its branch, unless someone other than a bot pushed to it:
 # then the branch is kept, so that work isn't lost.
@@ -112,6 +125,50 @@ case "$mode" in
     gh pr list --repo "$repo" --state closed --head "fleet-release-$version" --limit 20 \
       --json number,mergedAt,isCrossRepository \
       --jq '[.[] | select((.isCrossRepository | not) and .mergedAt == null)] | first | .number // empty'
+    ;;
+  earlier)
+    from="${2:?from version}" to="${3:?to version}" links="${4:-}"
+    if [[ ! "$from" =~ $semver ]] || [[ ! "$to" =~ $semver ]]; then
+      echo "Versions must look like 4.93.2 (got '$from' and '$to')." >&2
+      exit 2
+    fi
+    if [ -n "$links" ] && [ "$links" != --links ]; then
+      echo "earlier takes only --links after the versions (got '$links')." >&2
+      exit 2
+    fi
+    newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+    # One line per pull request, "<version> <number>", oldest release first; the newest
+    # pull request per version, if a version had more than one.
+    gh pr list --repo "$repo" --state all --limit 1000 \
+      --json number,headRefName,isCrossRepository,mergedAt \
+      | jq -r '.[] | select((.isCrossRepository | not) and .mergedAt == null
+          and (.headRefName | test("^fleet-release-[0-9]+\\.[0-9]+\\.[0-9]+$")))
+        | "\(.headRefName | ltrimstr("fleet-release-")) \(.number)"' \
+      | sort -k1,1V -k2,2nr | awk '!seen[$1]++' \
+      | while read -r version number; do
+          if ! newer "$version" "$from" || ! newer "$to" "$version"; then
+            continue
+          fi
+          body=$(gh pr view "$number" --repo "$repo" --json body --jq .body)
+          # Its own review only: from its heading to its marker. Older reviews it carried
+          # are listed here on their own, so they aren't nested.
+          review=$(awk '/^## Claude'"'"'s review: Fleet / { on = 1; next }
+            /^<!-- release-review: / { on = 0 } /^## Earlier reviews/ { on = 0 } on' <<< "$body")
+          if [ -z "$review" ]; then
+            continue
+          fi
+          # The body is editable, so only a plain version range reaches the summary line.
+          range=$(sed -n 's/^## Claude'"'"'s review: Fleet \([0-9]*\.[0-9]*\.[0-9]* to [0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' <<< "$body" | head -n 1)
+          label="#$number: Fleet ${range:-$version}"
+          if [ -n "$links" ]; then
+            printf -- '- %s\n' "$label"
+            continue
+          fi
+          printf '<details><summary>%s</summary>\n\n' "$label"
+          # It was posted sanitized, but the body is editable, so sanitize it again.
+          "$(dirname "$0")/sanitize-markdown.sh" <<< "$review"
+          printf '\n</details>\n\n'
+        done
     ;;
   *)
     echo "Unknown mode: $mode" >&2

@@ -4,7 +4,7 @@
 #
 #   checks/run.sh            everything
 #   checks/run.sh NAME...    only some: private-values fmt validate test
-#                            sanitize shellcheck actionlint zizmor tflint
+#                            sanitize release-pr shellcheck actionlint zizmor tflint
 #
 # Needs terraform, python3, shellcheck and git; actionlint and tflint from
 # checks/install-tools.sh (put its folder on PATH); Docker for zizmor (skipped locally
@@ -95,6 +95,7 @@ want fmt            && run fmt terraform fmt -check -recursive -diff
 want validate       && run validate validate
 want test           && run test terraform test -test-directory="$checks/tests/terraform"
 want sanitize       && run sanitize python3 "$checks/tests/test_sanitize_markdown.py"
+want release-pr     && run release-pr python3 "$checks/tests/test_release_pr.py"
 want shellcheck     && run shellcheck shellcheck scripts/*.sh "$checks"/*.sh "$checks"/hooks/* "$checks"/private-values/*.sh
 want actionlint     && run actionlint actionlint
 want zizmor         && TOOL=docker run zizmor zizmor
