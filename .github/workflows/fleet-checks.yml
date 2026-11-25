@@ -281,7 +281,7 @@ jobs:
               if [ "$size" -lt 60000 ]; then
                 cat "$RUNNER_TEMP/earlier.md"
               else
-                sed -n 's|^<details><summary>\(#[0-9]*\): \(.*\)</summary>$|- \1, \2|p' "$RUNNER_TEMP/earlier.md"
+                ./scripts/release-pr.sh earlier "$FROM" "$TO" --links
               fi
             } >> "$RUNNER_TEMP/release.md"
           fi
